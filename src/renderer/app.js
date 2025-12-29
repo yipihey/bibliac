@@ -99,6 +99,7 @@ class SciXReader {
     // Main screen
     document.getElementById('change-library-btn')?.addEventListener('click', () => this.selectLibraryFolder());
     document.getElementById('import-btn')?.addEventListener('click', () => this.importPDFs());
+    document.getElementById('import-bib-btn')?.addEventListener('click', () => this.importBibFile());
     document.getElementById('add-paper-btn')?.addEventListener('click', () => this.importPDFs());
     document.getElementById('remove-paper-btn')?.addEventListener('click', () => this.removeSelectedPapers());
 
@@ -2101,6 +2102,51 @@ class SciXReader {
     }
   }
 
+  async importBibFile() {
+    // Show loading state on button
+    const btn = document.getElementById('import-bib-btn');
+    const originalText = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+
+    try {
+      const result = await window.electronAPI.importBibtex();
+
+      if (result.success && !result.canceled) {
+        await this.loadPapers();
+        const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
+        if (info) this.updateLibraryDisplay(info);
+
+        // Show result message
+        const message = `Imported ${result.imported} papers` +
+          (result.skipped > 0 ? `, skipped ${result.skipped} duplicates` : '');
+        btn.textContent = `✓ ${result.imported}`;
+        setTimeout(() => {
+          btn.textContent = originalText;
+        }, 2000);
+
+        console.log('BibTeX import result:', message);
+      } else if (result.error) {
+        console.error('BibTeX import error:', result.error);
+        btn.textContent = '✕';
+        setTimeout(() => {
+          btn.textContent = originalText;
+        }, 2000);
+      } else {
+        // Canceled
+        btn.textContent = originalText;
+      }
+    } catch (error) {
+      console.error('BibTeX import failed:', error);
+      btn.textContent = '✕';
+      setTimeout(() => {
+        btn.textContent = originalText;
+      }, 2000);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   async removeSelectedPapers() {
     const count = this.selectedPapers.size;
     if (count === 0) return;
@@ -2533,9 +2579,12 @@ class SciXReader {
   }
 
   async copyCite() {
-    if (!this.selectedPaper) return;
+    if (this.selectedPapers.size === 0) return;
 
-    const result = await window.electronAPI.copyCite(this.selectedPaper.id, 'cite');
+    // Get paper IDs in selection order
+    const paperIds = Array.from(this.selectedPapers);
+
+    const result = await window.electronAPI.copyCite(paperIds, 'cite');
     if (result.success) {
       const btn = document.getElementById('copy-cite-btn');
       const originalText = btn.textContent;

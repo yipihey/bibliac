@@ -1239,12 +1239,20 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
 
 // ===== BibTeX IPC Handlers =====
 
-ipcMain.handle('copy-cite', (event, paperId, style) => {
+ipcMain.handle('copy-cite', (event, paperIdOrIds, style) => {
   if (!dbInitialized) return { success: false };
-  const paper = database.getPaper(paperId);
-  if (!paper) return { success: false };
 
-  const citeCmd = bibtex.getCiteCommand(paper, style);
+  // Support both single paper ID and array of IDs
+  const paperIds = Array.isArray(paperIdOrIds) ? paperIdOrIds : [paperIdOrIds];
+  const papers = paperIds.map(id => database.getPaper(id)).filter(p => p);
+
+  if (papers.length === 0) return { success: false };
+
+  // Use multi-cite for multiple papers, single cite for one
+  const citeCmd = papers.length > 1
+    ? bibtex.getMultiCiteCommand(papers, style)
+    : bibtex.getCiteCommand(papers[0], style);
+
   clipboard.writeText(citeCmd);
   return { success: true, command: citeCmd };
 });
@@ -1282,6 +1290,10 @@ ipcMain.handle('save-bibtex-file', async (event, content) => {
 });
 
 ipcMain.handle('import-bibtex', async () => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library selected' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Import BibTeX',
     properties: ['openFile'],
@@ -1291,8 +1303,50 @@ ipcMain.handle('import-bibtex', async () => {
   if (result.canceled) return { success: false, canceled: true };
 
   try {
+    // Parse BibTeX file - this now includes import_source and import_source_key
     const entries = bibtex.importBibtex(result.filePaths[0]);
-    return { success: true, entries };
+
+    if (entries.length === 0) {
+      return { success: true, imported: 0, skipped: 0, message: 'No entries found in file' };
+    }
+
+    // Send initial progress
+    mainWindow.webContents.send('import-progress', {
+      current: 0,
+      total: entries.length,
+      paper: 'Starting import...'
+    });
+
+    // Use bulk insert for fast import
+    const bulkResult = database.addPapersBulk(entries, (progress) => {
+      mainWindow.webContents.send('import-progress', {
+        current: progress.current,
+        total: progress.total,
+        inserted: progress.inserted,
+        skipped: progress.skipped,
+        paper: entries[progress.current - 1]?.title || 'Processing...'
+      });
+    });
+
+    // Update master.bib once at the end
+    const allPapers = database.getAllPapers();
+    bibtex.updateMasterBib(libraryPath, allPapers);
+
+    // Send completion
+    mainWindow.webContents.send('import-complete', {
+      imported: bulkResult.inserted.length,
+      skipped: bulkResult.skipped.length
+    });
+
+    return {
+      success: true,
+      imported: bulkResult.inserted.length,
+      skipped: bulkResult.skipped.length,
+      details: {
+        inserted: bulkResult.inserted,
+        skipped: bulkResult.skipped
+      }
+    };
   } catch (error) {
     return { success: false, error: error.message };
   }

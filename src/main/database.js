@@ -63,6 +63,20 @@ function createSchema() {
     // Column already exists
   }
 
+  // Migration: Add import_source column to track which .bib file the paper came from
+  try {
+    db.run(`ALTER TABLE papers ADD COLUMN import_source TEXT`);
+  } catch (e) {
+    // Column already exists
+  }
+
+  // Migration: Add import_source_key to store the original BibTeX key
+  try {
+    db.run(`ALTER TABLE papers ADD COLUMN import_source_key TEXT`);
+  } catch (e) {
+    // Column already exists
+  }
+
   // Migration: Add pdf_source column to annotations to track which PDF the annotation belongs to
   try {
     db.run(`ALTER TABLE annotations ADD COLUMN pdf_source TEXT`);
@@ -206,8 +220,8 @@ function addPaper(paper) {
   const stmt = db.prepare(`
     INSERT INTO papers (bibcode, doi, arxiv_id, title, authors, year, journal,
                         abstract, keywords, pdf_path, text_path, bibtex,
-                        read_status, added_date, modified_date)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        read_status, added_date, modified_date, import_source, import_source_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   stmt.run([
@@ -225,7 +239,9 @@ function addPaper(paper) {
     paper.bibtex || null,
     paper.read_status || 'unread',
     now,
-    now
+    now,
+    paper.import_source || null,
+    paper.import_source_key || null
   ]);
   stmt.free();
 
@@ -234,6 +250,97 @@ function addPaper(paper) {
   // Return the inserted paper with ID
   const result = db.exec(`SELECT last_insert_rowid() as id`);
   return result[0].values[0][0];
+}
+
+// Bulk insert papers for fast .bib import - no intermediate saves
+function addPapersBulk(papers, progressCallback = null) {
+  const now = new Date().toISOString();
+  const inserted = [];
+  const skipped = [];
+
+  const stmt = db.prepare(`
+    INSERT INTO papers (bibcode, doi, arxiv_id, title, authors, year, journal,
+                        abstract, keywords, pdf_path, text_path, bibtex,
+                        read_status, added_date, modified_date, import_source, import_source_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (let i = 0; i < papers.length; i++) {
+    const paper = papers[i];
+
+    // Check for duplicates by DOI, arXiv ID, or title+year
+    let isDuplicate = false;
+
+    if (paper.doi) {
+      const existing = db.exec(`SELECT id FROM papers WHERE doi = ?`, [paper.doi]);
+      if (existing.length > 0 && existing[0].values.length > 0) {
+        isDuplicate = true;
+      }
+    }
+
+    if (!isDuplicate && paper.arxiv_id) {
+      const existing = db.exec(`SELECT id FROM papers WHERE arxiv_id = ?`, [paper.arxiv_id]);
+      if (existing.length > 0 && existing[0].values.length > 0) {
+        isDuplicate = true;
+      }
+    }
+
+    if (!isDuplicate && paper.title && paper.year) {
+      const existing = db.exec(`SELECT id FROM papers WHERE title = ? AND year = ?`, [paper.title, paper.year]);
+      if (existing.length > 0 && existing[0].values.length > 0) {
+        isDuplicate = true;
+      }
+    }
+
+    if (isDuplicate) {
+      skipped.push({ paper, reason: 'duplicate' });
+    } else {
+      try {
+        stmt.run([
+          paper.bibcode || null,
+          paper.doi || null,
+          paper.arxiv_id || null,
+          paper.title || 'Untitled',
+          JSON.stringify(paper.authors || []),
+          paper.year || null,
+          paper.journal || null,
+          paper.abstract || null,
+          JSON.stringify(paper.keywords || []),
+          paper.pdf_path || null,
+          paper.text_path || null,
+          paper.bibtex || null,
+          paper.read_status || 'unread',
+          now,
+          now,
+          paper.import_source || null,
+          paper.import_source_key || null
+        ]);
+        stmt.reset();
+
+        const result = db.exec(`SELECT last_insert_rowid() as id`);
+        inserted.push({ id: result[0].values[0][0], title: paper.title });
+      } catch (e) {
+        skipped.push({ paper, reason: e.message });
+      }
+    }
+
+    // Report progress every 10 entries
+    if (progressCallback && (i + 1) % 10 === 0) {
+      progressCallback({
+        current: i + 1,
+        total: papers.length,
+        inserted: inserted.length,
+        skipped: skipped.length
+      });
+    }
+  }
+
+  stmt.free();
+
+  // Single save at the end
+  saveDatabase();
+
+  return { inserted, skipped };
 }
 
 function updatePaper(id, updates) {
@@ -339,7 +446,7 @@ function parseSearchQuery(query) {
   const generalTerms = [];
 
   // Match field:value patterns (supports quoted values)
-  const fieldPattern = /(author|year|title|bibcode|journal):("([^"]+)"|(\S+))/gi;
+  const fieldPattern = /(author|year|title|bibcode|journal|source):("([^"]+)"|(\S+))/gi;
   let remaining = query;
   let match;
 
@@ -405,6 +512,10 @@ function searchPapersFullText(searchTerm, libraryPath) {
       if (fields.journal && fieldMatch) {
         const journalLower = (paper.journal || '').toLowerCase();
         if (!journalLower.includes(fields.journal)) fieldMatch = false;
+      }
+      if (fields.source && fieldMatch) {
+        const sourceLower = (paper.import_source || '').toLowerCase();
+        if (!sourceLower.includes(fields.source)) fieldMatch = false;
       }
 
       if (!fieldMatch) continue; // Skip this paper if field filter doesn't match
@@ -970,6 +1081,7 @@ module.exports = {
   closeDatabase,
   saveDatabase,
   addPaper,
+  addPapersBulk,
   updatePaper,
   deletePaper,
   getPaper,

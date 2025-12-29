@@ -191,10 +191,27 @@ function getCiteCommand(paper, style = 'cite') {
   }
 }
 
+// Get \cite command for multiple papers
+function getMultiCiteCommand(papers, style = 'cite') {
+  const keys = papers.map(p => generateBibtexKey(p)).join(', ');
+
+  switch (style) {
+    case 'citep':
+      return `\\citep{${keys}}`;
+    case 'citet':
+      return `\\citet{${keys}}`;
+    case 'citeauthor':
+      return `\\citeauthor{${keys}}`;
+    default:
+      return `\\cite{${keys}}`;
+  }
+}
+
 // Import papers from a BibTeX file
 function importBibtex(bibPath) {
   const content = fs.readFileSync(bibPath, 'utf-8');
   const entries = parseBibtex(content);
+  const sourceFilename = path.basename(bibPath);
 
   return entries.map(entry => ({
     title: entry.title,
@@ -204,6 +221,8 @@ function importBibtex(bibPath) {
     doi: entry.doi,
     arxiv_id: entry.eprint,
     abstract: entry.abstract,
+    import_source: sourceFilename,
+    import_source_key: entry.key,
     bibtex: paperToBibtex({
       title: entry.title,
       authors: entry.author ? entry.author.split(' and ').map(a => a.trim()) : [],
@@ -223,5 +242,6 @@ module.exports = {
   updateMasterBib,
   exportBibtex,
   getCiteCommand,
+  getMultiCiteCommand,
   importBibtex
 };
