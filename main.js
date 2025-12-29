@@ -79,10 +79,31 @@ async function fetchAndApplyAdsMetadata(paperId, extractedMetadata = null) {
   try {
     let adsData = null;
 
-    // Try identifiers first: bibcode, then DOI, then arXiv
+    // Try to extract bibcode from existing bibtex adsurl field
+    let bibcodeFromAdsUrl = null;
+    if (!paper.bibcode && paper.bibtex) {
+      const adsUrlMatch = paper.bibtex.match(/adsurl\s*=\s*\{([^}]+)\}/i);
+      if (adsUrlMatch) {
+        const adsUrl = adsUrlMatch[1];
+        const absMatch = adsUrl.match(/\/abs\/([^\/\s&?]+)/);
+        if (absMatch) {
+          bibcodeFromAdsUrl = absMatch[1];
+          console.log(`Extracted bibcode from adsurl: ${bibcodeFromAdsUrl}`);
+        }
+      }
+    }
+
+    // Try identifiers first: bibcode, then adsurl bibcode, then DOI, then arXiv
     if (paper.bibcode) {
       console.log(`Trying bibcode lookup: ${paper.bibcode}`);
       adsData = await adsApi.getByBibcode(token, paper.bibcode);
+    } else if (bibcodeFromAdsUrl) {
+      console.log(`Trying adsurl bibcode lookup: ${bibcodeFromAdsUrl}`);
+      adsData = await adsApi.getByBibcode(token, bibcodeFromAdsUrl);
+      if (adsData) {
+        // Save the bibcode to the paper
+        database.updatePaper(paperId, { bibcode: bibcodeFromAdsUrl });
+      }
     } else if (paper.doi) {
       console.log(`Trying DOI lookup: ${paper.doi}`);
       adsData = await adsApi.getByDOI(token, paper.doi);
