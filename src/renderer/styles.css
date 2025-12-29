@@ -829,11 +829,8 @@ body.resizing * {
   flex: 1;
   overflow: auto;
   padding: 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
   background: var(--bg-tertiary);
+  text-align: center; /* Center the page wrappers */
 }
 
 .pdf-loading {
@@ -991,6 +988,36 @@ body.resizing * {
   font-size: 13px;
 }
 
+/* Multi-paper selection display */
+.multi-paper-section {
+  margin-bottom: 8px;
+}
+
+.multi-paper-section h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.multi-paper-section .paper-authors {
+  font-size: 12px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.multi-paper-section .paper-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.multi-paper-section .paper-abstract {
+  line-height: 1.6;
+  margin-top: 8px;
+}
+
 .no-content {
   color: var(--text-muted);
   font-style: italic;
@@ -1068,6 +1095,15 @@ body.resizing * {
 
 .ref-item:hover, .cite-item:hover {
   background: var(--bg-hover);
+}
+
+.ref-number, .cite-number {
+  color: var(--text-muted);
+  font-size: 12px;
+  min-width: 28px;
+  text-align: right;
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .ref-checkbox, .cite-checkbox {
@@ -1188,6 +1224,16 @@ body.resizing * {
 
 .copy-btn:hover {
   background: var(--bg-hover);
+}
+
+.bibtex-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.bibtex-buttons .copy-btn {
+  margin-top: 0;
 }
 
 /* Context Menu */
@@ -2764,6 +2810,7 @@ body.resizing-vertical * {
 .pdf-page-wrapper {
   position: relative;
   display: inline-block;
+  margin-bottom: 8px; /* Spacing between pages */
 }
 
 /* PDF page canvas z-index */

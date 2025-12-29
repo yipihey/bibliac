@@ -21,6 +21,8 @@ class SciXReader {
     this.pageRotations = {};
     this.currentPdfSource = null; // Track which PDF source is currently loaded
     this.pdfPagePositions = {}; // Store last page position per paper ID
+    this.isRendering = false; // Prevent concurrent renders
+    this.pendingRender = null; // Queue next render if one is in progress
 
     // SciX search state
     this.scixResults = [];
@@ -61,6 +63,9 @@ class SciXReader {
     if (savedZoom) {
       this.pdfScale = savedZoom;
     }
+
+    // Load saved PDF page positions
+    this.pdfPagePositions = await window.electronAPI.getPdfPositions() || {};
 
     if (this.libraryPath) {
       const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
@@ -138,6 +143,7 @@ class SciXReader {
     document.getElementById('copy-cite-btn')?.addEventListener('click', () => this.copyCite());
     document.getElementById('open-ads-btn')?.addEventListener('click', () => this.openInADS());
     document.getElementById('copy-bibtex-btn')?.addEventListener('click', () => this.copyBibtex());
+    document.getElementById('export-bibtex-btn')?.addEventListener('click', () => this.exportBibtexToFile());
 
     // PDF controls
     document.getElementById('zoom-in-btn')?.addEventListener('click', () => this.zoomPDF(0.1));
@@ -285,8 +291,17 @@ class SciXReader {
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => this.handleKeydown(e));
 
-    // PDF container scroll for page tracking
-    document.getElementById('pdf-container')?.addEventListener('scroll', () => this.updateCurrentPage());
+    // PDF container scroll for page tracking (throttled for performance)
+    let scrollTicking = false;
+    document.getElementById('pdf-container')?.addEventListener('scroll', () => {
+      if (!scrollTicking) {
+        requestAnimationFrame(() => {
+          this.updateCurrentPage();
+          scrollTicking = false;
+        });
+        scrollTicking = true;
+      }
+    });
 
     // AI Panel event listeners
     document.getElementById('ai-generate-summary-btn')?.addEventListener('click', () => this.generateSummary());
@@ -1121,9 +1136,20 @@ class SciXReader {
     // Save current scroll position before switching papers
     if (this.selectedPaper && this.pdfDoc) {
       const container = document.getElementById('pdf-container');
-      const scrollPos = container.scrollTop;
-      this.pdfPagePositions[this.selectedPaper.id] = scrollPos;
-      console.log(`Saved scroll position for paper ${this.selectedPaper.id}: ${scrollPos}`);
+      const currentPage = this.getCurrentVisiblePage();
+      const currentWrapper = container.querySelector(`.pdf-page-wrapper[data-page="${currentPage}"]`);
+
+      let pageOffset = 0;
+      if (currentWrapper) {
+        // Calculate offset within the current page (0 = top, 1 = bottom)
+        const offsetIntoPage = container.scrollTop - currentWrapper.offsetTop;
+        pageOffset = offsetIntoPage / currentWrapper.offsetHeight;
+      }
+
+      const position = { page: currentPage, offset: pageOffset };
+      this.pdfPagePositions[this.selectedPaper.id] = position;
+      // Persist to storage
+      window.electronAPI.setPdfPosition(this.selectedPaper.id, position);
     }
 
     const paper = this.papers.find(p => p.id === id) || await window.electronAPI.getPaper(id);
@@ -1191,9 +1217,22 @@ class SciXReader {
     // Load annotations
     await this.loadAnnotations(paper.id);
 
-    // Load PDF
-    this.switchTab('pdf');
-    await this.loadPDF(paper);
+    // Check current tab - stay on info tabs if already there
+    const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+    const infoTabs = ['abstract', 'refs', 'cites', 'bibtex'];
+
+    if (infoTabs.includes(currentTab)) {
+      // Stay on current tab and refresh if multi-select
+      if (this.selectedPapers.size > 1) {
+        this.switchTab(currentTab); // This will trigger multi-display
+      }
+      // Still load PDF in background for when user switches
+      await this.loadPDF(paper);
+    } else {
+      // Switch to PDF tab
+      this.switchTab('pdf');
+      await this.loadPDF(paper);
+    }
   }
 
   async loadPDF(paper) {
@@ -1234,41 +1273,72 @@ class SciXReader {
 
       this.pdfDoc = await loadingTask.promise;
       document.getElementById('total-pages').textContent = this.pdfDoc.numPages;
-      document.getElementById('current-page').textContent = '1';
-      await this.renderAllPages();
 
-      // Restore saved scroll position if available
-      const savedScrollPos = this.pdfPagePositions[paper.id];
-      console.log(`Restoring scroll position for paper ${paper.id}: ${savedScrollPos}`);
-      if (savedScrollPos && savedScrollPos > 0) {
-        // Wait for DOM to settle, then restore scroll position
-        setTimeout(() => {
-          container.scrollTop = savedScrollPos;
-          this.updateCurrentPage();
-        }, 50);
-      }
+      // Get saved position if available
+      const savedPos = this.pdfPagePositions[paper.id];
+      const targetPage = savedPos?.page || 1;
+      const pageOffset = savedPos?.offset || 0;
+
+      document.getElementById('current-page').textContent = targetPage;
+
+      // Render with priority on the saved page
+      await this.renderAllPages(targetPage, pageOffset);
     } catch (error) {
       console.error('PDF load error:', error);
       container.innerHTML = `<div class="pdf-loading">Failed to load PDF: ${error.message}</div>`;
     }
   }
 
-  async renderAllPages() {
+  async renderAllPages(scrollToPage = null, scrollPageOffset = 0) {
+    // Generate unique render ID to detect if a newer render has started
+    const renderId = Symbol('render');
+    this.currentRenderId = renderId;
+
     const container = document.getElementById('pdf-container');
     container.innerHTML = '';
 
     // Use device pixel ratio for sharper rendering on high-DPI displays
     const dpr = window.devicePixelRatio || 1;
 
-    for (let i = 1; i <= this.pdfDoc.numPages; i++) {
+    // Build render order: target page first, then all others
+    const pageOrder = [];
+    const numPages = this.pdfDoc.numPages;
+
+    if (scrollToPage && scrollToPage >= 1 && scrollToPage <= numPages) {
+      pageOrder.push(scrollToPage);
+      for (let i = 1; i <= numPages; i++) {
+        if (i !== scrollToPage) pageOrder.push(i);
+      }
+    } else {
+      for (let i = 1; i <= numPages; i++) {
+        pageOrder.push(i);
+      }
+    }
+
+    // Pre-create all wrappers in correct DOM order first
+    const wrappers = {};
+    for (let i = 1; i <= numPages; i++) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'pdf-page-wrapper';
+      wrapper.dataset.page = i;
+      wrapper.style.display = 'block';
+      wrapper.style.margin = '0 auto 8px auto';
+      container.appendChild(wrapper);
+      wrappers[i] = wrapper;
+    }
+
+    // Now render pages in priority order (target first)
+    for (const i of pageOrder) {
+      // Check if a newer render has started - if so, abort this one
+      if (this.currentRenderId !== renderId) {
+        return false; // Cancelled
+      }
       const page = await this.pdfDoc.getPage(i);
       const rotation = this.pageRotations[i] || 0;
       const viewport = page.getViewport({ scale: this.pdfScale, rotation });
 
-      // Create page wrapper for highlight overlays
-      const wrapper = document.createElement('div');
-      wrapper.className = 'pdf-page-wrapper';
-      wrapper.dataset.page = i;
+      // Get pre-created wrapper and set its size
+      const wrapper = wrappers[i];
       wrapper.style.width = `${viewport.width}px`;
       wrapper.style.height = `${viewport.height}px`;
 
@@ -1322,31 +1392,65 @@ class SciXReader {
       textLayerDiv.appendChild(endOfContent);
 
       wrapper.appendChild(textLayerDiv);
-      container.appendChild(wrapper);
+
+      // Check again - a new render may have started during async operations
+      if (this.currentRenderId !== renderId) {
+        return false; // Cancelled
+      }
+
+      // Scroll to target page as soon as it's rendered (it's rendered first)
+      if (scrollToPage && i === scrollToPage) {
+        // Scroll to the same relative position within the page
+        const offsetPixels = scrollPageOffset * wrapper.offsetHeight;
+        const wrapperTop = wrapper.offsetTop;
+        container.scrollTop = wrapperTop + offsetPixels;
+      }
     }
+
+    // Final check before updating UI
+    if (this.currentRenderId !== renderId) return false;
 
     document.getElementById('zoom-level').textContent = `${Math.round(this.pdfScale * 100)}%`;
 
     // Render annotation highlights after pages are rendered
     this.renderHighlightsOnPdf();
+    return true; // Render completed successfully
   }
 
   zoomPDF(delta) {
     if (!this.pdfDoc) return;
 
     const container = document.getElementById('pdf-container');
-    const currentPage = this.getCurrentVisiblePage();
-    const oldScale = this.pdfScale;
+
+    // Capture target page and position within page before any rendering starts
+    // Only capture if we don't already have one (from a previous cancelled render)
+    if (this.zoomTargetPage === undefined) {
+      this.zoomTargetPage = this.getCurrentVisiblePage();
+
+      // Calculate offset within the current page (0 = top of page, 1 = bottom)
+      const currentWrapper = container.querySelector(`.pdf-page-wrapper[data-page="${this.zoomTargetPage}"]`);
+      if (currentWrapper) {
+        const wrapperRect = currentWrapper.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        // How far into the page is the viewport top?
+        const offsetIntoPage = containerRect.top - wrapperRect.top;
+        this.zoomPageOffset = offsetIntoPage / currentWrapper.offsetHeight;
+      } else {
+        this.zoomPageOffset = 0;
+      }
+    }
+
+    const targetPage = this.zoomTargetPage;
+    const pageOffset = this.zoomPageOffset || 0;
 
     this.pdfScale = Math.max(0.5, Math.min(3, this.pdfScale + delta));
 
-    // Calculate scroll ratio to maintain position
-    const scrollRatio = container.scrollTop / (container.scrollHeight - container.clientHeight || 1);
-
-    this.renderAllPages().then(() => {
-      // Restore scroll position proportionally
-      const newScrollTop = scrollRatio * (container.scrollHeight - container.clientHeight);
-      container.scrollTop = newScrollTop;
+    this.renderAllPages(targetPage, pageOffset).then((completed) => {
+      // Clear the saved page/offset now that render completed
+      if (completed) {
+        this.zoomTargetPage = undefined;
+        this.zoomPageOffset = undefined;
+      }
     });
 
     // Save zoom level for next session
@@ -1388,25 +1492,26 @@ class SciXReader {
 
   getCurrentVisiblePage() {
     const container = document.getElementById('pdf-container');
-    const pages = container.querySelectorAll('.pdf-page');
-    const containerRect = container.getBoundingClientRect();
-    const containerCenter = containerRect.top + containerRect.height / 2;
+    const wrappers = container.querySelectorAll('.pdf-page-wrapper');
 
-    let closestPage = 1;
-    let closestDistance = Infinity;
+    if (wrappers.length === 0) return 1;
 
-    pages.forEach(page => {
-      const rect = page.getBoundingClientRect();
-      const pageCenter = rect.top + rect.height / 2;
-      const distance = Math.abs(pageCenter - containerCenter);
+    // Use scrollTop-based calculation (much faster than getBoundingClientRect)
+    const scrollTop = container.scrollTop;
 
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        closestPage = parseInt(page.dataset.page);
+    // Find page at scroll position using offsetTop (pages are in DOM order)
+    for (const wrapper of wrappers) {
+      const pageTop = wrapper.offsetTop;
+      const pageBottom = pageTop + wrapper.offsetHeight;
+
+      // If scroll position is within this page
+      if (scrollTop < pageBottom) {
+        return parseInt(wrapper.dataset.page, 10);
       }
-    });
+    }
 
-    return closestPage;
+    // Fallback: last page
+    return wrappers.length;
   }
 
   updateCurrentPage() {
@@ -1438,6 +1543,7 @@ class SciXReader {
       const inLibrary = libraryBibcodes.has(ref.ref_bibcode);
       return `
         <div class="ref-item${inLibrary ? ' in-library' : ''}" data-index="${index}" data-bibcode="${ref.ref_bibcode}">
+          <span class="ref-number">${index + 1}.</span>
           <input type="checkbox" class="ref-checkbox" ${inLibrary ? 'disabled' : ''}>
           <div class="ref-content">
             <div class="ref-title">${this.escapeHtml(ref.ref_title || 'Untitled')}</div>
@@ -1498,6 +1604,7 @@ class SciXReader {
       const inLibrary = libraryBibcodes.has(cite.citing_bibcode);
       return `
         <div class="cite-item${inLibrary ? ' in-library' : ''}" data-index="${index}" data-bibcode="${cite.citing_bibcode}">
+          <span class="cite-number">${index + 1}.</span>
           <input type="checkbox" class="cite-checkbox" ${inLibrary ? 'disabled' : ''}>
           <div class="cite-content">
             <div class="cite-title">${this.escapeHtml(cite.citing_title || 'Untitled')}</div>
@@ -1700,6 +1807,247 @@ class SciXReader {
     if (tabName === 'ai' && this.selectedPaper) {
       this.loadAIPanelData();
     }
+
+    // Handle multi-selection for info tabs
+    if (this.selectedPapers.size > 1) {
+      if (tabName === 'abstract') {
+        this.displayMultiAbstract();
+      } else if (tabName === 'refs') {
+        this.displayMultiRefs();
+      } else if (tabName === 'cites') {
+        this.displayMultiCites();
+      } else if (tabName === 'bibtex') {
+        this.displayMultiBibtex();
+      }
+    }
+  }
+
+  // Multi-selection display methods
+  displayMultiAbstract() {
+    const abstractEl = document.getElementById('abstract-content');
+    const papers = this.papers.filter(p => this.selectedPapers.has(p.id));
+
+    if (papers.length === 0) return;
+
+    const html = papers.map(paper => {
+      // Format full author names
+      const authors = paper.authors?.join('; ') || 'Unknown authors';
+      // Build metadata line
+      const metaParts = [];
+      if (paper.journal) metaParts.push(paper.journal);
+      if (paper.year) metaParts.push(paper.year);
+      if (paper.bibcode) metaParts.push(paper.bibcode);
+      const metaLine = metaParts.join(' • ');
+
+      return `
+        <div class="multi-paper-section">
+          <h4>${this.escapeHtml(paper.title || 'Untitled')}</h4>
+          <p class="paper-authors">${this.escapeHtml(authors)}</p>
+          <p class="paper-meta">${this.escapeHtml(metaLine)}</p>
+          <p class="paper-abstract">${paper.abstract ? this.escapeHtml(paper.abstract) : '<em>No abstract available</em>'}</p>
+        </div>
+      `;
+    }).join('<hr style="margin: 16px 0; border-color: var(--border-color);">');
+
+    abstractEl.innerHTML = html;
+  }
+
+  async displayMultiRefs() {
+    const refsEl = document.getElementById('refs-list');
+    const toolbar = document.getElementById('refs-toolbar');
+    const papers = this.papers.filter(p => this.selectedPapers.has(p.id));
+
+    if (papers.length === 0) return;
+
+    refsEl.innerHTML = '<p class="no-content">Loading references...</p>';
+    toolbar.classList.add('hidden');
+
+    // Collect all references from all selected papers
+    const allRefs = [];
+    const seenBibcodes = new Set();
+
+    for (const paper of papers) {
+      const refs = await window.electronAPI.getReferences(paper.id);
+      for (const ref of refs) {
+        // Deduplicate by bibcode
+        if (ref.ref_bibcode && seenBibcodes.has(ref.ref_bibcode)) continue;
+        if (ref.ref_bibcode) seenBibcodes.add(ref.ref_bibcode);
+        allRefs.push({ ...ref, sourcePaper: paper.title });
+      }
+    }
+
+    if (allRefs.length === 0) {
+      refsEl.innerHTML = `<p class="no-content">No references found for ${papers.length} selected papers.</p>`;
+      return;
+    }
+
+    // Check which refs are already in library
+    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
+
+    // Store refs for selection tracking
+    this.currentRefs = allRefs.map(ref => ({
+      ref_bibcode: ref.ref_bibcode,
+      ref_title: ref.ref_title,
+      ref_authors: ref.ref_authors,
+      ref_year: ref.ref_year
+    }));
+    this.selectedRefs.clear();
+
+    const html = allRefs.map((ref, index) => {
+      const bibcode = ref.ref_bibcode;
+      const inLibrary = bibcode && libraryBibcodes.has(bibcode);
+      const authors = this.formatAuthorsForList(ref.ref_authors);
+      return `
+        <div class="ref-item${inLibrary ? ' in-library' : ''}" data-index="${index}" data-bibcode="${bibcode || ''}">
+          <span class="ref-number">${index + 1}.</span>
+          <input type="checkbox" class="ref-checkbox" ${inLibrary ? 'disabled' : ''}>
+          <div class="ref-content">
+            <div class="ref-title">${this.escapeHtml(ref.ref_title || 'Unknown Title')}</div>
+            <div class="ref-authors">${authors}</div>
+            <div class="ref-meta">${[ref.ref_year, bibcode].filter(Boolean).join(' • ')}</div>
+          </div>
+          <button class="ref-import-btn" data-bibcode="${bibcode || ''}" title="Import this paper"${!bibcode ? ' disabled' : ''}>+</button>
+        </div>
+      `;
+    }).join('');
+
+    refsEl.innerHTML = html;
+    toolbar.classList.remove('hidden');
+    document.getElementById('refs-count').textContent = `${allRefs.length} references`;
+
+    // Add event listeners
+    refsEl.querySelectorAll('.ref-item').forEach(item => {
+      const checkbox = item.querySelector('.ref-checkbox');
+      const importBtn = item.querySelector('.ref-import-btn');
+      const index = parseInt(item.dataset.index);
+
+      item.addEventListener('click', (e) => {
+        if (e.target === checkbox || e.target === importBtn) return;
+        if (!checkbox.disabled) {
+          checkbox.checked = !checkbox.checked;
+          this.toggleRefSelection(index, checkbox.checked);
+        }
+      });
+
+      checkbox.addEventListener('change', () => {
+        this.toggleRefSelection(index, checkbox.checked);
+      });
+
+      importBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (item.dataset.bibcode) {
+          await this.importSingleRef(item.dataset.bibcode, importBtn);
+        }
+      });
+    });
+
+    this.updateRefsImportButton();
+  }
+
+  async displayMultiCites() {
+    const citesEl = document.getElementById('cites-list');
+    const toolbar = document.getElementById('cites-toolbar');
+    const papers = this.papers.filter(p => this.selectedPapers.has(p.id));
+
+    if (papers.length === 0) return;
+
+    citesEl.innerHTML = '<p class="no-content">Loading citations...</p>';
+    toolbar.classList.add('hidden');
+
+    // Collect all citations from all selected papers
+    const allCites = [];
+    const seenBibcodes = new Set();
+
+    for (const paper of papers) {
+      const cites = await window.electronAPI.getCitations(paper.id);
+      for (const cite of cites) {
+        // Deduplicate by bibcode
+        if (cite.citing_bibcode && seenBibcodes.has(cite.citing_bibcode)) continue;
+        if (cite.citing_bibcode) seenBibcodes.add(cite.citing_bibcode);
+        allCites.push({ ...cite, sourcePaper: paper.title });
+      }
+    }
+
+    if (allCites.length === 0) {
+      citesEl.innerHTML = `<p class="no-content">No citations found for ${papers.length} selected papers.</p>`;
+      return;
+    }
+
+    // Check which cites are already in library
+    const libraryBibcodes = new Set(this.papers.map(p => p.bibcode).filter(Boolean));
+
+    // Store cites for selection tracking
+    this.currentCites = allCites.map(cite => ({
+      citing_bibcode: cite.citing_bibcode,
+      citing_title: cite.citing_title,
+      citing_authors: cite.citing_authors,
+      citing_year: cite.citing_year
+    }));
+    this.selectedCites.clear();
+
+    const html = allCites.map((cite, index) => {
+      const bibcode = cite.citing_bibcode;
+      const inLibrary = bibcode && libraryBibcodes.has(bibcode);
+      const authors = this.formatAuthorsForList(cite.citing_authors);
+      return `
+        <div class="cite-item${inLibrary ? ' in-library' : ''}" data-index="${index}" data-bibcode="${bibcode || ''}">
+          <span class="cite-number">${index + 1}.</span>
+          <input type="checkbox" class="cite-checkbox" ${inLibrary ? 'disabled' : ''}>
+          <div class="cite-content">
+            <div class="cite-title">${this.escapeHtml(cite.citing_title || 'Unknown Title')}</div>
+            <div class="cite-authors">${authors}</div>
+            <div class="cite-meta">${[cite.citing_year, bibcode].filter(Boolean).join(' • ')}</div>
+          </div>
+          <button class="ref-import-btn" data-bibcode="${bibcode || ''}" title="Import this paper"${!bibcode ? ' disabled' : ''}>+</button>
+        </div>
+      `;
+    }).join('');
+
+    citesEl.innerHTML = html;
+    toolbar.classList.remove('hidden');
+    document.getElementById('cites-count').textContent = `${allCites.length} citations`;
+
+    // Add event listeners
+    citesEl.querySelectorAll('.cite-item').forEach(item => {
+      const checkbox = item.querySelector('.cite-checkbox');
+      const importBtn = item.querySelector('.ref-import-btn');
+      const index = parseInt(item.dataset.index);
+
+      item.addEventListener('click', (e) => {
+        if (e.target === checkbox || e.target === importBtn) return;
+        if (!checkbox.disabled) {
+          checkbox.checked = !checkbox.checked;
+          this.toggleCiteSelection(index, checkbox.checked);
+        }
+      });
+
+      checkbox.addEventListener('change', () => {
+        this.toggleCiteSelection(index, checkbox.checked);
+      });
+
+      importBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (item.dataset.bibcode) {
+          await this.importSingleCite(item.dataset.bibcode, importBtn);
+        }
+      });
+    });
+
+    this.updateCitesImportButton();
+  }
+
+  displayMultiBibtex() {
+    const bibtexEl = document.getElementById('bibtex-content');
+    const papers = this.papers.filter(p => this.selectedPapers.has(p.id));
+
+    if (papers.length === 0) return;
+
+    const bibtexEntries = papers
+      .map(p => p.bibtex)
+      .filter(Boolean)
+      .join('\n\n');
+
+    bibtexEl.value = bibtexEntries || '% No BibTeX available for selected papers';
   }
 
   setView(view) {
@@ -2204,6 +2552,25 @@ class SciXReader {
     const originalText = btn.textContent;
     btn.textContent = '✓ Copied!';
     setTimeout(() => btn.textContent = originalText, 1500);
+  }
+
+  async exportBibtexToFile() {
+    const textarea = document.getElementById('bibtex-content');
+    const content = textarea.value;
+
+    if (!content || content.startsWith('%')) {
+      return; // No content to export
+    }
+
+    const btn = document.getElementById('export-bibtex-btn');
+    const originalText = btn.textContent;
+
+    const result = await window.electronAPI.saveBibtexFile(content);
+
+    if (result.success) {
+      btn.textContent = '✓ Saved!';
+      setTimeout(() => btn.textContent = originalText, 1500);
+    }
   }
 
   openInADS() {

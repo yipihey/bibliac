@@ -327,6 +327,15 @@ ipcMain.handle('set-last-selected-paper', (event, paperId) => {
   return true;
 });
 
+// PDF page positions persistence
+ipcMain.handle('get-pdf-positions', () => store.get('pdfPagePositions') || {});
+ipcMain.handle('set-pdf-position', (event, paperId, position) => {
+  const positions = store.get('pdfPagePositions') || {};
+  positions[paperId] = position;
+  store.set('pdfPagePositions', positions);
+  return true;
+});
+
 ipcMain.handle('select-library-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Select Library Folder',
@@ -1253,6 +1262,21 @@ ipcMain.handle('export-bibtex', async (event, paperIds) => {
 
   const papers = paperIds.map(id => database.getPaper(id)).filter(p => p);
   bibtex.exportBibtex(papers, result.filePath);
+
+  return { success: true, path: result.filePath };
+});
+
+ipcMain.handle('save-bibtex-file', async (event, content) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export BibTeX',
+    defaultPath: 'references.bib',
+    filters: [{ name: 'BibTeX', extensions: ['bib'] }]
+  });
+
+  if (result.canceled) return { success: false, canceled: true };
+
+  const fs = require('fs');
+  fs.writeFileSync(result.filePath, content, 'utf8');
 
   return { success: true, path: result.filePath };
 });

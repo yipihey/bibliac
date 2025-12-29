@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLastSelectedPaper: () => ipcRenderer.invoke('get-last-selected-paper'),
   setLastSelectedPaper: (paperId) => ipcRenderer.invoke('set-last-selected-paper', paperId),
 
+  // PDF page positions persistence
+  getPdfPositions: () => ipcRenderer.invoke('get-pdf-positions'),
+  setPdfPosition: (paperId, position) => ipcRenderer.invoke('set-pdf-position', paperId, position),
+
   // Paper management
   importPDFs: () => ipcRenderer.invoke('import-pdfs'),
   getAllPapers: (options) => ipcRenderer.invoke('get-all-papers', options),
@@ -56,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // BibTeX
   copyCite: (paperId, style) => ipcRenderer.invoke('copy-cite', paperId, style),
   exportBibtex: (paperIds) => ipcRenderer.invoke('export-bibtex', paperIds),
+  saveBibtexFile: (content) => ipcRenderer.invoke('save-bibtex-file', content),
   importBibtex: () => ipcRenderer.invoke('import-bibtex'),
 
   // Collections
