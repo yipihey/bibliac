@@ -551,7 +551,12 @@ ipcMain.handle('delete-papers-bulk', (event, ids) => {
 ipcMain.handle('get-pdf-path', (event, relativePath) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath || !relativePath) return null;
-  return path.join(libraryPath, relativePath);
+  const fullPath = path.join(libraryPath, relativePath);
+  // Return path only if file exists
+  if (fs.existsSync(fullPath)) {
+    return fullPath;
+  }
+  return null;
 });
 
 ipcMain.handle('search-papers', (event, query) => {
@@ -2259,7 +2264,7 @@ ipcMain.handle('get-downloaded-pdf-sources', (event, paperId) => {
   const papersDir = path.join(libraryPath, 'papers');
   const downloadedSources = [];
 
-  // Check for each source type
+  // Check for each source type: bibcode_SOURCETYPE.pdf
   const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'];
   for (const sourceType of sourceTypes) {
     const filename = `${baseFilename}_${sourceType}.pdf`;
@@ -2267,13 +2272,6 @@ ipcMain.handle('get-downloaded-pdf-sources', (event, paperId) => {
     if (fs.existsSync(filePath)) {
       downloadedSources.push(sourceType);
     }
-  }
-
-  // Also check legacy single-file format (for backwards compatibility)
-  const legacyPath = path.join(papersDir, `${baseFilename}.pdf`);
-  if (fs.existsSync(legacyPath) && downloadedSources.length === 0) {
-    // If legacy file exists and no source-specific files, treat as unknown source
-    downloadedSources.push('LEGACY');
   }
 
   return downloadedSources;

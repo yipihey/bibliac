@@ -216,16 +216,8 @@ async function downloadFromADS(adsApi, token, bibcode, destPath, proxyUrl = null
 // Main download function with fallback chain
 // priorityOrder: array like ['PUB_PDF', 'ADS_PDF', 'EPRINT_PDF', 'AUTHOR_PDF']
 async function downloadPDF(paper, libraryPath, token, adsApi, proxyUrl = null, priorityOrder = null) {
-  // Generate filename from bibcode or arxiv_id
   const baseFilename = paper.bibcode || paper.arxiv_id || `paper_${Date.now()}`;
   const safeFilename = baseFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const filename = `${safeFilename}.pdf`;
-  const destPath = path.join(libraryPath, 'papers', filename);
-
-  // Check if file already exists
-  if (fs.existsSync(destPath)) {
-    return { success: true, path: destPath, source: 'cache', pdf_path: `papers/${filename}` };
-  }
 
   // Ensure papers directory exists
   const papersDir = path.join(libraryPath, 'papers');
@@ -236,8 +228,34 @@ async function downloadPDF(paper, libraryPath, token, adsApi, proxyUrl = null, p
   // Try ADS esources first (uses priority order)
   if (paper.bibcode && token && adsApi) {
     try {
-      await downloadFromADS(adsApi, token, paper.bibcode, destPath, proxyUrl, priorityOrder);
-      return { success: true, path: destPath, source: 'ads', pdf_path: `papers/${filename}` };
+      console.log(`Fetching esources for: ${paper.bibcode}`);
+      const esources = await adsApi.getEsources(token, paper.bibcode);
+
+      if (esources && esources.length > 0) {
+        const pdfInfo = findPdfUrl(esources, priorityOrder);
+        if (pdfInfo) {
+          // Use source-specific filename: bibcode_SOURCETYPE.pdf
+          const sourceType = pdfInfo.type.replace('ESOURCE|', '');
+          const filename = `${safeFilename}_${sourceType}.pdf`;
+          const destPath = path.join(libraryPath, 'papers', filename);
+
+          // Check if already exists
+          if (fs.existsSync(destPath)) {
+            return { success: true, path: destPath, source: sourceType, pdf_path: `papers/${filename}` };
+          }
+
+          let downloadUrl = pdfInfo.url;
+          if (proxyUrl && pdfInfo.type.includes('PUB_PDF')) {
+            downloadUrl = proxyUrl + encodeURIComponent(pdfInfo.url);
+            console.log(`Using library proxy for PUB_PDF: ${downloadUrl}`);
+          } else {
+            console.log(`Downloading from ADS esource (${sourceType}): ${downloadUrl}`);
+          }
+
+          await downloadFile(downloadUrl, destPath);
+          return { success: true, path: destPath, source: sourceType, pdf_path: `papers/${filename}` };
+        }
+      }
     } catch (error) {
       console.log(`ADS download failed: ${error.message}`);
     }
@@ -246,8 +264,16 @@ async function downloadPDF(paper, libraryPath, token, adsApi, proxyUrl = null, p
   // Fall back to arXiv direct download
   if (paper.arxiv_id) {
     try {
+      const filename = `${safeFilename}_EPRINT_PDF.pdf`;
+      const destPath = path.join(libraryPath, 'papers', filename);
+
+      // Check if already exists
+      if (fs.existsSync(destPath)) {
+        return { success: true, path: destPath, source: 'EPRINT_PDF', pdf_path: `papers/${filename}` };
+      }
+
       await downloadFromArxiv(paper.arxiv_id, destPath);
-      return { success: true, path: destPath, source: 'arxiv', pdf_path: `papers/${filename}` };
+      return { success: true, path: destPath, source: 'EPRINT_PDF', pdf_path: `papers/${filename}` };
     } catch (error) {
       console.log(`arXiv download failed: ${error.message}`);
     }

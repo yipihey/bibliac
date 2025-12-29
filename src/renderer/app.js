@@ -2817,24 +2817,27 @@ class SciXReader {
       // Check which PDFs are already downloaded
       const downloadedPdfs = await window.electronAPI.getDownloadedPdfSources(paperId);
 
+      // Get user's preferred PDF source priority
+      const priority = await window.electronAPI.getPdfPriority();
+
       btn.textContent = '📄';
 
-      // Collect available sources with annotation counts and download status
+      // Map source types to display info
+      const sourceInfo = {
+        'EPRINT_PDF': { key: 'arxiv', type: 'arxiv', label: '📑 arXiv', available: sources.arxiv },
+        'PUB_PDF': { key: 'publisher', type: 'publisher', label: '📰 Publisher', available: sources.publisher },
+        'ADS_PDF': { key: 'ads', type: 'ads', label: '📜 ADS Scan', available: sources.ads }
+      };
+
+      // Collect available sources in priority order
       const availableSources = [];
-      if (sources.arxiv) {
-        const count = annotationCounts['EPRINT_PDF'] || 0;
-        const downloaded = downloadedPdfs.includes('EPRINT_PDF');
-        availableSources.push({ type: 'arxiv', label: '📑 arXiv', noteCount: count, downloaded });
-      }
-      if (sources.publisher) {
-        const count = annotationCounts['PUB_PDF'] || 0;
-        const downloaded = downloadedPdfs.includes('PUB_PDF');
-        availableSources.push({ type: 'publisher', label: '📰 Publisher', noteCount: count, downloaded });
-      }
-      if (sources.ads) {
-        const count = annotationCounts['ADS_PDF'] || 0;
-        const downloaded = downloadedPdfs.includes('ADS_PDF');
-        availableSources.push({ type: 'ads', label: '📜 ADS Scan', noteCount: count, downloaded });
+      for (const sourceType of priority) {
+        const info = sourceInfo[sourceType];
+        if (info && info.available) {
+          const count = annotationCounts[sourceType] || 0;
+          const downloaded = downloadedPdfs.includes(sourceType);
+          availableSources.push({ type: info.type, label: info.label, noteCount: count, downloaded });
+        }
       }
 
       // If no sources available
@@ -2920,19 +2923,30 @@ class SciXReader {
       author: 'AUTHOR_PDF'
     };
 
-    // If paper already has a PDF and it exists, just load it
-    if (paper.pdf_path) {
-      console.log(`[downloadFromSource] Paper has pdf_path: ${paper.pdf_path}, checking if exists...`);
-      const pdfExists = await window.electronAPI.getPdfPath(paper.pdf_path);
-      if (pdfExists) {
-        console.log(`[downloadFromSource] PDF already exists, loading: ${paper.pdf_path}`);
+    const requestedSourceType = sourceToType[sourceType];
+
+    // Check if the REQUESTED source's PDF already exists
+    // Filename format: bibcode_SOURCETYPE.pdf
+    if (paper.bibcode) {
+      const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const expectedPath = `papers/${baseFilename}_${requestedSourceType}.pdf`;
+
+      console.log(`[downloadFromSource] Checking for PDF: ${expectedPath}`);
+
+      const pdfPath = await window.electronAPI.getPdfPath(expectedPath);
+      if (pdfPath) {
+        console.log(`[downloadFromSource] ${sourceType} PDF found, loading: ${expectedPath}`);
+        paper.pdf_path = expectedPath;
         if (this.selectedPaper && this.selectedPaper.id === paperId) {
-          this.currentPdfSource = sourceToType[sourceType] || null;
+          this.selectedPaper.pdf_path = expectedPath;
+          this.currentPdfSource = requestedSourceType;
           await this.loadPDF(this.selectedPaper);
         }
+        await window.electronAPI.updatePaper(paperId, { pdf_path: expectedPath });
         return;
       }
-      console.log(`[downloadFromSource] PDF path exists but file doesn't, proceeding to download`);
+
+      console.log(`[downloadFromSource] ${sourceType} PDF not found, proceeding to download`);
     }
 
     // Publisher PDFs require authentication - open in auth window to download
