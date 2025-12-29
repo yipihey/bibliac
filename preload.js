@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPaper: (id) => ipcRenderer.invoke('get-paper', id),
   updatePaper: (id, updates) => ipcRenderer.invoke('update-paper', id, updates),
   deletePaper: (id) => ipcRenderer.invoke('delete-paper', id),
+  deletePapersBulk: (ids) => ipcRenderer.invoke('delete-papers-bulk', ids),
   getPdfPath: (relativePath) => ipcRenderer.invoke('get-pdf-path', relativePath),
   searchPapers: (query) => ipcRenderer.invoke('search-papers', query),
 

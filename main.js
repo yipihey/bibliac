@@ -512,6 +512,33 @@ ipcMain.handle('delete-paper', (event, id) => {
   return true;
 });
 
+// Bulk delete papers - much faster for large selections
+ipcMain.handle('delete-papers-bulk', (event, ids) => {
+  if (!dbInitialized) return { success: false, deleted: 0 };
+  const libraryPath = store.get('libraryPath');
+
+  let deleted = 0;
+  for (const id of ids) {
+    const paper = database.getPaper(id);
+    if (paper) {
+      // Delete files (non-blocking)
+      pdfImport.deletePaperFiles(libraryPath, paper.pdf_path, paper.text_path);
+      // Delete from database without saving (save = false)
+      database.deletePaper(id, false);
+      deleted++;
+    }
+  }
+
+  // Save database once at the end
+  database.saveDatabase();
+
+  // Update master.bib once at the end
+  const allPapers = database.getAllPapers();
+  bibtex.updateMasterBib(libraryPath, allPapers);
+
+  return { success: true, deleted };
+});
+
 ipcMain.handle('get-pdf-path', (event, relativePath) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath || !relativePath) return null;

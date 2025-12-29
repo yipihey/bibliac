@@ -365,12 +365,12 @@ function updatePaper(id, updates) {
   saveDatabase();
 }
 
-function deletePaper(id) {
+function deletePaper(id, save = true) {
   db.run(`DELETE FROM refs WHERE paper_id = ?`, [id]);
   db.run(`DELETE FROM citations WHERE paper_id = ?`, [id]);
   db.run(`DELETE FROM paper_collections WHERE paper_id = ?`, [id]);
   db.run(`DELETE FROM papers WHERE id = ?`, [id]);
-  saveDatabase();
+  if (save) saveDatabase();
 }
 
 function getPaper(id) {

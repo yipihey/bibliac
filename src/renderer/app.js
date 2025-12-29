@@ -2166,10 +2166,9 @@ class SciXReader {
     }
 
     try {
-      // Delete all selected papers
-      for (const id of this.selectedPapers) {
-        await window.electronAPI.deletePaper(id);
-      }
+      // Use bulk delete for efficiency
+      const ids = Array.from(this.selectedPapers);
+      await window.electronAPI.deletePapersBulk(ids);
 
       // Clear selection
       this.selectedPapers.clear();
