@@ -1823,6 +1823,49 @@ class SciXReader {
     }
   }
 
+  // Refresh the current tab view (after sync, import, etc.)
+  async refreshCurrentTabView() {
+    if (!this.selectedPaper) return;
+
+    const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+    if (!currentTab) return;
+
+    // Reload paper data from database
+    const paper = await window.electronAPI.getPaper(this.selectedPaper.id);
+    if (paper) {
+      // Update local reference
+      this.selectedPaper = paper;
+      // Update in papers array
+      const index = this.papers.findIndex(p => p.id === paper.id);
+      if (index >= 0) this.papers[index] = paper;
+    }
+
+    // Refresh based on current tab
+    switch (currentTab) {
+      case 'abstract':
+        this.displayAbstract(paper);
+        break;
+      case 'refs':
+        await this.loadReferences(paper.id);
+        break;
+      case 'cites':
+        await this.loadCitations(paper.id);
+        break;
+      case 'bibtex':
+        this.displayBibtex(paper);
+        break;
+      case 'pdf':
+        // PDF usually doesn't need refresh after sync
+        break;
+      case 'ai':
+        this.loadAIPanelData();
+        break;
+    }
+
+    // Update bottom bar info
+    this.updateBottomBar(paper);
+  }
+
   // Multi-selection display methods
   displayMultiAbstract() {
     const abstractEl = document.getElementById('abstract-content');
@@ -2409,23 +2452,29 @@ class SciXReader {
     syncBtn.disabled = true;
 
     // Set up progress listener
-    window.electronAPI.onAdsSyncProgress((data) => {
+    window.electronAPI.onAdsSyncProgress(async (data) => {
       if (data.done) {
         // Sync complete
         const r = data.results;
-        statusEl.textContent = `Sync complete! Updated ${r.updated}, skipped ${r.skipped}, failed ${r.failed}`;
+        statusEl.textContent = `✓ Sync complete! Updated ${r.updated}, skipped ${r.skipped}, failed ${r.failed}`;
         progressEl.style.width = '100%';
+        progressEl.style.backgroundColor = '#28a745';
         paperEl.textContent = '';
-        footerEl.style.display = 'flex';
 
         syncBtn.classList.remove('syncing');
         syncBtn.disabled = false;
 
         // Reload papers to show updated data
-        this.loadPapers();
+        await this.loadPapers();
         if (this.selectedPaper) {
-          this.showPaperDetail(this.selectedPaper.id);
+          await this.refreshCurrentTabView();
         }
+
+        // Auto-close after 2 seconds
+        setTimeout(() => {
+          this.hideAdsSyncModal();
+          progressEl.style.backgroundColor = '';
+        }, 2000);
       } else {
         // Progress update
         const percent = Math.round((data.current / data.total) * 100);
@@ -2558,20 +2607,36 @@ class SciXReader {
       const result = await window.electronAPI.importSingleFromAds(doc);
 
       if (result.success) {
-        this.hideAdsLookupModal();
+        // Show success message in the button
+        const pdfMsg = result.hasPdf ? ' with PDF' : '';
+        applyBtn.textContent = `✓ Imported${pdfMsg}!`;
+        applyBtn.style.backgroundColor = '#28a745';
+
         // Reload paper list and select the newly imported paper
         await this.loadPapers();
         if (result.paperId) {
           await this.selectPaper(result.paperId);
+          // Refresh the current tab view
+          await this.refreshCurrentTabView();
         }
 
-        // Show confirmation
-        const pdfMsg = result.hasPdf ? ' with PDF' : ' (no PDF available)';
+        // Auto-close after 2 seconds
+        setTimeout(() => {
+          this.hideAdsLookupModal();
+          applyBtn.style.backgroundColor = '';
+          applyBtn.textContent = 'Import from ADS';
+          applyBtn.disabled = false;
+        }, 2000);
+
         console.log(`Paper imported from ADS${pdfMsg}`);
+        return; // Don't run finally block immediately
       } else {
         alert('Failed to import from ADS: ' + result.error);
+        applyBtn.textContent = 'Import from ADS';
+        applyBtn.disabled = false;
       }
-    } finally {
+    } catch (error) {
+      alert('Failed to import from ADS: ' + error.message);
       applyBtn.textContent = 'Import from ADS';
       applyBtn.disabled = false;
     }
