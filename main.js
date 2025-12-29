@@ -1072,7 +1072,6 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
       // Download PDF if missing
       const pdfExists = libraryPath && paper.pdf_path && fs.existsSync(path.join(libraryPath, paper.pdf_path));
       if (!pdfExists && libraryPath) {
-        sendConsoleLog(`[${bibcode}] Downloading PDF...`, 'info');
         try {
           const proxyUrl = store.get('libraryProxyUrl');
           const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
@@ -1082,15 +1081,17 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
             token,
             adsApi,
             proxyUrl,
-            pdfPriority
+            pdfPriority,
+            (msg, type) => sendConsoleLog(`[${bibcode}] ${msg}`, type)
           );
           if (downloadResult.success) {
             database.updatePaper(paper.id, { pdf_path: downloadResult.pdf_path }, false);
-            sendConsoleLog(`[${bibcode}] PDF downloaded`, 'success');
           }
         } catch (e) {
           sendConsoleLog(`[${bibcode}] PDF download failed: ${e.message}`, 'warn');
         }
+      } else if (pdfExists) {
+        sendConsoleLog(`[${bibcode}] PDF exists, skipping`, 'info');
       }
 
       sendConsoleLog(`[${bibcode}] ✓ Done`, 'success');
@@ -1349,9 +1350,11 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
       }
 
       // Try to download PDF
-      sendConsoleLog(`[${paper.bibcode}] Downloading PDF...`, 'info');
       const proxyUrl = store.get('libraryProxyUrl');
-      const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl);
+      const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
+      const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl, pdfPriority,
+        (msg, type) => sendConsoleLog(`[${paper.bibcode}] ${msg}`, type)
+      );
 
       let textPath = null;
       if (downloadResult.success && downloadResult.path) {
@@ -2064,9 +2067,11 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
     sendConsoleLog(`Importing: ${paper.bibcode} - "${paper.title?.substring(0, 40)}..."`, 'info');
 
     // Try to download PDF
-    sendConsoleLog(`[${paper.bibcode}] Downloading PDF...`, 'info');
     const proxyUrl = store.get('libraryProxyUrl');
-    const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl);
+    const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
+    const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl, pdfPriority,
+      (msg, type) => sendConsoleLog(`[${paper.bibcode}] ${msg}`, type)
+    );
 
     let textPath = null;
     if (downloadResult.success && downloadResult.path) {
@@ -2275,6 +2280,38 @@ ipcMain.handle('get-downloaded-pdf-sources', (event, paperId) => {
   }
 
   return downloadedSources;
+});
+
+ipcMain.handle('delete-pdf', (event, paperId, sourceType) => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath || !dbInitialized) return false;
+
+  const paper = database.getPaper(paperId);
+  if (!paper || !paper.bibcode) return false;
+
+  const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filename = `${baseFilename}_${sourceType}.pdf`;
+  const filePath = path.join(libraryPath, 'papers', filename);
+
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      sendConsoleLog(`Deleted PDF: ${filename}`, 'info');
+
+      // Also delete associated text file if it exists
+      const textFilename = `${baseFilename}_${sourceType}.txt`;
+      const textPath = path.join(libraryPath, 'text', textFilename);
+      if (fs.existsSync(textPath)) {
+        fs.unlinkSync(textPath);
+      }
+
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('Failed to delete PDF:', error);
+    return false;
+  }
 });
 
 ipcMain.handle('create-annotation', (event, paperId, data) => {

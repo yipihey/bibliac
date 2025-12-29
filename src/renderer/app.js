@@ -559,6 +559,10 @@ class SciXReader {
           valA = a.rating || 5; // Unrated = 5 (goes last when ascending)
           valB = b.rating || 5;
           break;
+        case 'citations':
+          valA = a.citation_count || 0;
+          valB = b.citation_count || 0;
+          break;
         default:
           return 0;
       }
@@ -827,6 +831,7 @@ class SciXReader {
         <div class="paper-item-meta">
           <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
           <span>${paper.year || ''}</span>
+          ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
           ${this.getRatingEmoji(paper.rating)}
           ${paper.bibcode ? `<button class="pdf-source-btn" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode}" title="PDF">📄${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>` : ''}
           ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
@@ -2321,6 +2326,29 @@ class SciXReader {
 
   async fetchMetadata() {
     if (!this.selectedPaper || !this.hasAdsToken) return;
+
+    // If paper already has a bibcode, try syncing first
+    if (this.selectedPaper.bibcode) {
+      this.addConsoleMessage(`Syncing ${this.selectedPaper.bibcode} with ADS...`, 'info');
+      try {
+        const result = await window.electronAPI.adsSyncPapers([this.selectedPaper.id]);
+        if (result.success && result.updated > 0) {
+          this.addConsoleMessage(`Synced successfully`, 'success');
+          // Reload the paper data
+          await this.loadPapers();
+          const updated = this.papers.find(p => p.id === this.selectedPaper.id);
+          if (updated) {
+            this.selectedPaper = updated;
+            this.showPaperDetails(updated);
+          }
+          return; // Success - no need to show dialog
+        }
+      } catch (e) {
+        this.addConsoleMessage(`Sync failed: ${e.message}`, 'warn');
+      }
+      // Sync failed, fall through to show dialog
+    }
+
     this.showAdsLookupModal();
   }
 
@@ -2596,9 +2624,6 @@ class SciXReader {
 
     resultsEl.innerHTML = papers.map((paper, i) => `
       <div class="scix-result-item" data-index="${i}">
-        <div class="scix-result-checkbox">
-          <input type="radio" name="ads-lookup-select" id="ads-lookup-${i}">
-        </div>
         <div class="scix-result-info">
           <div class="scix-result-title">${this.escapeHtml(paper.title || 'Untitled')}</div>
           <div class="scix-result-meta">
@@ -2608,43 +2633,28 @@ class SciXReader {
           </div>
           ${paper.abstract ? `<div class="scix-result-abstract">${this.escapeHtml(paper.abstract.substring(0, 200))}...</div>` : ''}
         </div>
+        <button class="ads-lookup-import-btn" data-index="${i}" title="Apply this metadata">+</button>
       </div>
     `).join('');
 
     // Store papers for selection
     this.adsLookupPapers = papers;
 
-    // Add click handlers
-    resultsEl.querySelectorAll('.scix-result-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const index = parseInt(item.dataset.index);
-        this.selectAdsLookupResult(index);
+    // Add click handlers for import buttons
+    resultsEl.querySelectorAll('.ads-lookup-import-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const index = parseInt(btn.dataset.index);
+        this.adsLookupSelectedDoc = this.adsLookupPapers[index];
+        btn.textContent = '...';
+        btn.disabled = true;
+        await this.applyAdsLookupMetadata();
       });
     });
   }
 
-  selectAdsLookupResult(index) {
-    const resultsEl = document.getElementById('ads-lookup-results');
-    const applyBtn = document.getElementById('ads-lookup-apply-btn');
-
-    // Update UI
-    resultsEl.querySelectorAll('.scix-result-item').forEach((item, i) => {
-      item.classList.toggle('selected', i === index);
-      const radio = item.querySelector('input[type="radio"]');
-      if (radio) radio.checked = (i === index);
-    });
-
-    // Store selection
-    this.adsLookupSelectedDoc = this.adsLookupPapers[index];
-    applyBtn.disabled = false;
-  }
-
   async applyAdsLookupMetadata() {
     if (!this.selectedPaper || !this.adsLookupSelectedDoc) return;
-
-    const applyBtn = document.getElementById('ads-lookup-apply-btn');
-    applyBtn.textContent = 'Importing from ADS...';
-    applyBtn.disabled = true;
 
     try {
       // Use the raw ADS doc if available, otherwise reconstruct it
@@ -2664,38 +2674,23 @@ class SciXReader {
       const result = await window.electronAPI.importSingleFromAds(doc);
 
       if (result.success) {
-        // Show success message in the button
         const pdfMsg = result.hasPdf ? ' with PDF' : '';
-        applyBtn.textContent = `✓ Imported${pdfMsg}!`;
-        applyBtn.style.backgroundColor = '#28a745';
+        this.addConsoleMessage(`Imported from ADS${pdfMsg}`, 'success');
 
         // Reload paper list and select the newly imported paper
         await this.loadPapers();
         if (result.paperId) {
           await this.selectPaper(result.paperId);
-          // Refresh the current tab view
           await this.refreshCurrentTabView();
         }
 
-        // Auto-close after 2 seconds
-        setTimeout(() => {
-          this.hideAdsLookupModal();
-          applyBtn.style.backgroundColor = '';
-          applyBtn.textContent = 'Import from ADS';
-          applyBtn.disabled = false;
-        }, 2000);
-
-        console.log(`Paper imported from ADS${pdfMsg}`);
-        return; // Don't run finally block immediately
+        // Auto-close modal
+        this.hideAdsLookupModal();
       } else {
         alert('Failed to import from ADS: ' + result.error);
-        applyBtn.textContent = 'Import from ADS';
-        applyBtn.disabled = false;
       }
     } catch (error) {
       alert('Failed to import from ADS: ' + error.message);
-      applyBtn.textContent = 'Import from ADS';
-      applyBtn.disabled = false;
     }
   }
 
@@ -2860,7 +2855,8 @@ class SciXReader {
       dropdown.innerHTML = availableSources.map(s => {
         const notesBadge = s.noteCount > 0 ? `<span class="note-count-badge">${s.noteCount} 📝</span>` : '';
         const downloadedIcon = s.downloaded ? '✓ ' : '';
-        return `<div class="pdf-source-item${s.downloaded ? ' downloaded' : ''}" data-source="${s.type}">${downloadedIcon}${s.label}${notesBadge}</div>`;
+        const deleteBtn = s.downloaded ? `<span class="pdf-delete-btn" data-source="${s.type}" title="Delete this PDF">×</span>` : '';
+        return `<div class="pdf-source-item${s.downloaded ? ' downloaded' : ''}" data-source="${s.type}">${downloadedIcon}${s.label}${notesBadge}${deleteBtn}</div>`;
       }).join('');
 
       // Position dropdown below button
@@ -2874,9 +2870,35 @@ class SciXReader {
       // Add click handlers for source items
       dropdown.querySelectorAll('.pdf-source-item').forEach(item => {
         item.addEventListener('click', async (e) => {
+          // Don't trigger if clicking delete button
+          if (e.target.classList.contains('pdf-delete-btn')) return;
           e.stopPropagation();
           const sourceType = item.dataset.source;
           await this.downloadFromSource(paperId, sourceType, item);
+        });
+      });
+
+      // Add click handlers for delete buttons
+      dropdown.querySelectorAll('.pdf-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const sourceType = btn.dataset.source;
+          const paper = this.papers.find(p => p.id === paperId);
+          if (!paper) return;
+
+          const sourceTypeMap = { 'arxiv': 'EPRINT_PDF', 'publisher': 'PUB_PDF', 'ads': 'ADS_PDF' };
+          const pdfSourceType = sourceTypeMap[sourceType] || sourceType;
+
+          if (confirm(`Delete the ${sourceType} PDF for this paper?`)) {
+            const deleted = await window.electronAPI.deletePdf(paperId, pdfSourceType);
+            if (deleted) {
+              // Update item to show not downloaded
+              const item = btn.closest('.pdf-source-item');
+              item.classList.remove('downloaded');
+              item.innerHTML = item.innerHTML.replace('✓ ', '').replace(/<span class="pdf-delete-btn"[^>]*>×<\/span>/, '');
+              this.addConsoleMessage(`Deleted ${sourceType} PDF`, 'info');
+            }
+          }
         });
       });
 

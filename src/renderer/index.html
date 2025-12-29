@@ -188,6 +188,10 @@
               <span class="sort-label">Rating</span>
               <span class="sort-arrow">↑</span>
             </button>
+            <button class="sort-btn" data-sort="citations" data-order="desc" title="Citation Count">
+              <span class="sort-label">Cites</span>
+              <span class="sort-arrow">↓</span>
+            </button>
           </div>
           <div class="paper-list" id="paper-list">
             <!-- Paper items rendered dynamically -->
@@ -604,8 +608,7 @@
       </div>
 
       <div class="scix-modal-footer">
-        <button class="text-button" id="ads-lookup-cancel-btn">Cancel</button>
-        <button class="primary-button" id="ads-lookup-apply-btn" disabled>Import from ADS</button>
+        <button class="text-button" id="ads-lookup-cancel-btn">Close</button>
       </div>
     </div>
   </div>

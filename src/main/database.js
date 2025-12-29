@@ -403,7 +403,8 @@ function getAllPapers(options = {}) {
   let query = `
     SELECT p.*,
       (SELECT COUNT(*) FROM text_embeddings e WHERE e.paper_id = p.id) > 0 AS is_indexed,
-      (SELECT COUNT(*) FROM annotations a WHERE a.paper_id = p.id) AS annotation_count
+      (SELECT COUNT(*) FROM annotations a WHERE a.paper_id = p.id) AS annotation_count,
+      (SELECT COUNT(*) FROM citations c WHERE c.paper_id = p.id) AS citation_count
     FROM papers p`;
   const conditions = [];
   const values = [];

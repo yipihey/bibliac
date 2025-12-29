@@ -866,6 +866,12 @@ body.resizing * {
   margin-left: 4px;
 }
 
+.citation-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
 .paper-item-status {
   display: inline-block;
   width: 8px;
@@ -1300,6 +1306,31 @@ body.resizing * {
 }
 
 .ref-import-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ads-lookup-import-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin-left: auto;
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ads-lookup-import-btn:hover {
+  background: var(--accent-hover);
+}
+
+.ads-lookup-import-btn:disabled {
   cursor: default;
   opacity: 0.6;
 }
@@ -1838,7 +1869,7 @@ body.resizing * {
 
 .scix-result-item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   padding: 10px 12px;
   border-radius: 6px;
@@ -1847,6 +1878,11 @@ body.resizing * {
   transition: background 0.1s;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
+}
+
+.scix-result-info {
+  flex: 1;
+  min-width: 0;
 }
 
 .scix-result-item:hover {
@@ -3124,12 +3160,26 @@ body.resizing-vertical * {
 }
 
 .note-count-badge {
-  margin-left: auto;
   font-size: 10px;
   color: var(--accent);
   background: var(--bg-tertiary);
   padding: 2px 5px;
   border-radius: 10px;
+}
+
+.pdf-delete-btn {
+  margin-left: auto;
+  font-size: 14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 3px;
+  line-height: 1;
+}
+
+.pdf-delete-btn:hover {
+  color: var(--danger, #e74c3c);
+  background: var(--bg-tertiary);
 }
 
 .pdf-source-btn {
