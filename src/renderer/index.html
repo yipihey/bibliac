@@ -115,6 +115,17 @@
         <span id="indexing-text">Indexing papers...</span>
       </div>
 
+      <!-- Activity Console -->
+      <div class="console-panel" id="console-panel">
+        <div class="console-header" id="console-header">
+          <span class="console-title">Console</span>
+          <span class="console-toggle" id="console-toggle">▼</span>
+        </div>
+        <div class="console-content" id="console-content">
+          <div class="console-log" id="console-log"></div>
+        </div>
+      </div>
+
       <div class="sidebar-footer">
         <div class="library-info">
           <span id="library-status">●</span>
@@ -539,8 +550,9 @@
   <!-- ADS Sync Progress Modal -->
   <div class="modal hidden" id="ads-sync-modal">
     <div class="modal-content" style="max-width: 400px;">
-      <div class="modal-header">
-        <h2>Syncing with ADS</h2>
+      <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="margin: 0;">Syncing with ADS</h2>
+        <button class="modal-close-btn" id="ads-sync-close-btn">&times;</button>
       </div>
       <div class="ads-sync-progress">
         <div class="sync-status" id="sync-status">Preparing...</div>

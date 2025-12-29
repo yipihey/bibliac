@@ -325,9 +325,17 @@ function extractBibcodeFromAdsUrl(adsurl) {
   // Match patterns like:
   // http://adsabs.harvard.edu/abs/2011MNRAS.tmp.1739P
   // https://ui.adsabs.harvard.edu/abs/2011MNRAS.tmp.1739P
+  // https://ui.adsabs.harvard.edu/abs/2013ARA%26A...51..105C (URL-encoded &)
+  // https://ui.adsabs.harvard.edu/abs/2013ARA&A...51..105C (literal &)
   // http://adsabs.harvard.edu/cgi-bin/nph-bib_query?bibcode=2011MNRAS.tmp.1739P
-  const absMatch = adsurl.match(/\/abs\/([^\/\s&?]+)/);
-  if (absMatch) return absMatch[1];
+
+  // For /abs/ URLs, capture everything after /abs/ until end, whitespace, or query string (?)
+  // Note: bibcodes can contain & (e.g., ARA&A for Annual Review of Astronomy & Astrophysics)
+  const absMatch = adsurl.match(/\/abs\/([^\/\s?]+)/);
+  if (absMatch) {
+    // URL-decode to handle %26 -> &
+    return decodeURIComponent(absMatch[1]);
+  }
 
   const bibcodeMatch = adsurl.match(/bibcode=([^&\s]+)/);
   if (bibcodeMatch) return decodeURIComponent(bibcodeMatch[1]);

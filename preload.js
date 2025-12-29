@@ -108,6 +108,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadPublisherPdf: (paperId, publisherUrl, proxyUrl) => ipcRenderer.invoke('download-publisher-pdf', paperId, publisherUrl, proxyUrl),
   showInFinder: (filePath) => ipcRenderer.invoke('show-in-finder', filePath),
 
+  // Console log from main process
+  onConsoleLog: (callback) => ipcRenderer.on('console-log', (event, data) => callback(data)),
+  removeConsoleLogListeners: () => ipcRenderer.removeAllListeners('console-log'),
+
   // Platform info
   platform: process.platform
 });

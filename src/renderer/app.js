@@ -96,6 +96,16 @@ class SciXReader {
     // Setup screen
     document.getElementById('select-folder-btn')?.addEventListener('click', () => this.selectLibraryFolder());
 
+    // Console panel toggle
+    document.getElementById('console-header')?.addEventListener('click', () => this.toggleConsole());
+    // Start with console collapsed
+    document.getElementById('console-panel')?.classList.add('collapsed');
+
+    // Listen for console messages from main process
+    window.electronAPI.onConsoleLog((data) => {
+      this.consoleLog(data.message, data.type || 'info');
+    });
+
     // Main screen
     document.getElementById('change-library-btn')?.addEventListener('click', () => this.selectLibraryFolder());
     document.getElementById('import-btn')?.addEventListener('click', () => this.importPDFs());
@@ -235,6 +245,7 @@ class SciXReader {
     // ADS Sync button
     document.getElementById('ads-sync-btn')?.addEventListener('click', () => this.startAdsSync());
     document.getElementById('sync-close-btn')?.addEventListener('click', () => this.hideAdsSyncModal());
+    document.getElementById('ads-sync-close-btn')?.addEventListener('click', () => this.hideAdsSyncModal());
 
     // ADS lookup shortcut buttons
     document.querySelectorAll('#ads-lookup-modal .scix-shortcut-btn').forEach(btn => {
@@ -1550,6 +1561,7 @@ class SciXReader {
             <div class="ref-title">${this.escapeHtml(ref.ref_title || 'Untitled')}</div>
             <div class="ref-meta">${this.formatAuthorsForList(ref.ref_authors)} ${ref.ref_year || ''}${inLibrary ? ' • In Library' : ''}</div>
           </div>
+          <button class="ref-ads-btn" data-bibcode="${ref.ref_bibcode}" title="View on ADS">ADS</button>
           <button class="ref-import-btn" data-bibcode="${ref.ref_bibcode}" title="Import this paper">+</button>
         </div>
       `;
@@ -1558,10 +1570,11 @@ class SciXReader {
     refsEl.querySelectorAll('.ref-item').forEach(item => {
       const checkbox = item.querySelector('.ref-checkbox');
       const importBtn = item.querySelector('.ref-import-btn');
+      const adsBtn = item.querySelector('.ref-ads-btn');
       const index = parseInt(item.dataset.index);
 
       item.addEventListener('click', (e) => {
-        if (e.target === checkbox || e.target === importBtn) return;
+        if (e.target === checkbox || e.target === importBtn || e.target === adsBtn) return;
         if (!checkbox.disabled) {
           checkbox.checked = !checkbox.checked;
           this.toggleRefSelection(index, checkbox.checked);
@@ -1575,6 +1588,14 @@ class SciXReader {
       importBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         await this.importSingleRef(item.dataset.bibcode, importBtn);
+      });
+
+      adsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const bibcode = item.dataset.bibcode;
+        if (bibcode) {
+          window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
+        }
       });
     });
 
@@ -1611,6 +1632,7 @@ class SciXReader {
             <div class="cite-title">${this.escapeHtml(cite.citing_title || 'Untitled')}</div>
             <div class="cite-meta">${this.formatAuthorsForList(cite.citing_authors)} ${cite.citing_year || ''}${inLibrary ? ' • In Library' : ''}</div>
           </div>
+          <button class="ref-ads-btn" data-bibcode="${cite.citing_bibcode}" title="View on ADS">ADS</button>
           <button class="ref-import-btn" data-bibcode="${cite.citing_bibcode}" title="Import this paper">+</button>
         </div>
       `;
@@ -1619,10 +1641,11 @@ class SciXReader {
     citesEl.querySelectorAll('.cite-item').forEach(item => {
       const checkbox = item.querySelector('.cite-checkbox');
       const importBtn = item.querySelector('.ref-import-btn');
+      const adsBtn = item.querySelector('.ref-ads-btn');
       const index = parseInt(item.dataset.index);
 
       item.addEventListener('click', (e) => {
-        if (e.target === checkbox || e.target === importBtn) return;
+        if (e.target === checkbox || e.target === importBtn || e.target === adsBtn) return;
         if (!checkbox.disabled) {
           checkbox.checked = !checkbox.checked;
           this.toggleCiteSelection(index, checkbox.checked);
@@ -1636,6 +1659,14 @@ class SciXReader {
       importBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         await this.importSingleRef(item.dataset.bibcode, importBtn);
+      });
+
+      adsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const bibcode = item.dataset.bibcode;
+        if (bibcode) {
+          window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
+        }
       });
     });
 
@@ -2452,7 +2483,8 @@ class SciXReader {
     syncBtn.disabled = true;
 
     // Set up progress listener
-    window.electronAPI.onAdsSyncProgress(async (data) => {
+    window.electronAPI.onAdsSyncProgress((data) => {
+      console.log('Sync progress event:', data);
       if (data.done) {
         // Sync complete
         const r = data.results;
@@ -2464,14 +2496,31 @@ class SciXReader {
         syncBtn.classList.remove('syncing');
         syncBtn.disabled = false;
 
-        // Reload papers to show updated data
-        await this.loadPapers();
-        if (this.selectedPaper) {
-          await this.refreshCurrentTabView();
-        }
+        // Reload papers and refresh view
+        const selectedPaperId = this.selectedPaper?.id;
+        (async () => {
+          try {
+            await this.loadPapers();
+            if (selectedPaperId) {
+              // Re-fetch the updated paper and refresh view
+              const paper = await window.electronAPI.getPaper(selectedPaperId);
+              if (paper) {
+                this.selectedPaper = paper;
+                // Update in papers array too
+                const index = this.papers.findIndex(p => p.id === paper.id);
+                if (index >= 0) this.papers[index] = paper;
+                // Force re-select to update all panes
+                await this.selectPaper(paper.id);
+              }
+            }
+          } catch (err) {
+            console.error('Error refreshing after sync:', err);
+          }
+        })();
 
         // Auto-close after 2 seconds
         setTimeout(() => {
+          console.log('Auto-closing sync modal');
           this.hideAdsSyncModal();
           progressEl.style.backgroundColor = '';
         }, 2000);
@@ -2492,14 +2541,16 @@ class SciXReader {
       footerEl.style.display = 'flex';
       syncBtn.classList.remove('syncing');
       syncBtn.disabled = false;
+      // Clean up listener on error
+      window.electronAPI.removeAdsSyncListeners();
     }
-
-    // Clean up listener
-    window.electronAPI.removeAdsSyncListeners();
+    // Note: listener cleanup on success happens in the setTimeout callback after auto-close
   }
 
   hideAdsSyncModal() {
     document.getElementById('ads-sync-modal').classList.add('hidden');
+    // Clean up listener when modal is closed (manually or auto)
+    window.electronAPI.removeAdsSyncListeners();
   }
 
   async searchAdsLookup() {
@@ -4589,6 +4640,30 @@ class SciXReader {
     } else {
       // For detail view: show all authors
       return authors.map(a => a || '').join('; ');
+    }
+  }
+
+  // Console panel methods
+  toggleConsole() {
+    const panel = document.getElementById('console-panel');
+    panel?.classList.toggle('collapsed');
+  }
+
+  consoleLog(message, type = 'info') {
+    const logEl = document.getElementById('console-log');
+    if (!logEl) return;
+
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `<span class="log-time">${time}</span><span class="log-${type}">${this.escapeHtml(message)}</span>`;
+
+    logEl.appendChild(entry);
+    logEl.scrollTop = logEl.scrollHeight;
+
+    // Keep only last 100 entries
+    while (logEl.children.length > 100) {
+      logEl.removeChild(logEl.firstChild);
     }
   }
 

@@ -343,7 +343,7 @@ function addPapersBulk(papers, progressCallback = null) {
   return { inserted, skipped };
 }
 
-function updatePaper(id, updates) {
+function updatePaper(id, updates, save = true) {
   const fields = [];
   const values = [];
 
@@ -362,7 +362,7 @@ function updatePaper(id, updates) {
   values.push(id);
 
   db.run(`UPDATE papers SET ${fields.join(', ')} WHERE id = ?`, values);
-  saveDatabase();
+  if (save) saveDatabase();
 }
 
 function deletePaper(id, save = true) {
@@ -626,12 +626,12 @@ function parsePaperRow(row) {
 
 // References and Citations
 
-function addReferences(paperId, refs) {
+function addReferences(paperId, refs, save = true) {
   // Clear existing references first to avoid duplicates
   db.run(`DELETE FROM refs WHERE paper_id = ?`, [paperId]);
 
   if (!refs || refs.length === 0) {
-    saveDatabase();
+    if (save) saveDatabase();
     return;
   }
 
@@ -646,16 +646,15 @@ function addReferences(paperId, refs) {
     }
   }
   stmt.free();
-  saveDatabase();
-  console.log(`Added ${refs.length} references for paper ${paperId}`);
+  if (save) saveDatabase();
 }
 
-function addCitations(paperId, citations) {
+function addCitations(paperId, citations, save = true) {
   // Clear existing citations first to avoid duplicates
   db.run(`DELETE FROM citations WHERE paper_id = ?`, [paperId]);
 
   if (!citations || citations.length === 0) {
-    saveDatabase();
+    if (save) saveDatabase();
     return;
   }
 
@@ -670,8 +669,7 @@ function addCitations(paperId, citations) {
     }
   }
   stmt.free();
-  saveDatabase();
-  console.log(`Added ${citations.length} citations for paper ${paperId}`);
+  if (save) saveDatabase();
 }
 
 function getReferences(paperId) {

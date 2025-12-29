@@ -76,6 +76,30 @@ async function getByBibcode(token, bibcode) {
   return result.docs[0] || null;
 }
 
+// Get multiple papers by bibcodes in a single API call (batch lookup)
+async function getByBibcodes(token, bibcodes, batchSize = 50) {
+  if (!bibcodes || bibcodes.length === 0) return [];
+
+  const results = [];
+
+  // Process in batches to avoid query length limits
+  for (let i = 0; i < bibcodes.length; i += batchSize) {
+    const batch = bibcodes.slice(i, i + batchSize);
+    const query = batch.map(b => `bibcode:"${b}"`).join(' OR ');
+
+    try {
+      const result = await search(token, query, { rows: batch.length });
+      if (result.docs) {
+        results.push(...result.docs);
+      }
+    } catch (e) {
+      console.error(`Batch lookup failed for batch ${i / batchSize}:`, e.message);
+    }
+  }
+
+  return results;
+}
+
 // Get paper by DOI
 async function getByDOI(token, doi) {
   const result = await search(token, `doi:"${doi}"`, { rows: 1 });
@@ -387,6 +411,7 @@ module.exports = {
   search,
   smartSearch,
   getByBibcode,
+  getByBibcodes,
   getByDOI,
   getByArxiv,
   getReferences,

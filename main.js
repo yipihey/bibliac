@@ -14,6 +14,15 @@ const { OllamaService, PROMPTS, chunkText, cosineSimilarity, parseSummaryRespons
 // Initialize LLM service (will be configured from settings)
 let llmService = null;
 
+// Helper to send console log messages to renderer
+function sendConsoleLog(message, type = 'info') {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('console-log', { message, type });
+  }
+  // Also log to terminal
+  console.log(`[${type.toUpperCase()}] ${message}`);
+}
+
 // Initialize preferences store
 const store = new Store({
   name: 'preferences',
@@ -954,70 +963,63 @@ ipcMain.handle('ads-fetch-metadata', async (event, paperId) => {
   };
 });
 
-// Sync selected papers with ADS - refresh metadata, refs, and citations
+// Sync selected papers with ADS - optimized bulk sync with parallel processing
 ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
   const token = store.get('adsToken');
   if (!token) return { success: false, error: 'No ADS API token configured' };
   if (!dbInitialized) return { success: false, error: 'Database not initialized' };
 
+  const libraryPath = store.get('libraryPath');
+
   // Get papers to sync - either specified IDs or all papers
   let papersToSync;
   if (paperIds && paperIds.length > 0) {
-    papersToSync = paperIds.map(id => database.getPaper(id)).filter(p => p && p.bibcode);
+    papersToSync = paperIds.map(id => database.getPaper(id)).filter(p => p);
   } else {
-    const allPapers = database.getAllPapers();
-    papersToSync = allPapers.filter(p => p.bibcode);
+    papersToSync = database.getAllPapers();
   }
 
-  const papersWithBibcode = papersToSync;
+  // Separate papers with and without bibcodes
+  const papersWithBibcode = papersToSync.filter(p => p.bibcode);
+  const papersWithoutBibcode = papersToSync.filter(p => !p.bibcode && (p.doi || p.arxiv_id));
+  const papersNoIdentifier = papersToSync.filter(p => !p.bibcode && !p.doi && !p.arxiv_id);
+
+  sendConsoleLog(`Sync: ${papersWithBibcode.length} with bibcode, ${papersWithoutBibcode.length} with doi/arxiv, ${papersNoIdentifier.length} with no ID`, 'info');
+  if (papersNoIdentifier.length > 0) {
+    papersNoIdentifier.forEach(p => sendConsoleLog(`No identifier: "${p.title?.substring(0, 40)}..."`, 'warn'));
+  }
 
   const results = {
-    total: papersWithBibcode.length,
+    total: papersToSync.length,
     updated: 0,
     failed: 0,
     skipped: 0,
     errors: []
   };
 
-  for (let i = 0; i < papersWithBibcode.length; i++) {
-    const paper = papersWithBibcode[i];
-
-    // Send progress update
-    mainWindow.webContents.send('ads-sync-progress', {
-      current: i + 1,
-      total: papersWithBibcode.length,
-      paper: paper.title
-    });
+  // Helper to process a single paper (for parallel execution)
+  const processPaper = async (paper, adsData, bibtexMap = null) => {
+    const bibcode = adsData.bibcode;
+    const shortTitle = paper.title?.substring(0, 35) || 'Untitled';
 
     try {
-      // Fetch fresh data from ADS
-      const adsData = await adsApi.getByBibcode(token, paper.bibcode);
-
-      if (!adsData) {
-        results.skipped++;
-        continue;
-      }
-
+      sendConsoleLog(`[${bibcode}] Updating metadata...`, 'info');
       const metadata = adsApi.adsToPaper(adsData);
 
-      // Get BibTeX
-      let bibtexStr = paper.bibtex;
-      try {
-        bibtexStr = await adsApi.exportBibtex(token, adsData.bibcode);
-      } catch (e) {
-        console.error('Failed to get BibTeX for', paper.bibcode);
-      }
+      // Get BibTeX from pre-fetched map or existing
+      let bibtexStr = bibtexMap?.get(adsData.bibcode) || paper.bibtex;
 
-      // Update paper metadata
+      // Update paper metadata (don't save yet - batch save at end)
       database.updatePaper(paper.id, {
         ...metadata,
         bibtex: bibtexStr
-      });
+      }, false);
 
-      // Fetch and update refs/cites
+      // Fetch refs/cites in parallel
+      sendConsoleLog(`[${bibcode}] Fetching refs & cites...`, 'info');
       const [refs, cits] = await Promise.all([
-        adsApi.getReferences(token, paper.bibcode).catch(() => []),
-        adsApi.getCitations(token, paper.bibcode).catch(() => [])
+        adsApi.getReferences(token, adsData.bibcode).catch(() => []),
+        adsApi.getCitations(token, adsData.bibcode).catch(() => [])
       ]);
 
       database.addReferences(paper.id, refs.map(r => ({
@@ -1025,19 +1027,23 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
         title: r.title?.[0],
         authors: r.author?.join(', '),
         year: r.year
-      })));
+      })), false);
 
       database.addCitations(paper.id, cits.map(c => ({
         bibcode: c.bibcode,
         title: c.title?.[0],
         authors: c.author?.join(', '),
         year: c.year
-      })));
+      })), false);
 
-      // Download PDF if paper doesn't have one (or file is missing)
-      const libraryPath = store.get('libraryPath');
+      if (refs.length > 0 || cits.length > 0) {
+        sendConsoleLog(`[${bibcode}] Found ${refs.length} refs, ${cits.length} cites`, 'success');
+      }
+
+      // Download PDF if missing
       const pdfExists = libraryPath && paper.pdf_path && fs.existsSync(path.join(libraryPath, paper.pdf_path));
       if (!pdfExists && libraryPath) {
+        sendConsoleLog(`[${bibcode}] Downloading PDF...`, 'info');
         try {
           const proxyUrl = store.get('libraryProxyUrl');
           const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
@@ -1050,44 +1056,171 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
             pdfPriority
           );
           if (downloadResult.success) {
-            database.updatePaper(paper.id, { pdf_path: downloadResult.pdf_path });
-
-            // Extract text for full-text search
-            const fullTextPath = path.join(libraryPath, 'fulltext', `${paper.id}.txt`);
-            const fulltextDir = path.join(libraryPath, 'fulltext');
-            if (!fs.existsSync(fulltextDir)) {
-              fs.mkdirSync(fulltextDir, { recursive: true });
-            }
-            try {
-              await pdfImport.extractText(downloadResult.path, fullTextPath);
-            } catch (e) {
-              console.log(`Text extraction failed for ${paper.bibcode}: ${e.message}`);
-            }
-            console.log(`Downloaded PDF for ${paper.bibcode} from ${downloadResult.source}`);
+            database.updatePaper(paper.id, { pdf_path: downloadResult.pdf_path }, false);
+            sendConsoleLog(`[${bibcode}] PDF downloaded`, 'success');
           }
         } catch (e) {
-          console.log(`PDF download failed for ${paper.bibcode}: ${e.message}`);
+          sendConsoleLog(`[${bibcode}] PDF download failed: ${e.message}`, 'warn');
         }
       }
 
-      results.updated++;
-      console.log(`Synced paper ${i + 1}/${papersWithBibcode.length}: ${paper.title}`);
+      sendConsoleLog(`[${bibcode}] ✓ Done`, 'success');
+      return { success: true };
+    } catch (error) {
+      sendConsoleLog(`[${bibcode}] ✗ Error: ${error.message}`, 'error');
+      return { success: false, error: error.message };
+    }
+  };
 
+  // Process papers with bibcodes using batch lookup
+  if (papersWithBibcode.length > 0) {
+    const bibcodes = papersWithBibcode.map(p => p.bibcode);
+    sendConsoleLog(`Batch fetching ${bibcodes.length} papers from ADS...`, 'info');
+
+    // Batch fetch all metadata at once
+    const adsResults = await adsApi.getByBibcodes(token, bibcodes);
+    const adsMap = new Map(adsResults.map(r => [r.bibcode, r]));
+    sendConsoleLog(`Fetched metadata for ${adsResults.length}/${bibcodes.length} papers`, 'success');
+
+    // Batch fetch all BibTeX at once (much faster than individual calls)
+    let bibtexMap = new Map();
+    try {
+      sendConsoleLog(`Fetching BibTeX entries...`, 'info');
+      const bibtexStr = await adsApi.exportBibtex(token, bibcodes);
+      // Parse the combined bibtex to map by bibcode
+      if (bibtexStr) {
+        // Split by @ to get individual entries
+        const entries = bibtexStr.split(/(?=@)/);
+        for (const entry of entries) {
+          if (!entry.trim()) continue;
+          // Try to extract bibcode from adsurl field first
+          const adsurlMatch = entry.match(/adsurl\s*=\s*\{[^}]*\/abs\/([^}\/]+)/i);
+          if (adsurlMatch) {
+            const extractedBibcode = adsurlMatch[1];
+            // Find matching bibcode in our list
+            const matchingBibcode = bibcodes.find(b =>
+              b === extractedBibcode ||
+              b.replace(/\./g, '') === extractedBibcode.replace(/\./g, '')
+            );
+            if (matchingBibcode) {
+              bibtexMap.set(matchingBibcode, '@' + entry.replace(/^@/, '').trim());
+              continue;
+            }
+          }
+          // Fallback: check if entry contains any of our bibcodes
+          for (const bibcode of bibcodes) {
+            if (entry.includes(bibcode) || entry.includes(bibcode.replace(/\./g, ''))) {
+              bibtexMap.set(bibcode, '@' + entry.replace(/^@/, '').trim());
+              break;
+            }
+          }
+        }
+      }
+      sendConsoleLog(`Got BibTeX for ${bibtexMap.size} papers`, 'success');
+    } catch (e) {
+      sendConsoleLog(`BibTeX fetch failed: ${e.message}`, 'warn');
+    }
+
+    // Process papers in parallel with higher concurrency
+    const CONCURRENCY = 10;
+    sendConsoleLog(`Processing ${papersWithBibcode.length} papers (${CONCURRENCY} at a time)...`, 'info');
+
+    for (let i = 0; i < papersWithBibcode.length; i += CONCURRENCY) {
+      const batch = papersWithBibcode.slice(i, i + CONCURRENCY);
+      const batchNum = Math.floor(i / CONCURRENCY) + 1;
+      const totalBatches = Math.ceil(papersWithBibcode.length / CONCURRENCY);
+
+      sendConsoleLog(`Processing batch ${batchNum}/${totalBatches}...`, 'info');
+
+      // Send progress update
+      mainWindow.webContents.send('ads-sync-progress', {
+        current: i + 1,
+        total: papersToSync.length,
+        paper: `Processing batch ${batchNum}/${totalBatches}...`
+      });
+
+      const promises = batch.map(async (paper) => {
+        const adsData = adsMap.get(paper.bibcode);
+        if (!adsData) {
+          sendConsoleLog(`[${paper.bibcode}] Not found in ADS, skipping`, 'warn');
+          results.skipped++;
+          return;
+        }
+
+        const result = await processPaper(paper, adsData, bibtexMap);
+        if (result.success) {
+          results.updated++;
+        } else {
+          results.failed++;
+          results.errors.push({ paper: paper.title, error: result.error });
+        }
+      });
+
+      await Promise.all(promises);
+
+      // Small delay between batches to avoid rate limits
+      if (i + CONCURRENCY < papersWithBibcode.length) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+  }
+
+  // Process papers without bibcode (need individual lookup by DOI/arXiv)
+  for (let i = 0; i < papersWithoutBibcode.length; i++) {
+    const paper = papersWithoutBibcode[i];
+    sendConsoleLog(`Syncing: "${paper.title?.substring(0, 40)}..." (doi=${paper.doi || 'none'}, arxiv=${paper.arxiv_id || 'none'})`, 'info');
+
+    mainWindow.webContents.send('ads-sync-progress', {
+      current: papersWithBibcode.length + i + 1,
+      total: papersToSync.length,
+      paper: paper.title
+    });
+
+    try {
+      let adsData = null;
+      if (paper.doi) {
+        adsData = await adsApi.getByDOI(token, paper.doi);
+        if (adsData) {
+          sendConsoleLog(`Found via DOI: ${paper.doi}`, 'success');
+        }
+      }
+      if (!adsData && paper.arxiv_id) {
+        adsData = await adsApi.getByArxiv(token, paper.arxiv_id);
+        if (adsData) {
+          sendConsoleLog(`Found via arXiv: ${paper.arxiv_id}`, 'success');
+        }
+      }
+
+      if (!adsData) {
+        sendConsoleLog(`Not found on ADS, skipping`, 'warn');
+        results.skipped++;
+        continue;
+      }
+
+      // Update bibcode for future syncs
+      database.updatePaper(paper.id, { bibcode: adsData.bibcode }, false);
+
+      const result = await processPaper(paper, adsData);
+      if (result.success) {
+        results.updated++;
+      } else {
+        results.failed++;
+      }
     } catch (error) {
       results.failed++;
       results.errors.push({ paper: paper.title, error: error.message });
-      console.error(`Failed to sync paper ${paper.bibcode}:`, error.message);
     }
-
-    // Rate limiting delay
-    await new Promise(resolve => setTimeout(resolve, 300));
   }
 
-  // Update master.bib
-  const libraryPath = store.get('libraryPath');
+  // Save database once at the end
+  database.saveDatabase();
+
+  // Update master.bib once at the end
   bibtex.updateMasterBib(libraryPath, database.getAllPapers());
 
   // Send completion
+  sendConsoleLog(`Sync complete: ${results.updated} updated, ${results.skipped} skipped, ${results.failed} failed`,
+    results.failed > 0 ? 'warn' : 'success');
   mainWindow.webContents.send('ads-sync-progress', { done: true, results });
 
   return { success: true, results };
@@ -1100,11 +1233,14 @@ ipcMain.handle('scix-search', async (event, query, options = {}) => {
   if (!token) return { success: false, error: 'No ADS API token configured' };
 
   try {
+    sendConsoleLog(`SciX search: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`, 'info');
     const result = await adsApi.search(token, query, {
       rows: options.rows || 1000,
       start: options.start || 0,
       sort: options.sort || 'date desc'
     });
+
+    sendConsoleLog(`SciX found ${result.numFound} results`, 'success');
 
     // Check which papers are already in library
     const papers = result.docs.map(doc => {
@@ -1134,6 +1270,8 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
   if (!libraryPath) return { success: false, error: 'No library selected' };
   if (!dbInitialized) return { success: false, error: 'Database not initialized' };
 
+  sendConsoleLog(`SciX import: ${selectedPapers.length} papers selected`, 'info');
+
   const results = {
     imported: [],
     skipped: [],
@@ -1153,13 +1291,16 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
     try {
       // Skip if already in library
       if (paper.bibcode && database.getPaperByBibcode(paper.bibcode)) {
+        sendConsoleLog(`[${paper.bibcode}] Already in library, skipping`, 'warn');
         results.skipped.push({ paper, reason: 'Already in library' });
         continue;
       }
 
+      sendConsoleLog(`[${paper.bibcode || 'unknown'}] Importing...`, 'info');
+
       // If we only have bibcode, fetch full metadata from ADS
       if (paper.bibcode && !paper.title) {
-        console.log(`Fetching metadata for bibcode: ${paper.bibcode}`);
+        sendConsoleLog(`[${paper.bibcode}] Fetching metadata...`, 'info');
         const metadata = await adsApi.getByBibcode(token, paper.bibcode);
         if (metadata) {
           paper = {
@@ -1174,11 +1315,12 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
             keywords: metadata.keyword
           };
         } else {
-          console.warn(`Could not fetch metadata for ${paper.bibcode}`);
+          sendConsoleLog(`[${paper.bibcode}] Could not fetch metadata`, 'warn');
         }
       }
 
       // Try to download PDF
+      sendConsoleLog(`[${paper.bibcode}] Downloading PDF...`, 'info');
       const proxyUrl = store.get('libraryProxyUrl');
       const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl);
 
@@ -1204,8 +1346,14 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
         try {
           bibtexStr = await adsApi.exportBibtex(token, paper.bibcode);
         } catch (e) {
-          console.error('Failed to get BibTeX:', e.message);
+          // BibTeX fetch failed, not critical
         }
+      }
+
+      if (downloadResult.success) {
+        sendConsoleLog(`[${paper.bibcode}] PDF downloaded`, 'success');
+      } else {
+        sendConsoleLog(`[${paper.bibcode}] No PDF available`, 'warn');
       }
 
       // Add paper to database
@@ -1227,19 +1375,13 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
       // Fetch and store references/citations
       if (paper.bibcode) {
         try {
-          console.log(`Fetching refs/cites for ${paper.bibcode}...`);
+          sendConsoleLog(`[${paper.bibcode}] Fetching refs & cites...`, 'info');
           const [refs, cits] = await Promise.all([
-            adsApi.getReferences(token, paper.bibcode).catch(e => {
-              console.error('Failed to fetch references:', e.message);
-              return [];
-            }),
-            adsApi.getCitations(token, paper.bibcode).catch(e => {
-              console.error('Failed to fetch citations:', e.message);
-              return [];
-            })
+            adsApi.getReferences(token, paper.bibcode).catch(() => []),
+            adsApi.getCitations(token, paper.bibcode).catch(() => [])
           ]);
 
-          console.log(`Found ${refs.length} references and ${cits.length} citations`);
+          sendConsoleLog(`[${paper.bibcode}] Found ${refs.length} refs, ${cits.length} cites`, 'success');
 
           database.addReferences(paperId, refs.map(r => ({
             bibcode: r.bibcode,
@@ -1255,10 +1397,11 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
             year: c.year
           })));
         } catch (e) {
-          console.error('Failed to fetch refs/cites:', e.message);
+          sendConsoleLog(`[${paper.bibcode}] Refs/cites fetch failed`, 'warn');
         }
       }
 
+      sendConsoleLog(`[${paper.bibcode}] ✓ Imported`, 'success');
       results.imported.push({
         paper,
         id: paperId,
@@ -1267,7 +1410,7 @@ ipcMain.handle('import-from-scix', async (event, selectedPapers) => {
       });
 
     } catch (error) {
-      console.error('Import failed for paper:', paper.title, error);
+      sendConsoleLog(`[${paper.bibcode || 'unknown'}] ✗ Import failed: ${error.message}`, 'error');
       results.failed.push({ paper, error: error.message });
     }
 
@@ -1352,11 +1495,15 @@ ipcMain.handle('import-bibtex', async () => {
 
   try {
     // Parse BibTeX file - this now includes import_source and import_source_key
+    const filename = path.basename(result.filePaths[0]);
+    sendConsoleLog(`Importing BibTeX: ${filename}`, 'info');
     const entries = bibtex.importBibtex(result.filePaths[0]);
 
     if (entries.length === 0) {
+      sendConsoleLog(`No entries found in ${filename}`, 'warn');
       return { success: true, imported: 0, skipped: 0, message: 'No entries found in file' };
     }
+    sendConsoleLog(`Found ${entries.length} entries in ${filename}`, 'info');
 
     // Send initial progress
     mainWindow.webContents.send('import-progress', {
@@ -1381,6 +1528,8 @@ ipcMain.handle('import-bibtex', async () => {
     bibtex.updateMasterBib(libraryPath, allPapers);
 
     // Send completion
+    sendConsoleLog(`Import complete: ${bulkResult.inserted.length} added, ${bulkResult.skipped.length} skipped`,
+      bulkResult.inserted.length > 0 ? 'success' : 'info');
     mainWindow.webContents.send('import-complete', {
       imported: bulkResult.inserted.length,
       skipped: bulkResult.skipped.length
@@ -1883,8 +2032,10 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
   try {
     // Convert ADS doc to paper format
     const paper = adsApi.adsToPaper(adsDoc);
+    sendConsoleLog(`Importing: ${paper.bibcode} - "${paper.title?.substring(0, 40)}..."`, 'info');
 
     // Try to download PDF
+    sendConsoleLog(`[${paper.bibcode}] Downloading PDF...`, 'info');
     const proxyUrl = store.get('libraryProxyUrl');
     const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl);
 
@@ -1909,9 +2060,16 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
     if (adsDoc.bibcode) {
       try {
         bibtexStr = await adsApi.exportBibtex(token, adsDoc.bibcode);
+        sendConsoleLog(`[${paper.bibcode}] Got BibTeX`, 'success');
       } catch (e) {
-        console.error('Failed to get BibTeX:', e.message);
+        sendConsoleLog(`[${paper.bibcode}] BibTeX fetch failed`, 'warn');
       }
+    }
+
+    if (downloadResult.success) {
+      sendConsoleLog(`[${paper.bibcode}] PDF downloaded`, 'success');
+    } else {
+      sendConsoleLog(`[${paper.bibcode}] No PDF available`, 'warn');
     }
 
     // Add paper to database
@@ -1933,19 +2091,17 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
     // Fetch and store references/citations
     if (adsDoc.bibcode) {
       try {
-        console.log(`Fetching refs/cites for ${adsDoc.bibcode}...`);
+        sendConsoleLog(`[${paper.bibcode}] Fetching refs & cites...`, 'info');
         const [refs, cits] = await Promise.all([
           adsApi.getReferences(token, adsDoc.bibcode).catch(e => {
-            console.error('Failed to fetch references:', e.message);
             return [];
           }),
           adsApi.getCitations(token, adsDoc.bibcode).catch(e => {
-            console.error('Failed to fetch citations:', e.message);
             return [];
           })
         ]);
 
-        console.log(`Found ${refs.length} references and ${cits.length} citations`);
+        sendConsoleLog(`[${paper.bibcode}] Found ${refs.length} refs, ${cits.length} cites`, 'success');
 
         database.addReferences(paperId, refs.map(r => ({
           bibcode: r.bibcode,
@@ -1961,7 +2117,7 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
           year: c.year
         })));
       } catch (e) {
-        console.error('Failed to fetch refs/cites:', e.message);
+        sendConsoleLog(`[${paper.bibcode}] Refs/cites fetch failed`, 'warn');
       }
     }
 
@@ -1969,12 +2125,14 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
     const allPapers = database.getAllPapers();
     bibtex.updateMasterBib(libraryPath, allPapers);
 
+    sendConsoleLog(`[${paper.bibcode}] ✓ Import complete`, 'success');
     return {
       success: true,
       paperId,
       hasPdf: !!downloadResult.pdf_path
     };
   } catch (error) {
+    sendConsoleLog(`Import failed: ${error.message}`, 'error');
     return { success: false, error: error.message };
   }
 });
