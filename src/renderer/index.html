@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' file:">
+  <title>SciX Reader</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- KaTeX for LaTeX rendering -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+  <!-- Setup Screen -->
+  <div id="setup-screen" class="screen">
+    <div class="setup-container">
+      <div class="setup-icon">📚</div>
+      <h1>Welcome to SciX Reader</h1>
+      <p class="setup-subtitle">A scientific publication reader with NASA ADS/SciX integration</p>
+
+      <div class="setup-section">
+        <h2>Choose Your Library Location</h2>
+        <p>Select a folder where your papers will be stored. For automatic sync across devices, choose a folder in iCloud Drive, Google Drive, or Dropbox.</p>
+
+        <div class="cloud-suggestion">
+          <div class="cloud-icon">☁️</div>
+          <div>
+            <strong>Recommended:</strong> Store in iCloud Drive<br>
+            <span class="suggestion-detail">Your papers will sync across all your devices</span>
+          </div>
+        </div>
+
+        <button id="select-folder-btn" class="primary-button">
+          Select Library Folder
+        </button>
+      </div>
+
+      <div id="selected-path" class="selected-path hidden">
+        <div class="path-label">Selected location:</div>
+        <div class="path-value"></div>
+        <div class="cloud-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main App Screen -->
+  <div id="main-screen" class="screen hidden">
+    <div class="titlebar-drag-region"></div>
+
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <h1>SciX Reader</h1>
+        <button id="reload-btn" class="reload-btn" title="Reload App (Cmd+R)">↻</button>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-header">Library</div>
+        <div class="nav-item active" data-view="all">
+          <span class="nav-icon">📄</span>
+          <span>All Papers</span>
+          <span class="nav-count" id="paper-count">0</span>
+        </div>
+        <div class="nav-item" data-view="unread">
+          <span class="nav-icon">📖</span>
+          <span>Unread</span>
+          <span class="nav-count" id="unread-count">0</span>
+        </div>
+        <div class="nav-item" data-view="reading">
+          <span class="nav-icon">📕</span>
+          <span>Reading</span>
+          <span class="nav-count" id="reading-count">0</span>
+        </div>
+        <div class="nav-item" data-view="read">
+          <span class="nav-icon">✓</span>
+          <span>Read</span>
+          <span class="nav-count" id="read-count">0</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-header">
+          Collections
+          <button class="add-collection-btn" id="add-collection-btn" title="New Collection">+</button>
+        </div>
+        <div id="collections-list" class="collections-list">
+          <div class="nav-item placeholder">No collections yet</div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-header">Settings</div>
+        <div class="nav-item" id="ads-settings-btn">
+          <span class="nav-icon">🔑</span>
+          <span>ADS API Token</span>
+          <span class="nav-status" id="ads-status">●</span>
+        </div>
+        <div class="nav-item" id="llm-settings-btn">
+          <span class="nav-icon">🤖</span>
+          <span>AI / Ollama</span>
+          <span class="nav-status" id="llm-status">●</span>
+        </div>
+        <div class="nav-item" id="preferences-btn">
+          <span class="nav-icon">⚙️</span>
+          <span>Preferences</span>
+        </div>
+      </div>
+
+      <!-- Indexing progress indicator -->
+      <div class="indexing-status hidden" id="indexing-status">
+        <span class="indexing-icon">⚡</span>
+        <span id="indexing-text">Indexing papers...</span>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="library-info">
+          <span id="library-status">●</span>
+          <span id="library-path-display">No library</span>
+        </div>
+        <button id="change-library-btn" class="text-button">Change</button>
+      </div>
+    </div>
+
+    <!-- Resize handle between sidebar and main content -->
+    <div class="resize-handle" id="sidebar-resize" data-resize="sidebar"></div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Content Split -->
+      <div class="content-split">
+        <!-- Paper List Panel -->
+        <div class="paper-list-panel">
+          <div class="list-toolbar">
+            <button id="import-btn" class="import-btn" title="Import PDF">+</button>
+            <button id="scix-search-btn" class="scix-btn" title="Search SciX">SciX</button>
+            <button id="ads-sync-btn" class="sync-btn" title="Sync selected papers with ADS">⟳</button>
+            <div class="search-wrapper">
+              <input type="text" id="search-input" placeholder="Search... (/)">
+              <button id="search-clear-btn" class="search-clear-btn" title="Clear search">&times;</button>
+            </div>
+          </div>
+          <div class="search-shortcuts">
+            <button class="search-shortcut-btn" data-insert="author:">author:</button>
+            <button class="search-shortcut-btn" data-insert="year:">year:</button>
+            <button class="search-shortcut-btn" data-insert="title:">title:</button>
+            <button class="search-shortcut-btn" data-insert="bibcode:">bibcode:</button>
+            <button class="search-shortcut-btn" data-insert="journal:">journal:</button>
+          </div>
+          <div class="sort-toolbar">
+            <button class="sort-btn active" data-sort="added" data-order="desc" title="Date Added">
+              <span class="sort-label">Added</span>
+              <span class="sort-arrow">↓</span>
+            </button>
+            <button class="sort-btn" data-sort="title" data-order="asc" title="Title">
+              <span class="sort-label">Title</span>
+              <span class="sort-arrow">↑</span>
+            </button>
+            <button class="sort-btn" data-sort="author" data-order="asc" title="First Author">
+              <span class="sort-label">Author</span>
+              <span class="sort-arrow">↑</span>
+            </button>
+            <button class="sort-btn" data-sort="year" data-order="desc" title="Publication Year">
+              <span class="sort-label">Year</span>
+              <span class="sort-arrow">↓</span>
+            </button>
+            <button class="sort-btn" data-sort="journal" data-order="asc" title="Journal">
+              <span class="sort-label">Journal</span>
+              <span class="sort-arrow">↑</span>
+            </button>
+            <button class="sort-btn" data-sort="rating" data-order="asc" title="Rating (1=seminal, 4=meh)">
+              <span class="sort-label">Rating</span>
+              <span class="sort-arrow">↑</span>
+            </button>
+          </div>
+          <div class="paper-list" id="paper-list">
+            <!-- Paper items rendered dynamically -->
+          </div>
+          <div class="paper-list-footer">
+            <button id="add-paper-btn" class="list-action-btn" title="Import PDF (Cmd+I)">+</button>
+            <button id="remove-paper-btn" class="list-action-btn" title="Remove Paper (Backspace)" disabled>−</button>
+          </div>
+        </div>
+
+        <!-- Resize handle between paper list and detail -->
+        <div class="resize-handle" id="list-resize" data-resize="list"></div>
+
+        <!-- Paper Detail / PDF Viewer -->
+        <div class="paper-detail" id="paper-detail">
+          <div class="detail-placeholder" id="detail-placeholder">
+            <p>Select a paper to view</p>
+          </div>
+
+          <!-- Main Content Area -->
+          <div class="viewer-wrapper hidden" id="viewer-wrapper">
+            <!-- Content row (tabs + annotations) -->
+            <div class="viewer-content-row">
+              <!-- Tab Content -->
+              <div class="tab-content" id="tab-content">
+              <!-- PDF Tab -->
+              <div class="tab-pane active" id="tab-pdf">
+                <div class="pdf-container" id="pdf-container">
+                  <div class="pdf-loading" id="pdf-loading">Loading PDF...</div>
+                </div>
+              </div>
+
+              <!-- Abstract Tab -->
+              <div class="tab-pane hidden" id="tab-abstract">
+                <div class="abstract-content" id="abstract-content">
+                  <p class="no-content">No abstract available. Click "Fetch from ADS" to retrieve metadata.</p>
+                </div>
+                <div class="keywords-section" id="keywords-section">
+                  <h4>Keywords</h4>
+                  <div id="keywords-list"></div>
+                </div>
+              </div>
+
+              <!-- References Tab -->
+              <div class="tab-pane hidden" id="tab-refs">
+                <div class="refs-toolbar hidden" id="refs-toolbar">
+                  <span id="refs-count">0 references</span>
+                  <div class="refs-actions">
+                    <button class="text-button" id="refs-select-all">Select All</button>
+                    <button class="text-button" id="refs-select-none">None</button>
+                    <button class="primary-button small" id="refs-import-btn" disabled>Import Selected</button>
+                  </div>
+                </div>
+                <div class="refs-list" id="refs-list">
+                  <p class="no-content">No references loaded. Click "Fetch from ADS" to retrieve.</p>
+                </div>
+              </div>
+
+              <!-- Citations Tab -->
+              <div class="tab-pane hidden" id="tab-cites">
+                <div class="cites-toolbar hidden" id="cites-toolbar">
+                  <span id="cites-count">0 citations</span>
+                  <div class="cites-actions">
+                    <button class="text-button" id="cites-select-all">Select All</button>
+                    <button class="text-button" id="cites-select-none">None</button>
+                    <button class="primary-button small" id="cites-import-btn" disabled>Import Selected</button>
+                  </div>
+                </div>
+                <div class="cites-list" id="cites-list">
+                  <p class="no-content">No citations loaded. Click "Fetch from ADS" to retrieve.</p>
+                </div>
+              </div>
+
+              <!-- BibTeX Tab -->
+              <div class="tab-pane hidden" id="tab-bibtex">
+                <textarea class="bibtex-content" id="bibtex-content" readonly placeholder="No BibTeX available. Click 'Fetch from ADS' to retrieve."></textarea>
+                <button class="copy-btn" id="copy-bibtex-btn">Copy BibTeX</button>
+              </div>
+
+              <!-- AI Tab -->
+              <div class="tab-pane hidden" id="tab-ai">
+                <div class="ai-panel">
+                  <!-- Summary Section -->
+                  <div class="ai-section resizable" id="ai-summary-section">
+                    <div class="ai-section-header">
+                      <h3>Summary</h3>
+                      <div class="ai-section-actions">
+                        <button class="text-button" id="ai-regenerate-btn" title="Regenerate summary">Regenerate</button>
+                      </div>
+                    </div>
+                    <div class="ai-summary-content" id="ai-summary-content">
+                      <div class="ai-placeholder">
+                        <p>Click "Generate Summary" to create an AI-powered summary of this paper.</p>
+                        <button class="primary-button" id="ai-generate-summary-btn">Generate Summary</button>
+                      </div>
+                    </div>
+                    <div class="ai-key-points hidden" id="ai-key-points">
+                      <h4>Key Points</h4>
+                      <ul id="ai-key-points-list"></ul>
+                    </div>
+                  </div>
+
+                  <!-- Resize handle between Summary and Q&A -->
+                  <div class="ai-section-resize" data-resize-section="summary-qa"></div>
+
+                  <!-- Q&A Section -->
+                  <div class="ai-section resizable" id="ai-qa-section">
+                    <div class="ai-section-header">
+                      <h3>Ask AI</h3>
+                      <button class="text-button" id="ai-clear-history-btn" title="Clear history">Clear</button>
+                    </div>
+                    <div class="ai-qa-history" id="ai-qa-history">
+                      <div class="ai-qa-placeholder">
+                        <p>Ask questions about this paper and get AI-powered answers.</p>
+                        <div class="ai-suggested-questions">
+                          <button class="suggested-question" data-question="Give a simplified explanation of the entire paper.">Simplified explanation</button>
+                          <button class="suggested-question" data-question="What are the main findings and conclusions?">Main findings</button>
+                          <button class="suggested-question" data-question="What methods were used in this research?">Methods used</button>
+                          <button class="suggested-question" data-question="What are the limitations of this study?">Limitations</button>
+                          <button class="suggested-question" data-question="How does this paper relate to other work in the field?">Related work</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="ai-qa-input-wrapper">
+                      <input type="text" id="ai-question-input" placeholder="Ask a question about this paper...">
+                      <button class="primary-button" id="ai-ask-btn">Ask</button>
+                    </div>
+                  </div>
+
+                  <!-- Resize handle between Q&A and Search -->
+                  <div class="ai-section-resize" data-resize-section="qa-search"></div>
+
+                  <!-- Semantic Search Section -->
+                  <div class="ai-section resizable" id="ai-search-section">
+                    <div class="ai-section-header">
+                      <h3>Semantic Search</h3>
+                      <button class="text-button" id="ai-index-paper-btn" title="Index current paper for search">Index Paper</button>
+                    </div>
+                    <div class="ai-search-wrapper">
+                      <input type="text" id="ai-search-input" placeholder="Search papers using natural language...">
+                      <button class="primary-button" id="ai-search-btn">Search</button>
+                    </div>
+                    <div class="ai-search-results" id="ai-search-results">
+                      <div class="ai-search-placeholder">
+                        <p>Search across your indexed papers using natural language queries.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Connection Status -->
+                  <div class="ai-status-bar" id="ai-status-bar">
+                    <span class="ai-status-indicator" id="ai-status-indicator">●</span>
+                    <span id="ai-status-text">Checking Ollama...</span>
+                    <button class="text-button" id="ai-settings-link">Settings</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+              <!-- Annotations resize handle -->
+              <div class="resize-handle vertical hidden" id="annotations-resize" data-resize="annotations"></div>
+
+              <!-- Annotations Panel -->
+              <div class="annotations-panel hidden" id="annotations-panel">
+                <div class="annotations-header">
+                  <h3>Notes <span class="annotations-count" id="annotations-count"></span></h3>
+                  <button class="text-button" id="add-note-btn" title="Add general note">+ Add</button>
+                </div>
+                <div class="annotations-list" id="annotations-list">
+                  <div class="annotations-placeholder">
+                    <p>Select text in the PDF and click "Add Note" to create an annotation.</p>
+                  </div>
+                </div>
+              </div>
+            </div><!-- end viewer-content-row -->
+
+            <!-- Bottom Status Bar -->
+            <div class="bottom-bar" id="bottom-bar">
+              <div class="bottom-bar-left">
+                <div class="info-tabs">
+                  <button class="tab-btn active" data-tab="pdf">PDF</button>
+                  <button class="tab-btn" data-tab="abstract">Abstract</button>
+                  <button class="tab-btn" data-tab="refs">Refs</button>
+                  <button class="tab-btn" data-tab="cites">Cites</button>
+                  <button class="tab-btn" data-tab="bibtex">BibTeX</button>
+                  <button class="tab-btn" data-tab="ai">AI</button>
+                </div>
+                <span class="separator">|</span>
+                <div class="pdf-controls">
+                  <button class="pdf-btn" id="zoom-out-btn" title="Zoom out">−</button>
+                  <span id="zoom-level">100%</span>
+                  <button class="pdf-btn" id="zoom-in-btn" title="Zoom in">+</button>
+                  <button class="pdf-btn" id="rotate-btn" title="Rotate page">↻</button>
+                  <span class="page-info">
+                    <span id="current-page">1</span>/<span id="total-pages">1</span>
+                  </span>
+                </div>
+              </div>
+              <div class="bottom-bar-center">
+                <span class="paper-title-bar" id="paper-title-bar" title="">Select a paper</span>
+              </div>
+              <div class="bottom-bar-right">
+                <select id="paper-rating-select" class="status-select rating-select" title="Rate paper (1-4 keys)">
+                  <option value="0">--</option>
+                  <option value="1">1 - Seminal</option>
+                  <option value="2">2 - Important</option>
+                  <option value="3">3 - Average</option>
+                  <option value="4">4 - Meh</option>
+                </select>
+                <select id="read-status-select" class="status-select" title="Reading status">
+                  <option value="unread">Unread</option>
+                  <option value="reading">Reading</option>
+                  <option value="read">Read</option>
+                </select>
+                <button class="action-btn" id="fetch-metadata-btn" title="Fetch metadata from ADS">ADS</button>
+                <button class="action-btn" id="copy-cite-btn" title="Copy \\cite command">Cite</button>
+                <button class="action-btn" id="open-ads-btn" title="Open in ADS">Link</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Hidden elements for storing full paper info -->
+          <div id="paper-info-panel" class="hidden">
+            <span id="paper-title"></span>
+            <span id="paper-authors"></span>
+            <span id="paper-year"></span>
+            <span id="paper-journal"></span>
+            <span id="paper-bibcode"></span>
+            <span id="paper-doi"></span>
+            <span id="paper-arxiv"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADS Token Modal -->
+  <div class="modal hidden" id="ads-modal">
+    <div class="modal-content">
+      <h2>NASA ADS API Token</h2>
+      <p>Enter your ADS API token to enable metadata lookup, references, and citations.</p>
+      <p class="modal-help">Get your token from <a href="#" id="ads-token-link">ui.adsabs.harvard.edu/user/settings/token</a></p>
+      <input type="text" id="ads-token-input" placeholder="Enter your ADS API token">
+
+      <h3 style="margin-top: 20px;">Library Proxy (Optional)</h3>
+      <p>Enter your institution's proxy URL to access paywalled publisher PDFs.</p>
+      <p class="modal-help">Example: https://proxy.library.edu/login?url=</p>
+      <input type="text" id="library-proxy-input" placeholder="https://proxy.library.edu/login?url=">
+
+      <div class="modal-actions">
+        <button class="secondary-button" id="ads-cancel-btn">Cancel</button>
+        <button class="primary-button" id="ads-save-btn">Save</button>
+      </div>
+      <div class="modal-status" id="ads-modal-status"></div>
+    </div>
+  </div>
+
+  <!-- Preferences Modal -->
+  <div class="modal hidden" id="preferences-modal">
+    <div class="modal-content">
+      <h2>Preferences</h2>
+
+      <h3>PDF Source Priority</h3>
+      <p class="modal-help">Drag to reorder. Higher items are tried first when downloading PDFs.</p>
+      <ul id="pdf-priority-list" class="priority-list">
+        <li data-source="PUB_PDF" draggable="true">
+          <span class="drag-handle">≡</span>
+          <span class="source-name">Publisher PDF</span>
+          <span class="source-desc">Peer-reviewed, highest quality</span>
+        </li>
+        <li data-source="ADS_PDF" draggable="true">
+          <span class="drag-handle">≡</span>
+          <span class="source-name">ADS Scan</span>
+          <span class="source-desc">Scanned PDFs for older papers</span>
+        </li>
+        <li data-source="EPRINT_PDF" draggable="true">
+          <span class="drag-handle">≡</span>
+          <span class="source-name">arXiv</span>
+          <span class="source-desc">Preprints, may differ from published</span>
+        </li>
+        <li data-source="AUTHOR_PDF" draggable="true">
+          <span class="drag-handle">≡</span>
+          <span class="source-name">Author PDF</span>
+          <span class="source-desc">Author-hosted versions</span>
+        </li>
+      </ul>
+
+      <div class="modal-actions">
+        <button class="secondary-button" id="preferences-cancel-btn">Cancel</button>
+        <button class="primary-button" id="preferences-save-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Collection Modal -->
+  <div class="modal hidden" id="collection-modal">
+    <div class="modal-content">
+      <h2>New Collection</h2>
+      <input type="text" id="collection-name-input" placeholder="Collection name">
+      <div class="modal-actions">
+        <button class="secondary-button" id="collection-cancel-btn">Cancel</button>
+        <button class="primary-button" id="collection-save-btn">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SciX Search Modal -->
+  <div class="modal hidden" id="scix-modal">
+    <div class="modal-content scix-modal-content">
+      <div class="scix-modal-header">
+        <h2>Search SciX</h2>
+        <button class="modal-close-btn" id="scix-close-btn">&times;</button>
+      </div>
+
+      <div class="scix-search-bar">
+        <input type="text" id="scix-query-input" placeholder="e.g., author:smith year:2020-2024 galaxy">
+        <button class="primary-button" id="scix-search-execute-btn">Search</button>
+      </div>
+
+      <div class="scix-shortcuts">
+        <button class="scix-shortcut-btn" data-insert="author:">author:</button>
+        <button class="scix-shortcut-btn" data-insert="year:">year:</button>
+        <button class="scix-shortcut-btn" data-insert="title:">title:</button>
+        <button class="scix-shortcut-btn" data-insert="abs:">abs:</button>
+        <button class="scix-shortcut-btn" data-insert="bibcode:">bibcode:</button>
+        <button class="scix-shortcut-btn" data-insert="arXiv:">arXiv:</button>
+        <button class="scix-shortcut-btn" data-insert="doi:">doi:</button>
+      </div>
+
+      <div class="scix-results-header hidden" id="scix-results-header">
+        <span id="scix-results-count">0 papers found</span>
+        <div class="scix-select-buttons">
+          <button class="text-button" id="scix-select-all-btn">Select All</button>
+          <button class="text-button" id="scix-select-none-btn">None</button>
+        </div>
+      </div>
+
+      <div class="scix-results-list" id="scix-results-list">
+        <div class="scix-empty-state">
+          <p>Enter a search query to find papers in SciX/NASA ADS</p>
+        </div>
+      </div>
+
+      <div class="scix-progress hidden" id="scix-progress">
+        <div class="progress-bar">
+          <div class="progress-fill" id="scix-progress-fill"></div>
+        </div>
+        <div class="progress-text" id="scix-progress-text">Importing...</div>
+      </div>
+
+      <div class="scix-modal-footer">
+        <span class="scix-selected-count" id="scix-selected-count">0 selected</span>
+        <button class="primary-button" id="scix-import-btn" disabled>Import Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADS Sync Progress Modal -->
+  <div class="modal hidden" id="ads-sync-modal">
+    <div class="modal-content" style="max-width: 400px;">
+      <div class="modal-header">
+        <h2>Syncing with ADS</h2>
+      </div>
+      <div class="ads-sync-progress">
+        <div class="sync-status" id="sync-status">Preparing...</div>
+        <div class="sync-progress-bar">
+          <div class="sync-progress-fill" id="sync-progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="sync-current-paper" id="sync-current-paper"></div>
+      </div>
+      <div class="modal-footer" id="sync-footer" style="display: none;">
+        <button class="primary-button" id="sync-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADS Lookup Modal -->
+  <div class="modal hidden" id="ads-lookup-modal">
+    <div class="modal-content scix-modal-content">
+      <div class="scix-modal-header">
+        <h2>Find Paper in ADS</h2>
+        <button class="modal-close-btn" id="ads-lookup-close-btn">&times;</button>
+      </div>
+
+      <div class="ads-lookup-info">
+        <p>Search ADS to find metadata for: <strong id="ads-lookup-paper-title">Paper Title</strong></p>
+      </div>
+
+      <div class="scix-search-bar">
+        <input type="text" id="ads-lookup-query" placeholder="e.g., author:smith year:2020 title:galaxy">
+        <button class="primary-button" id="ads-lookup-search-btn">Search</button>
+      </div>
+
+      <div class="scix-shortcuts">
+        <button class="scix-shortcut-btn" data-insert="author:">author:</button>
+        <button class="scix-shortcut-btn" data-insert="year:">year:</button>
+        <button class="scix-shortcut-btn" data-insert="title:">title:</button>
+        <button class="scix-shortcut-btn" data-insert="bibcode:">bibcode:</button>
+        <button class="scix-shortcut-btn" data-insert="doi:">doi:</button>
+      </div>
+
+      <div class="ads-lookup-status hidden" id="ads-lookup-status">
+        <span id="ads-lookup-status-text">Extracting metadata with AI...</span>
+      </div>
+
+      <div class="scix-results-list" id="ads-lookup-results">
+        <div class="scix-empty-state">
+          <p>Click Search to find matching papers in ADS</p>
+        </div>
+      </div>
+
+      <div class="scix-modal-footer">
+        <button class="text-button" id="ads-lookup-cancel-btn">Cancel</button>
+        <button class="primary-button" id="ads-lookup-apply-btn" disabled>Import from ADS</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Paper Context Menu -->
+  <div class="context-menu hidden" id="paper-context-menu">
+    <div class="context-menu-item" id="ctx-open-ads">Open in ADS</div>
+    <div class="context-menu-item" id="ctx-open-publisher">Open Publisher PDF</div>
+    <div class="context-menu-item" id="ctx-sync-paper">Sync with ADS</div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="ctx-add-to-collection">
+      Add to Collection
+      <span class="submenu-arrow">▶</span>
+    </div>
+    <div class="context-submenu hidden" id="ctx-collections-submenu"></div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="ctx-remove-from-collection">Remove from Collection</div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item ctx-danger" id="ctx-delete-papers">Delete</div>
+  </div>
+
+  <!-- LLM Settings Modal -->
+  <div class="modal hidden" id="llm-modal">
+    <div class="modal-content">
+      <h2>AI Settings (Ollama)</h2>
+      <p>Configure your local Ollama installation for AI-powered features.</p>
+
+      <div class="form-group">
+        <label for="llm-endpoint-input">Ollama Endpoint</label>
+        <input type="text" id="llm-endpoint-input" placeholder="http://localhost:11434">
+      </div>
+
+      <div class="form-group">
+        <label for="llm-model-select">Model</label>
+        <select id="llm-model-select">
+          <option value="">Loading models...</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="llm-embedding-select">Embedding Model</label>
+        <select id="llm-embedding-select">
+          <option value="">Loading models...</option>
+        </select>
+      </div>
+
+      <div class="llm-connection-status">
+        <span class="llm-status-dot" id="llm-modal-status-dot">●</span>
+        <span id="llm-modal-status-text">Checking connection...</span>
+        <button class="text-button" id="llm-test-btn">Test Connection</button>
+      </div>
+
+      <div class="modal-actions">
+        <button class="secondary-button" id="llm-cancel-btn">Cancel</button>
+        <button class="primary-button" id="llm-save-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Text Selection Context Menu (for AI Explain and Notes) -->
+  <div class="context-menu hidden" id="text-context-menu">
+    <div class="context-menu-item" id="ctx-add-note">Add Note</div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="ctx-explain-text">Explain with AI</div>
+    <div class="context-menu-item" id="ctx-copy-text">Copy</div>
+  </div>
+
+  <!-- AI Explanation Popup -->
+  <div class="ai-explanation-popup hidden" id="ai-explanation-popup">
+    <div class="ai-explanation-header">
+      <span>AI Explanation</span>
+      <button class="popup-close-btn" id="ai-explanation-close">&times;</button>
+    </div>
+    <div class="ai-explanation-content" id="ai-explanation-content">
+      <div class="ai-loading">Generating explanation...</div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
