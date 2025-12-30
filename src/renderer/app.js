@@ -1035,7 +1035,6 @@ class ADSReader {
     window.electronAPI.onLlmStream((data) => this.handleLlmStream(data));
 
     // Text selection and anchor placement for AI explain and notes
-    const pdfContainer = document.getElementById('pdf-container');
     pdfContainer?.addEventListener('mousedown', (e) => this.handlePdfMouseDown(e));
     pdfContainer?.addEventListener('mouseup', (e) => this.handlePdfMouseUp(e));
     document.getElementById('ctx-explain-text')?.addEventListener('click', () => this.explainSelectedText());
