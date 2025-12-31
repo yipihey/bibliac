@@ -549,6 +549,10 @@ const eventListeners = {
   importProgress: [],
   importComplete: [],
   llmStream: [],
+  // Download queue events
+  downloadQueueProgress: [],
+  downloadQueueComplete: [],
+  downloadQueueError: [],
 };
 
 function emit(event, data) {
@@ -1153,6 +1157,29 @@ const capacitorAPI = {
 
   async setPdfZoom(zoom) {
     await Preferences.set({ key: 'pdfZoom', value: String(zoom) });
+  },
+
+  async getSortPreferences() {
+    const field = await Preferences.get({ key: 'sortField' });
+    const order = await Preferences.get({ key: 'sortOrder' });
+    return {
+      field: field.value || 'added',
+      order: order.value || 'desc'
+    };
+  },
+
+  async setSortPreferences(field, order) {
+    await Preferences.set({ key: 'sortField', value: field });
+    await Preferences.set({ key: 'sortOrder', value: order });
+  },
+
+  async getFocusSplitPosition() {
+    const result = await Preferences.get({ key: 'focusSplitPosition' });
+    return result.value ? parseFloat(result.value) : 50;
+  },
+
+  async setFocusSplitPosition(position) {
+    await Preferences.set({ key: 'focusSplitPosition', value: String(position) });
   },
 
   async getPdfPositions() {
@@ -3840,6 +3867,406 @@ Provide a clear, accessible explanation.`;
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // PAPER FILES (New unified file management system)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Paper Files namespace object
+  paperFiles: {
+    async add(paperId, filePath, options = {}) {
+      // options: { role, sourceType, originalName }
+      try {
+        if (!dbInitialized) await initializeDatabase();
+
+        const paper = MobileDB.getPaper(paperId);
+        if (!paper) {
+          return { success: false, error: 'Paper not found' };
+        }
+
+        const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+        const { role = 'pdf', sourceType = 'imported', originalName } = options;
+
+        // Generate filename based on paper and role
+        const bibcode = paper.bibcode || `paper_${paperId}`;
+        const safeBibcode = bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const ext = filePath.split('.').pop() || 'pdf';
+        const filename = `${safeBibcode}_${sourceType.toUpperCase()}.${ext}`;
+        const destPath = `${currentLibraryPath}/papers/${filename}`;
+
+        // Copy file to library
+        await fsCopy(filePath, destPath, MobileDB.getLibraryLocation() || 'local');
+
+        // Create file record (would be stored in database by FileManager)
+        const fileRecord = {
+          id: crypto.randomUUID(),
+          paperId,
+          path: `papers/${filename}`,
+          role,
+          sourceType,
+          originalName: originalName || filename,
+          status: 'ready',
+          createdAt: new Date().toISOString()
+        };
+
+        // For now, update paper's pdf_path if this is a PDF
+        if (role === 'pdf') {
+          MobileDB.updatePaper(paperId, {
+            pdf_path: `papers/${filename}`,
+            pdf_source: sourceType
+          });
+          await MobileDB.saveDatabase();
+        }
+
+        emit('consoleLog', { message: `Added file: ${filename}`, level: 'success' });
+        return { success: true, file: fileRecord };
+      } catch (error) {
+        console.error('[paperFiles.add] Error:', error);
+        return { success: false, error: error.message };
+      }
+    },
+
+    async remove(fileId) {
+      try {
+        if (!dbInitialized) await initializeDatabase();
+
+        // For now, we don't have a dedicated file records table
+        // This would be implemented when FileManager is available
+        emit('consoleLog', { message: `File removal not yet implemented for iOS`, level: 'warn' });
+        return { success: false, error: 'Not yet implemented' };
+      } catch (error) {
+        console.error('[paperFiles.remove] Error:', error);
+        return { success: false, error: error.message };
+      }
+    },
+
+    async get(fileId) {
+      try {
+        if (!dbInitialized) await initializeDatabase();
+        // Would query file records from FileManager
+        return null;
+      } catch (error) {
+        console.error('[paperFiles.get] Error:', error);
+        return null;
+      }
+    },
+
+    async list(paperId, filters = {}) {
+      // filters: { role, status }
+      try {
+        if (!dbInitialized) await initializeDatabase();
+
+        const paper = MobileDB.getPaper(paperId);
+        if (!paper) return [];
+
+        const files = [];
+
+        // Check for existing PDF files based on current paper data
+        if (paper.pdf_path) {
+          files.push({
+            id: `${paperId}-primary`,
+            paperId,
+            path: paper.pdf_path,
+            role: 'pdf',
+            sourceType: paper.pdf_source || 'unknown',
+            isPrimary: true,
+            status: 'ready'
+          });
+        }
+
+        // Check for additional PDF sources
+        if (paper.bibcode) {
+          const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'];
+          const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+          const safeBibcode = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+          for (const sourceType of sourceTypes) {
+            const filename = `${safeBibcode}_${sourceType}.pdf`;
+            const filePath = `${currentLibraryPath}/papers/${filename}`;
+
+            try {
+              await Filesystem.stat({ path: filePath, directory: Directory.Documents });
+              // File exists
+              const isPrimary = paper.pdf_path === `papers/${filename}`;
+              if (!isPrimary) {
+                files.push({
+                  id: `${paperId}-${sourceType}`,
+                  paperId,
+                  path: `papers/${filename}`,
+                  role: 'pdf',
+                  sourceType,
+                  isPrimary: false,
+                  status: 'ready'
+                });
+              }
+            } catch (e) {
+              // File doesn't exist, skip
+            }
+          }
+        }
+
+        // Apply filters
+        let result = files;
+        if (filters.role) {
+          result = result.filter(f => f.role === filters.role);
+        }
+        if (filters.status) {
+          result = result.filter(f => f.status === filters.status);
+        }
+
+        return result;
+      } catch (error) {
+        console.error('[paperFiles.list] Error:', error);
+        return [];
+      }
+    },
+
+    async getPrimaryPdf(paperId) {
+      try {
+        if (!dbInitialized) await initializeDatabase();
+
+        const paper = MobileDB.getPaper(paperId);
+        if (!paper || !paper.pdf_path) return null;
+
+        return {
+          id: `${paperId}-primary`,
+          paperId,
+          path: paper.pdf_path,
+          role: 'pdf',
+          sourceType: paper.pdf_source || 'unknown',
+          isPrimary: true,
+          status: 'ready'
+        };
+      } catch (error) {
+        console.error('[paperFiles.getPrimaryPdf] Error:', error);
+        return null;
+      }
+    },
+
+    async setPrimaryPdf(paperId, fileId) {
+      try {
+        if (!dbInitialized) await initializeDatabase();
+
+        // Extract source type from fileId (format: paperId-sourceType)
+        const parts = fileId.split('-');
+        if (parts.length < 2) {
+          return { success: false, error: 'Invalid file ID' };
+        }
+
+        const sourceType = parts.slice(1).join('-');
+        const paper = MobileDB.getPaper(paperId);
+        if (!paper) {
+          return { success: false, error: 'Paper not found' };
+        }
+
+        const safeBibcode = (paper.bibcode || `paper_${paperId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const filename = `${safeBibcode}_${sourceType}.pdf`;
+
+        MobileDB.updatePaper(paperId, {
+          pdf_path: `papers/${filename}`,
+          pdf_source: sourceType
+        });
+        await MobileDB.saveDatabase();
+
+        emit('consoleLog', { message: `Set primary PDF to ${sourceType}`, level: 'success' });
+        return { success: true };
+      } catch (error) {
+        console.error('[paperFiles.setPrimaryPdf] Error:', error);
+        return { success: false, error: error.message };
+      }
+    },
+
+    async getPath(fileId) {
+      try {
+        if (!dbInitialized) await initializeDatabase();
+
+        // Parse fileId to get paper and source type
+        const parts = fileId.split('-');
+        if (parts.length < 2) return null;
+
+        const paperId = parseInt(parts[0]);
+        const paper = MobileDB.getPaper(paperId);
+        if (!paper) return null;
+
+        const sourceType = parts.slice(1).join('-');
+        const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+
+        if (sourceType === 'primary') {
+          if (!paper.pdf_path) return null;
+          return `${currentLibraryPath}/${paper.pdf_path}`;
+        }
+
+        const safeBibcode = (paper.bibcode || `paper_${paperId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+        return `${currentLibraryPath}/papers/${safeBibcode}_${sourceType}.pdf`;
+      } catch (error) {
+        console.error('[paperFiles.getPath] Error:', error);
+        return null;
+      }
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DOWNLOAD QUEUE (New download queue management)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Download queue state stored in memory and Preferences
+  downloadQueue: {
+    _queue: [],
+    _active: [],
+    _paused: false,
+    _concurrency: 2,
+
+    async enqueue(paperId, sourceType, priority = 0) {
+      try {
+        if (!dbInitialized) await initializeDatabase();
+
+        const paper = MobileDB.getPaper(paperId);
+        if (!paper) {
+          return { success: false, error: 'Paper not found' };
+        }
+
+        const queueItem = {
+          id: crypto.randomUUID(),
+          paperId,
+          bibcode: paper.bibcode,
+          sourceType: sourceType || 'auto',
+          priority,
+          status: 'pending',
+          createdAt: new Date().toISOString()
+        };
+
+        this._queue.push(queueItem);
+        this._queue.sort((a, b) => b.priority - a.priority);
+
+        emit('consoleLog', { message: `Queued download: ${paper.bibcode || paperId}`, level: 'info' });
+
+        // Start processing if not paused
+        if (!this._paused) {
+          this._processQueue();
+        }
+
+        return { success: true, queueItem };
+      } catch (error) {
+        console.error('[downloadQueue.enqueue] Error:', error);
+        return { success: false, error: error.message };
+      }
+    },
+
+    async enqueueMany(paperIds, sourceType) {
+      const results = [];
+      for (const paperId of paperIds) {
+        const result = await this.enqueue(paperId, sourceType, 0);
+        results.push(result);
+      }
+      return { success: true, queued: results };
+    },
+
+    async cancel(paperId) {
+      // Remove from queue
+      const index = this._queue.findIndex(item => item.paperId === paperId);
+      if (index !== -1) {
+        this._queue.splice(index, 1);
+      }
+      // Note: Cannot cancel active downloads in this simple implementation
+      return { success: true };
+    },
+
+    async cancelAll() {
+      this._queue = [];
+      // Active downloads will complete but no new ones will start
+      return { success: true };
+    },
+
+    async status() {
+      return {
+        pending: this._queue.length,
+        active: this._active.length,
+        completed: 0, // Would need to track this
+        failed: 0,
+        paused: this._paused,
+        items: [...this._queue, ...this._active]
+      };
+    },
+
+    pause() {
+      this._paused = true;
+      emit('consoleLog', { message: 'Download queue paused', level: 'info' });
+    },
+
+    resume() {
+      this._paused = false;
+      emit('consoleLog', { message: 'Download queue resumed', level: 'info' });
+      this._processQueue();
+    },
+
+    async _processQueue() {
+      if (this._paused) return;
+      if (this._active.length >= this._concurrency) return;
+      if (this._queue.length === 0) return;
+
+      const item = this._queue.shift();
+      if (!item) return;
+
+      this._active.push(item);
+      item.status = 'downloading';
+
+      try {
+        const paper = MobileDB.getPaper(item.paperId);
+        if (!paper) {
+          throw new Error('Paper not found');
+        }
+
+        const token = await Keychain.getItem('adsToken');
+        const pdfPriority = await Storage.get('pdfPriority') || ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'];
+
+        emit('downloadQueueProgress', {
+          paperId: item.paperId,
+          bibcode: paper.bibcode,
+          status: 'downloading',
+          progress: 0
+        });
+
+        // Use existing download function
+        const result = await downloadPaperPdf(paper, token, pdfPriority);
+
+        if (result.success) {
+          MobileDB.updatePaper(item.paperId, {
+            pdf_path: result.path,
+            pdf_source: result.source
+          });
+          await MobileDB.saveDatabase();
+
+          emit('downloadQueueComplete', {
+            paperId: item.paperId,
+            bibcode: paper.bibcode,
+            path: result.path,
+            source: result.source
+          });
+        } else {
+          emit('downloadQueueError', {
+            paperId: item.paperId,
+            bibcode: paper.bibcode,
+            error: result.error
+          });
+        }
+      } catch (error) {
+        console.error('[downloadQueue._processQueue] Error:', error);
+        emit('downloadQueueError', {
+          paperId: item.paperId,
+          error: error.message
+        });
+      } finally {
+        // Remove from active
+        const activeIndex = this._active.findIndex(a => a.id === item.id);
+        if (activeIndex !== -1) {
+          this._active.splice(activeIndex, 1);
+        }
+
+        // Process next item
+        this._processQueue();
+      }
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // UTILITIES
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -3920,6 +4347,25 @@ Provide a clear, accessible explanation.`;
 
   removeLlmListeners() {
     eventListeners.llmStream = [];
+  },
+
+  // Download queue event listeners
+  onDownloadQueueProgress(callback) {
+    eventListeners.downloadQueueProgress.push(callback);
+  },
+
+  onDownloadQueueComplete(callback) {
+    eventListeners.downloadQueueComplete.push(callback);
+  },
+
+  onDownloadQueueError(callback) {
+    eventListeners.downloadQueueError.push(callback);
+  },
+
+  removeDownloadQueueListeners() {
+    eventListeners.downloadQueueProgress = [];
+    eventListeners.downloadQueueComplete = [];
+    eventListeners.downloadQueueError = [];
   },
 
   // ═══════════════════════════════════════════════════════════════════════════

@@ -72,6 +72,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPdfZoom: () => ipcRenderer.invoke('get-pdf-zoom'),
   setPdfZoom: (zoom) => ipcRenderer.invoke('set-pdf-zoom', zoom),
 
+  // Sort preferences persistence
+  getSortPreferences: () => ipcRenderer.invoke('get-sort-preferences'),
+  setSortPreferences: (field, order) => ipcRenderer.invoke('set-sort-preferences', field, order),
+
+  // Focus mode split position persistence
+  getFocusSplitPosition: () => ipcRenderer.invoke('get-focus-split-position'),
+  setFocusSplitPosition: (position) => ipcRenderer.invoke('set-focus-split-position', position),
+
   // Last selected paper persistence
   getLastSelectedPaper: () => ipcRenderer.invoke('get-last-selected-paper'),
   setLastSelectedPaper: (paperId) => ipcRenderer.invoke('set-last-selected-paper', paperId),
@@ -208,12 +216,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportAnnotations: (paperId) => ipcRenderer.invoke('export-annotations', paperId),
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // ATTACHMENTS
+  // ATTACHMENTS (LEGACY - will be removed after migration)
   // ═══════════════════════════════════════════════════════════════════════════
   attachFiles: (paperId, bibcode) => ipcRenderer.invoke('attach-files', paperId, bibcode),
   getAttachments: (paperId) => ipcRenderer.invoke('get-attachments', paperId),
   openAttachment: (filename) => ipcRenderer.invoke('open-attachment', filename),
   deleteAttachment: (attachmentId) => ipcRenderer.invoke('delete-attachment', attachmentId),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAPER FILES (New unified file management system)
+  // ═══════════════════════════════════════════════════════════════════════════
+  paperFiles: {
+    add: (paperId, filePath, options) => ipcRenderer.invoke('paper-files:add', paperId, filePath, options),
+    remove: (fileId) => ipcRenderer.invoke('paper-files:remove', fileId),
+    get: (fileId) => ipcRenderer.invoke('paper-files:get', fileId),
+    list: (paperId, filters) => ipcRenderer.invoke('paper-files:list', paperId, filters),
+    getPrimaryPdf: (paperId) => ipcRenderer.invoke('paper-files:get-primary-pdf', paperId),
+    setPrimaryPdf: (paperId, fileId) => ipcRenderer.invoke('paper-files:set-primary-pdf', paperId, fileId),
+    getPath: (fileId) => ipcRenderer.invoke('paper-files:get-path', fileId),
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DOWNLOAD QUEUE (New download queue management)
+  // ═══════════════════════════════════════════════════════════════════════════
+  downloadQueue: {
+    enqueue: (paperId, sourceType, priority) => ipcRenderer.invoke('download-queue:enqueue', paperId, sourceType, priority),
+    enqueueMany: (paperIds, sourceType) => ipcRenderer.invoke('download-queue:enqueue-many', paperIds, sourceType),
+    cancel: (paperId) => ipcRenderer.invoke('download-queue:cancel', paperId),
+    cancelAll: () => ipcRenderer.invoke('download-queue:cancel-all'),
+    status: () => ipcRenderer.invoke('download-queue:status'),
+    pause: () => ipcRenderer.invoke('download-queue:pause'),
+    resume: () => ipcRenderer.invoke('download-queue:resume'),
+    onProgress: (callback) => ipcRenderer.on('download-queue:progress', (event, data) => callback(data)),
+    onComplete: (callback) => ipcRenderer.on('download-queue:complete', (event, data) => callback(data)),
+    onError: (callback) => ipcRenderer.on('download-queue:error', (event, data) => callback(data)),
+    removeListeners: () => {
+      ipcRenderer.removeAllListeners('download-queue:progress');
+      ipcRenderer.removeAllListeners('download-queue:complete');
+      ipcRenderer.removeAllListeners('download-queue:error');
+    }
+  },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILITIES

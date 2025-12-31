@@ -63,8 +63,18 @@
     </div>
   </aside>
 
+  <!-- Loading Screen (shown while checking for existing library) -->
+  <div id="loading-screen" class="screen">
+    <div class="loading-container">
+      <div class="loading-icon">📚</div>
+      <h1>ADS Reader</h1>
+      <p class="loading-text">Loading library...</p>
+      <div class="loading-spinner"></div>
+    </div>
+  </div>
+
   <!-- Setup Screen -->
-  <div id="setup-screen" class="screen">
+  <div id="setup-screen" class="screen hidden">
     <div class="setup-container">
       <div class="setup-icon">📚</div>
       <h1>Welcome to ADS Reader</h1>
@@ -400,7 +410,36 @@
 
               <!-- BibTeX Tab -->
               <div class="tab-pane hidden" id="tab-bibtex">
+                <!-- Files Panel (unified view of all paper files) -->
+                <div class="files-panel" id="files-panel">
+                  <div class="files-header">
+                    <h4>Files</h4>
+                    <button class="icon-btn" id="files-attach-btn" title="Attach file">+</button>
+                  </div>
+                  <div class="files-list" id="files-list">
+                    <!-- Populated by JS: existing files -->
+                  </div>
+                  <div class="files-available" id="files-available">
+                    <!-- Populated by JS: available for download -->
+                  </div>
+                </div>
+
+                <!-- Legacy File Information Section (hidden, keeping for backwards compatibility) -->
+                <div class="bibtex-files-section hidden" id="bibtex-files-section">
+                  <h4>Files</h4>
+                  <div class="bibtex-files-list" id="bibtex-files-list">
+                    <span class="no-files">No files attached</span>
+                  </div>
+                </div>
+
+                <!-- Record Information Section -->
+                <div class="bibtex-record-section" id="bibtex-record-section">
+                  <h4>Record Information</h4>
+                  <div class="bibtex-record-info" id="bibtex-record-info"></div>
+                </div>
+
                 <div class="bibtex-source-info hidden" id="bibtex-source-info"></div>
+                <h4>BibTeX Entry</h4>
                 <textarea class="bibtex-content" id="bibtex-content" readonly placeholder="No BibTeX available. Click 'Sync' to retrieve from ADS."></textarea>
                 <div class="bibtex-buttons">
                   <button class="copy-btn" id="edit-bibtex-btn">Edit</button>
@@ -1193,6 +1232,23 @@
 
   <!-- Notification Toast -->
   <div class="notification-toast hidden" id="notification-toast"></div>
+
+  <!-- Download Queue Panel (floating) -->
+  <div class="download-queue-panel hidden" id="download-queue-panel">
+    <div class="queue-header">
+      <span class="queue-title">Downloads</span>
+      <div class="queue-controls">
+        <button class="icon-btn" id="queue-pause-btn" title="Pause all">||</button>
+        <button class="icon-btn" id="queue-close-btn" title="Close">&times;</button>
+      </div>
+    </div>
+    <div class="queue-list" id="queue-list">
+      <!-- Active and pending downloads populated by JS -->
+    </div>
+    <div class="queue-summary" id="queue-summary">
+      <!-- Summary: X active, Y pending -->
+    </div>
+  </div>
 
   <!-- Mobile PDF Controls -->
   <div class="mobile-pdf-controls" id="mobile-pdf-controls">

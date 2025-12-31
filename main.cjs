@@ -4,6 +4,16 @@ const fs = require('fs');
 const os = require('os');
 const Store = require('electron-store');
 
+// Paper Files Container system
+const { FileManager } = require('./src/lib/files/file-manager.cjs');
+const { DownloadQueue } = require('./src/lib/files/download-queue.cjs');
+const {
+  ArxivDownloader,
+  PublisherDownloader,
+  AdsDownloader,
+  DownloadStrategyManager
+} = require('./src/lib/files/download-strategies.cjs');
+
 // iCloud container identifier (matches iOS entitlements)
 const ICLOUD_CONTAINER_ID = 'iCloud.io.adsreader.app';
 
@@ -81,6 +91,7 @@ const adsApi = require('./src/main/ads-api.cjs');
 const bibtex = require('./src/main/bibtex.cjs');
 const { OllamaService, PROMPTS, chunkText, cosineSimilarity, parseSummaryResponse, parseMetadataResponse } = require('./src/main/llm-service.cjs');
 const { CloudLLMService, PROVIDERS: CLOUD_PROVIDERS } = require('./src/main/cloud-llm-service.cjs');
+const { migrateToFileContainer, needsMigration } = require('./src/lib/migration/migrate-to-paper-files.cjs');
 
 /**
  * Clean a DOI by removing common garbage suffixes and malformed paths
@@ -527,6 +538,30 @@ async function fetchAndApplyAdsMetadata(paperId, extractedMetadata = null) {
 let mainWindow;
 let dbInitialized = false;
 
+/**
+ * Run database migration if needed
+ * @param {string} libraryPath - Path to the library folder
+ */
+async function runMigrationIfNeeded(libraryPath) {
+  try {
+    if (needsMigration(database)) {
+      console.log('[Migration] Schema version check: migration needed');
+      const log = (msg) => {
+        console.log(msg);
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('console-log', { message: msg, type: 'info' });
+        }
+      };
+      await migrateToFileContainer(database, libraryPath, log);
+    }
+
+    // Initialize Paper Files system after migration
+    initializePaperFilesSystem(libraryPath);
+  } catch (error) {
+    console.error('[Migration] Migration failed:', error);
+  }
+}
+
 function createWindow() {
   const { width, height } = store.get('windowBounds');
 
@@ -629,6 +664,28 @@ ipcMain.handle('set-pdf-zoom', (event, zoom) => {
   return true;
 });
 
+// Sort preferences persistence
+ipcMain.handle('get-sort-preferences', () => {
+  return {
+    field: store.get('sortField') || 'added',
+    order: store.get('sortOrder') || 'desc'
+  };
+});
+ipcMain.handle('set-sort-preferences', (event, field, order) => {
+  store.set('sortField', field);
+  store.set('sortOrder', order);
+  return true;
+});
+
+// Focus mode split position persistence
+ipcMain.handle('get-focus-split-position', () => {
+  return store.get('focusSplitPosition') || 50;
+});
+ipcMain.handle('set-focus-split-position', (event, position) => {
+  store.set('focusSplitPosition', position);
+  return true;
+});
+
 ipcMain.handle('get-last-selected-paper', () => store.get('lastSelectedPaperId'));
 ipcMain.handle('set-last-selected-paper', (event, paperId) => {
   store.set('lastSelectedPaperId', paperId);
@@ -670,6 +727,7 @@ ipcMain.handle('select-library-folder', async () => {
     store.set('libraryPath', selectedPath);
     await database.initDatabase(selectedPath);
     dbInitialized = true;
+    await runMigrationIfNeeded(selectedPath);
     return selectedPath;
   } catch (error) {
     console.error('Failed to create library:', error);
@@ -921,6 +979,7 @@ ipcMain.handle('switch-library', async (event, libraryId) => {
     // Initialize new database
     await database.initDatabase(library.fullPath);
     dbInitialized = true;
+    await runMigrationIfNeeded(library.fullPath);
 
     // Update current library path in preferences
     store.set('libraryPath', library.fullPath);
@@ -1092,6 +1151,7 @@ ipcMain.handle('check-migration-needed', async () => {
   try {
     await database.initDatabase(existingPath);
     dbInitialized = true;
+    await runMigrationIfNeeded(existingPath);
     const stats = database.getStats();
     paperCount = stats.total;
   } catch (e) {
@@ -1182,6 +1242,7 @@ ipcMain.handle('migrate-library-to-icloud', async (event, { libraryPath }) => {
     // Reinitialize database at new location
     await database.initDatabase(targetPath);
     dbInitialized = true;
+    await runMigrationIfNeeded(targetPath);
 
     sendConsoleLog(`Library migrated to iCloud: ${targetPath}`, 'success');
 
@@ -1342,6 +1403,7 @@ ipcMain.handle('resolve-library-conflict', async (event, { libraryPath, conflict
     dbInitialized = false;
     await database.initDatabase(libraryPath);
     dbInitialized = true;
+    await runMigrationIfNeeded(libraryPath);
 
     return { success: true };
   } catch (error) {
@@ -1358,6 +1420,7 @@ ipcMain.handle('get-library-info', async (event, libraryPath) => {
     try {
       await database.initDatabase(libraryPath);
       dbInitialized = true;
+      await runMigrationIfNeeded(libraryPath);
     } catch (error) {
       console.error('Failed to init database:', error);
     }
@@ -1814,7 +1877,13 @@ function convertPublisherHtmlToPdf(htmlUrl) {
   }
 }
 
-// Check if a PDF for a specific source already exists
+// ============ LEGACY PDF/ATTACHMENT HANDLERS ============
+// These handlers will be removed after migration to the new Paper Files system.
+// New code should use paper-files:* and download-queue:* APIs instead.
+// TODO: Remove these handlers after migration is complete
+
+// [LEGACY] Check if a PDF for a specific source already exists
+// Use paper-files:list instead
 ipcMain.handle('check-pdf-exists', async (event, paperId, sourceType) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath) return null;
@@ -1841,7 +1910,8 @@ ipcMain.handle('check-pdf-exists', async (event, paperId, sourceType) => {
   return null;
 });
 
-// Download PDF from a specific source
+// [LEGACY] Download PDF from a specific source
+// Use download-queue:enqueue instead
 ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) => {
   const token = store.get('adsToken');
   const libraryPath = store.get('libraryPath');
@@ -1928,7 +1998,8 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
   }
 });
 
-// Batch download PDFs for multiple papers
+// [LEGACY] Batch download PDFs for multiple papers
+// Use download-queue:enqueue-many instead
 ipcMain.handle('batch-download-pdfs', async (event, paperIds) => {
   const token = store.get('adsToken');
   const libraryPath = store.get('libraryPath');
@@ -2066,7 +2137,8 @@ ipcMain.handle('batch-download-pdfs', async (event, paperIds) => {
   return { success: true, results };
 });
 
-// Attach a PDF file to a paper (copies file to library storage)
+// [LEGACY] Attach a PDF file to a paper (copies file to library storage)
+// Use paper-files:add instead
 ipcMain.handle('attach-pdf-to-paper', async (event, paperId, sourcePdfPath) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath) return { success: false, error: 'No library path configured' };
@@ -2241,29 +2313,29 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
         sendConsoleLog(`[${bibcode}] Found ${refs.length} refs, ${cits.length} cites`, 'success');
       }
 
-      // Download PDF if missing
-      const pdfExists = libraryPath && paper.pdf_path && fs.existsSync(path.join(libraryPath, paper.pdf_path));
-      if (!pdfExists && libraryPath) {
-        try {
-          const proxyUrl = store.get('libraryProxyUrl');
-          const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
-          const downloadResult = await pdfDownload.downloadPDF(
-            { ...paper, ...mergedMetadata },
-            libraryPath,
-            token,
-            adsApi,
-            proxyUrl,
-            pdfPriority,
-            (msg, type) => sendConsoleLog(`[${bibcode}] ${msg}`, type)
-          );
-          if (downloadResult.success) {
-            database.updatePaper(paper.id, { pdf_path: downloadResult.pdf_path }, false);
-          }
-        } catch (e) {
-          sendConsoleLog(`[${bibcode}] PDF download failed: ${e.message}`, 'warn');
+      // Store available PDF sources as metadata (don't download during sync)
+      try {
+        const esources = await adsApi.getEsources(token, bibcode);
+        const availableSources = esources
+          .filter(e => ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'].includes(e.link_type?.split('|').pop() || e.type))
+          .map(e => {
+            const linkType = e.link_type?.split('|').pop() || e.type;
+            if (linkType === 'EPRINT_PDF') return 'arxiv';
+            if (linkType === 'PUB_PDF') return 'publisher';
+            if (linkType === 'ADS_PDF') return 'ads_scan';
+            return null;
+          })
+          .filter(Boolean);
+
+        if (availableSources.length > 0) {
+          database.updatePaper(paper.id, {
+            available_sources: JSON.stringify(availableSources)
+          }, false);
+          sendConsoleLog(`[${bibcode}] Available PDF sources: ${availableSources.join(', ')}`, 'info');
         }
-      } else if (pdfExists) {
-        sendConsoleLog(`[${bibcode}] PDF exists, skipping`, 'info');
+      } catch (e) {
+        // Esources fetch is non-critical, log and continue
+        sendConsoleLog(`[${bibcode}] Could not fetch esources: ${e.message}`, 'warn');
       }
 
       sendConsoleLog(`[${bibcode}] ✓ Done`, 'success');
@@ -4257,31 +4329,44 @@ ipcMain.handle('get-annotation-counts-by-source', (event, paperId) => {
   return database.getAnnotationCountsBySource(paperId);
 });
 
-// Get list of PDF sources that have been downloaded for a paper
+// [LEGACY] Get list of PDF sources that have been downloaded for a paper
+// Use paper-files:list instead
 ipcMain.handle('get-downloaded-pdf-sources', (event, paperId) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath || !dbInitialized) return [];
 
   const paper = database.getPaper(paperId);
-  if (!paper || !paper.bibcode) return [];
+  if (!paper) return [];
 
-  const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
   const papersDir = path.join(libraryPath, 'papers');
   const downloadedSources = [];
 
-  // Check for each source type: bibcode_SOURCETYPE.pdf
-  const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF', 'ATTACHED'];
-  for (const sourceType of sourceTypes) {
-    const filename = `${baseFilename}_${sourceType}.pdf`;
-    const filePath = path.join(papersDir, filename);
-    if (fs.existsSync(filePath)) {
-      downloadedSources.push(sourceType);
+  // If paper has bibcode, check for new naming convention: bibcode_SOURCETYPE.pdf
+  if (paper.bibcode) {
+    const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF', 'ATTACHED'];
+    for (const sourceType of sourceTypes) {
+      const filename = `${baseFilename}_${sourceType}.pdf`;
+      const filePath = path.join(papersDir, filename);
+      if (fs.existsSync(filePath)) {
+        downloadedSources.push(sourceType);
+      }
+    }
+  }
+
+  // Also check if paper has a legacy pdf_path that exists
+  if (paper.pdf_path && downloadedSources.length === 0) {
+    const legacyPath = path.join(libraryPath, paper.pdf_path);
+    if (fs.existsSync(legacyPath)) {
+      downloadedSources.push('LEGACY');
     }
   }
 
   return downloadedSources;
 });
 
+// [LEGACY] Delete a PDF file for a paper
+// Use paper-files:remove instead
 ipcMain.handle('delete-pdf', (event, paperId, sourceType) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath || !dbInitialized) return false;
@@ -4454,7 +4539,11 @@ function getColorName(hexColor) {
 }
 
 // ===== Attachment IPC Handlers =====
+// [LEGACY] These handlers will be removed after migration to Paper Files system.
+// Use paper-files:* APIs instead.
 
+// [LEGACY] Attach files to a paper
+// Use paper-files:add instead
 ipcMain.handle('attach-files', async (event, paperId, bibcode) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath) return { success: false, error: 'No library path configured' };
@@ -4512,11 +4601,15 @@ ipcMain.handle('attach-files', async (event, paperId, bibcode) => {
   return { success: true, attachments };
 });
 
+// [LEGACY] Get attachments for a paper
+// Use paper-files:list instead
 ipcMain.handle('get-attachments', (event, paperId) => {
   if (!dbInitialized) return [];
   return database.getAttachments(paperId);
 });
 
+// [LEGACY] Open an attachment file
+// Use paper-files:get-path instead
 ipcMain.handle('open-attachment', async (event, filename) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath) return { success: false, error: 'No library path configured' };
@@ -4535,6 +4628,8 @@ ipcMain.handle('open-attachment', async (event, filename) => {
   }
 });
 
+// [LEGACY] Delete an attachment
+// Use paper-files:remove instead
 ipcMain.handle('delete-attachment', (event, attachmentId) => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath) return { success: false, error: 'No library path configured' };
@@ -4558,6 +4653,318 @@ ipcMain.handle('delete-attachment', (event, attachmentId) => {
 
     return { success: true };
   } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ============ PAPER FILES ============
+// New Paper Files Container API - manages files associated with papers
+
+// FileManager and DownloadQueue instances (initialized after library is loaded)
+let fileManager = null;
+let downloadQueue = null;
+
+// Download strategy manager (initialized with Paper Files system)
+let strategyManager = null;
+
+// Initialize Paper Files system when library is loaded
+function initializePaperFilesSystem(libraryPath) {
+  try {
+    // Initialize FileManager
+    fileManager = new FileManager(libraryPath, database);
+
+    // Initialize download strategies with configuration
+    const adsToken = store.get('adsToken');
+    const proxyUrl = store.get('proxyUrl');
+    const pdfSourcePriority = store.get('pdfSourcePriority', ['arxiv', 'publisher', 'ads_scan']);
+
+    const strategies = {
+      arxiv: new ArxivDownloader(),
+      publisher: new PublisherDownloader({ proxyUrl }),
+      ads_scan: new AdsDownloader({ adsToken })
+    };
+
+    strategyManager = new DownloadStrategyManager(strategies, pdfSourcePriority);
+
+    // Initialize DownloadQueue with download function and paper lookup
+    downloadQueue = new DownloadQueue({
+      concurrency: 2,
+      downloadFn: async (paper, destPath, sourceType, onProgress, signal) => {
+        // Use the strategy manager to download the PDF
+        return await strategyManager.downloadForPaper(paper, destPath, sourceType, onProgress, signal);
+      },
+      getPaperFn: async (paperId) => {
+        // Look up paper by ID or bibcode
+        const paper = database.getPaperByBibcode(paperId);
+        return paper;
+      }
+    });
+
+    // Set up event forwarding to renderer
+    downloadQueue.on('queued', (data) => {
+      mainWindow?.webContents.send('download-queue:queued', data);
+    });
+
+    downloadQueue.on('started', (data) => {
+      mainWindow?.webContents.send('download-queue:started', data);
+    });
+
+    downloadQueue.on('progress', (data) => {
+      mainWindow?.webContents.send('download-queue:progress', data);
+    });
+
+    downloadQueue.on('complete', (data) => {
+      mainWindow?.webContents.send('download-queue:complete', data);
+    });
+
+    downloadQueue.on('error', (data) => {
+      mainWindow?.webContents.send('download-queue:error', data);
+    });
+
+    downloadQueue.on('cancelled', (data) => {
+      mainWindow?.webContents.send('download-queue:cancelled', data);
+    });
+
+    sendConsoleLog('Paper Files system initialized', 'info');
+  } catch (error) {
+    console.error('Failed to initialize Paper Files system:', error);
+    sendConsoleLog(`Paper Files initialization failed: ${error.message}`, 'error');
+  }
+}
+
+ipcMain.handle('paper-files:add', async (event, paperId, filePath, options = {}) => {
+  // options: { role, sourceType, originalName }
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library path configured' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    if (!fileManager) {
+      return { success: false, error: 'Paper Files system not initialized' };
+    }
+
+    const result = await fileManager.addFile(paperId, filePath, options);
+    return { success: true, file: result };
+  } catch (error) {
+    console.error('paper-files:add error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('paper-files:remove', async (event, fileId) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    if (!fileManager) {
+      return { success: false, error: 'Paper Files system not initialized' };
+    }
+
+    await fileManager.removeFile(fileId);
+    return { success: true };
+  } catch (error) {
+    console.error('paper-files:remove error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('paper-files:get', async (event, fileId) => {
+  if (!dbInitialized) return null;
+
+  try {
+    if (!fileManager) {
+      return null;
+    }
+
+    return fileManager.getFile(fileId);
+  } catch (error) {
+    console.error('paper-files:get error:', error);
+    return null;
+  }
+});
+
+ipcMain.handle('paper-files:list', async (event, paperId, filters = {}) => {
+  // filters: { role, status }
+  if (!dbInitialized) return [];
+
+  try {
+    if (!fileManager) {
+      return [];
+    }
+
+    return fileManager.getFilesForPaper(paperId, filters);
+  } catch (error) {
+    console.error('paper-files:list error:', error);
+    return [];
+  }
+});
+
+ipcMain.handle('paper-files:get-primary-pdf', async (event, paperId) => {
+  if (!dbInitialized) return null;
+
+  try {
+    if (!fileManager) {
+      return null;
+    }
+
+    return fileManager.getPrimaryPdf(paperId);
+  } catch (error) {
+    console.error('paper-files:get-primary-pdf error:', error);
+    return null;
+  }
+});
+
+ipcMain.handle('paper-files:set-primary-pdf', async (event, paperId, fileId) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    if (!fileManager) {
+      return { success: false, error: 'Paper Files system not initialized' };
+    }
+
+    await fileManager.setPrimaryPdf(paperId, fileId);
+    return { success: true };
+  } catch (error) {
+    console.error('paper-files:set-primary-pdf error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('paper-files:get-path', async (event, fileId) => {
+  // Get absolute path to file for PDF viewer
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return null;
+  if (!dbInitialized) return null;
+
+  try {
+    if (!fileManager) {
+      return null;
+    }
+
+    const file = fileManager.getFile(fileId);
+    if (!file || !file.path) return null;
+
+    return path.join(libraryPath, file.path);
+  } catch (error) {
+    console.error('paper-files:get-path error:', error);
+    return null;
+  }
+});
+
+// ============ DOWNLOAD QUEUE ============
+// New Download Queue API - manages PDF download queue
+
+ipcMain.handle('download-queue:enqueue', async (event, paperId, sourceType, priority = 0) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    if (!downloadQueue) {
+      return { success: false, error: 'Download queue not initialized' };
+    }
+
+    const result = await downloadQueue.enqueue(paperId, sourceType, priority);
+    return { success: true, queueItem: result };
+  } catch (error) {
+    console.error('download-queue:enqueue error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('download-queue:enqueue-many', async (event, paperIds, sourceType) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    if (!downloadQueue) {
+      return { success: false, error: 'Download queue not initialized' };
+    }
+
+    const results = await downloadQueue.enqueueMany(paperIds, sourceType);
+    return { success: true, queued: results };
+  } catch (error) {
+    console.error('download-queue:enqueue-many error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('download-queue:cancel', async (event, paperId) => {
+  try {
+    if (!downloadQueue) {
+      return { success: false, error: 'Download queue not initialized' };
+    }
+
+    await downloadQueue.cancel(paperId);
+    return { success: true };
+  } catch (error) {
+    console.error('download-queue:cancel error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('download-queue:cancel-all', async (event) => {
+  try {
+    if (!downloadQueue) {
+      return { success: false, error: 'Download queue not initialized' };
+    }
+
+    await downloadQueue.cancelAll();
+    return { success: true };
+  } catch (error) {
+    console.error('download-queue:cancel-all error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('download-queue:status', async (event) => {
+  try {
+    if (!downloadQueue) {
+      return {
+        pending: 0,
+        active: 0,
+        completed: 0,
+        failed: 0,
+        paused: false,
+        items: []
+      };
+    }
+
+    return downloadQueue.getStatus();
+  } catch (error) {
+    console.error('download-queue:status error:', error);
+    return {
+      pending: 0,
+      active: 0,
+      completed: 0,
+      failed: 0,
+      paused: false,
+      items: [],
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('download-queue:pause', async (event) => {
+  try {
+    if (!downloadQueue) {
+      return { success: false, error: 'Download queue not initialized' };
+    }
+
+    downloadQueue.pause();
+    return { success: true };
+  } catch (error) {
+    console.error('download-queue:pause error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('download-queue:resume', async (event) => {
+  try {
+    if (!downloadQueue) {
+      return { success: false, error: 'Download queue not initialized' };
+    }
+
+    downloadQueue.resume();
+    return { success: true };
+  } catch (error) {
+    console.error('download-queue:resume error:', error);
     return { success: false, error: error.message };
   }
 });

@@ -1164,6 +1164,242 @@ function deleteAttachment(id) {
   saveDatabase();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SCHEMA VERSION & METADATA
+// ═══════════════════════════════════════════════════════════════════════════
+
+function getSchemaVersion() {
+  try {
+    const result = db.exec("SELECT value FROM metadata WHERE key = 'schema_version'");
+    if (result.length > 0 && result[0].values.length > 0) {
+      return parseInt(result[0].values[0][0]) || 1;
+    }
+    return 1;
+  } catch {
+    return 1;
+  }
+}
+
+function setSchemaVersion(version) {
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)", [String(version)]);
+  saveDatabase();
+}
+
+function getMetadata(key) {
+  try {
+    const stmt = db.prepare("SELECT value FROM metadata WHERE key = ?");
+    stmt.bind([key]);
+    if (stmt.step()) {
+      const value = stmt.get()[0];
+      stmt.free();
+      return value;
+    }
+    stmt.free();
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function setMetadata(key, value) {
+  db.run("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", [key, value]);
+  saveDatabase();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PAPER FILES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Add a file record to paper_files
+ * @param {number} paperId - Paper ID
+ * @param {Object} fileData - File data
+ * @returns {number} The ID of the newly created file record
+ */
+function addPaperFile(paperId, fileData) {
+  const now = new Date().toISOString();
+  db.run(`
+    INSERT INTO paper_files (paper_id, file_hash, filename, original_name, mime_type, file_size, file_role, source_type, source_url, added_date, status, error_message, text_extracted, text_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    paperId,
+    fileData.file_hash || null,
+    fileData.filename,
+    fileData.original_name || fileData.filename,
+    fileData.mime_type || 'application/octet-stream',
+    fileData.file_size || 0,
+    fileData.file_role || 'pdf',
+    fileData.source_type || 'manual',
+    fileData.source_url || null,
+    fileData.added_date || now,
+    fileData.status || 'ready',
+    fileData.error_message || null,
+    fileData.text_extracted || 0,
+    fileData.text_path || null
+  ]);
+
+  const result = db.exec(`SELECT last_insert_rowid() as id`);
+  const id = result[0].values[0][0];
+  saveDatabase();
+
+  return id;
+}
+
+/**
+ * Get files for a paper with optional filters
+ * @param {number} paperId - Paper ID
+ * @param {Object} filters - Optional filters (role, status, sourceType)
+ * @returns {Array} Array of file records
+ */
+function getPaperFiles(paperId, filters = {}) {
+  let query = `SELECT * FROM paper_files WHERE paper_id = ?`;
+  const params = [paperId];
+
+  if (filters.role) {
+    query += ` AND file_role = ?`;
+    params.push(filters.role);
+  }
+
+  if (filters.status) {
+    query += ` AND status = ?`;
+    params.push(filters.status);
+  }
+
+  if (filters.sourceType) {
+    query += ` AND source_type = ?`;
+    params.push(filters.sourceType);
+  }
+
+  query += ` ORDER BY added_date DESC`;
+
+  const stmt = db.prepare(query);
+  stmt.bind(params);
+
+  const files = [];
+  while (stmt.step()) {
+    files.push(stmt.getAsObject());
+  }
+  stmt.free();
+
+  return files;
+}
+
+/**
+ * Get a single file record by ID
+ * @param {number} fileId - File ID
+ * @returns {Object|null} File record or null
+ */
+function getPaperFile(fileId) {
+  const stmt = db.prepare(`SELECT * FROM paper_files WHERE id = ?`);
+  stmt.bind([fileId]);
+
+  let file = null;
+  if (stmt.step()) {
+    file = stmt.getAsObject();
+  }
+  stmt.free();
+
+  return file;
+}
+
+/**
+ * Update a file record
+ * @param {number} fileId - File ID
+ * @param {Object} updates - Fields to update
+ */
+function updatePaperFile(fileId, updates) {
+  const fields = [];
+  const values = [];
+
+  const allowedFields = [
+    'file_hash', 'filename', 'original_name', 'mime_type', 'file_size',
+    'file_role', 'source_type', 'source_url', 'status', 'error_message',
+    'text_extracted', 'text_path'
+  ];
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (allowedFields.includes(key)) {
+      fields.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(fileId);
+
+  db.run(`UPDATE paper_files SET ${fields.join(', ')} WHERE id = ?`, values);
+  saveDatabase();
+}
+
+/**
+ * Find file records by hash (for deduplication)
+ * @param {string} hash - File hash
+ * @returns {Array} Array of file records with this hash
+ */
+function getFileByHash(hash) {
+  const stmt = db.prepare(`SELECT * FROM paper_files WHERE file_hash = ?`);
+  stmt.bind([hash]);
+
+  const files = [];
+  while (stmt.step()) {
+    files.push(stmt.getAsObject());
+  }
+  stmt.free();
+
+  return files;
+}
+
+/**
+ * Get all files with a specific status
+ * @param {string} status - File status
+ * @returns {Array} Array of file records
+ */
+function getPaperFilesByStatus(status) {
+  const stmt = db.prepare(`
+    SELECT pf.*, p.bibcode, p.title
+    FROM paper_files pf
+    JOIN papers p ON pf.paper_id = p.id
+    WHERE pf.status = ?
+    ORDER BY pf.added_date ASC
+  `);
+  stmt.bind([status]);
+
+  const files = [];
+  while (stmt.step()) {
+    files.push(stmt.getAsObject());
+  }
+  stmt.free();
+
+  return files;
+}
+
+/**
+ * Delete all files for a paper
+ * @param {number} paperId - Paper ID
+ */
+function deletePaperFiles(paperId) {
+  db.run(`DELETE FROM paper_files WHERE paper_id = ?`, [paperId]);
+  saveDatabase();
+}
+
+function getAllAttachments() {
+  const results = db.exec(`SELECT * FROM attachments ORDER BY added_date`);
+  if (results.length === 0) return [];
+
+  const columns = results[0].columns;
+  return results[0].values.map(row => {
+    const obj = {};
+    columns.forEach((col, i) => obj[col] = row[i]);
+    return obj;
+  });
+}
+
+function deletePaperFile(id) {
+  db.run(`DELETE FROM paper_files WHERE id = ?`, [id]);
+  saveDatabase();
+}
+
 module.exports = {
   initDatabase,
   closeDatabase,
@@ -1213,5 +1449,20 @@ module.exports = {
   addAttachment,
   getAttachments,
   getAttachment,
-  deleteAttachment
+  deleteAttachment,
+  getAllAttachments,
+  // Schema version & metadata
+  getSchemaVersion,
+  setSchemaVersion,
+  getMetadata,
+  setMetadata,
+  // Paper files
+  addPaperFile,
+  getPaperFiles,
+  getPaperFile,
+  updatePaperFile,
+  getFileByHash,
+  getPaperFilesByStatus,
+  deletePaperFile,
+  deletePaperFiles
 };

@@ -46,8 +46,9 @@ class ADSReader {
     this.isAutoIndexing = false;
 
     // Sort state
-    this.sortField = localStorage.getItem('sortField') || 'added';
-    this.sortOrder = localStorage.getItem('sortOrder') || 'desc';
+    // Sort preferences will be loaded async in init()
+    this.sortField = 'added';
+    this.sortOrder = 'desc';
 
     // Annotations state
     this.annotations = [];
@@ -110,12 +111,24 @@ class ADSReader {
     this.setupEventListeners();
     console.log('[ADSReader] Event listeners set up');
 
+    // Set up the download queue panel
+    this.setupDownloadQueue();
+
     this.libraryPath = await window.electronAPI.getLibraryPath();
 
     // Load saved PDF zoom level
     const savedZoom = await window.electronAPI.getPdfZoom();
     if (savedZoom) {
       this.pdfScale = savedZoom;
+    }
+
+    // Load saved sort preferences
+    if (window.electronAPI.getSortPreferences) {
+      const sortPrefs = await window.electronAPI.getSortPreferences();
+      if (sortPrefs) {
+        this.sortField = sortPrefs.field || 'added';
+        this.sortOrder = sortPrefs.order || 'desc';
+      }
     }
 
     // Load saved PDF page positions
@@ -132,6 +145,7 @@ class ADSReader {
 
     if (!this.libraryPath) {
       // No library path set - check if we have a last used library ID
+      this.updateLoadingText('Checking for libraries...');
       const lastLibraryId = await window.electronAPI.getCurrentLibraryId?.();
       if (lastLibraryId) {
         console.log('[ADSReader] Found last library ID:', lastLibraryId);
@@ -139,6 +153,7 @@ class ADSReader {
         const lastLib = libraries.find(l => l.id === lastLibraryId);
         if (lastLib) {
           console.log('[ADSReader] Auto-loading last library:', lastLib.name);
+          this.updateLoadingText(`Loading ${lastLib.name}...`);
           try {
             await this.switchLibrary(lastLibraryId);
             libraryLoaded = true;
@@ -150,8 +165,10 @@ class ADSReader {
     }
 
     if (!libraryLoaded && this.libraryPath) {
+      this.updateLoadingText('Loading library...');
       const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
       if (info) {
+        this.updateLoadingText(`Loading ${info.name || 'library'}...`);
         this.showMainScreen(info);
         await this.loadPapers();
         await this.loadCollections();
@@ -1201,6 +1218,458 @@ class ADSReader {
     return safe;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FILES PANEL METHODS (unified file management)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async renderFilesPanel(paper) {
+    const filesPanel = document.getElementById('files-panel');
+    const filesList = document.getElementById('files-list');
+    const filesAvailable = document.getElementById('files-available');
+
+    if (!filesPanel || !paper) return;
+
+    // Try to use new paperFiles API if available, fall back to legacy APIs
+    let files = [];
+    let availableSources = [];
+
+    // Use new API if available (from Agent 3's implementation)
+    if (window.electronAPI?.paperFiles?.list) {
+      try {
+        files = await window.electronAPI.paperFiles.list(paper.id);
+      } catch (e) {
+        console.warn('[renderFilesPanel] paperFiles.list failed, using legacy APIs:', e);
+        files = [];
+      }
+    }
+
+    // If new API not available or returned empty, build from legacy APIs
+    if (files.length === 0) {
+      const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
+      const attachments = await window.electronAPI.getAttachments(paper.id);
+
+      // Convert downloaded sources to file items
+      for (const source of downloadedSources) {
+        files.push({
+          id: `source-${source}`,
+          file_role: 'pdf',
+          source_type: source,
+          original_name: this.getSourceLabel(source),
+          is_primary: source === downloadedSources[0], // First is primary
+          file_size: null
+        });
+      }
+
+      // Convert attachments to file items
+      for (const att of attachments) {
+        files.push({
+          id: `att-${att.id}`,
+          file_role: att.file_type === 'pdf' ? 'pdf' : 'attachment',
+          source_type: 'attachment',
+          original_name: att.original_name || att.filename,
+          filename: att.filename,
+          is_primary: false,
+          file_size: att.file_size
+        });
+      }
+    }
+
+    // Render existing files
+    if (files.length > 0) {
+      filesList.innerHTML = files.map(file => this.renderFileItem(file, paper.id)).join('');
+      this.setupFileItemListeners(paper.id);
+    } else {
+      filesList.innerHTML = '<div class="files-empty">No files attached</div>';
+    }
+
+    // Render available downloads
+    await this.renderAvailableSources(paper, filesAvailable, files);
+  }
+
+  getSourceLabel(sourceType) {
+    const labels = {
+      'EPRINT_PDF': 'arXiv',
+      'PUB_PDF': 'Publisher',
+      'ADS_PDF': 'ADS Scan',
+      'LEGACY': 'PDF',
+      'ATTACHED': 'Attached',
+      'arxiv': 'arXiv',
+      'publisher': 'Publisher',
+      'ads_scan': 'ADS Scan'
+    };
+    return labels[sourceType] || sourceType;
+  }
+
+  renderFileItem(file, paperId) {
+    const icon = file.file_role === 'pdf' ? '📄' : '📎';
+    const size = file.file_size ? this.formatFileSize(file.file_size) : '';
+    const isPrimary = file.is_primary;
+    const sourceLabel = this.getSourceLabel(file.source_type);
+    const meta = [sourceLabel, size].filter(Boolean).join(' · ');
+
+    return `
+      <div class="file-item${isPrimary ? ' primary' : ''}" data-file-id="${file.id}" data-paper-id="${paperId}">
+        <span class="file-icon">${icon}</span>
+        <div class="file-info">
+          <div class="file-name">${this.escapeHtml(file.original_name || file.filename || 'Unknown')}</div>
+          <div class="file-meta">${meta}</div>
+        </div>
+        <div class="file-actions">
+          ${file.file_role === 'pdf' ? `
+            <button class="file-primary-btn ${isPrimary ? 'active' : ''}"
+                    data-file-id="${file.id}" title="Set as primary PDF">★</button>
+          ` : ''}
+          <button class="file-open-btn" data-file-id="${file.id}" title="Open file">↗</button>
+          <button class="file-delete-btn" data-file-id="${file.id}" title="Delete file">×</button>
+        </div>
+      </div>
+    `;
+  }
+
+  async renderAvailableSources(paper, container, existingFiles) {
+    if (!container || !paper.bibcode) {
+      container.innerHTML = '';
+      return;
+    }
+
+    // Get ADS sources for this paper
+    let sources = { arxiv: false, publisher: false, ads: false };
+    try {
+      if (window.electronAPI.adsPdfSources) {
+        sources = await window.electronAPI.adsPdfSources(paper.bibcode);
+      }
+    } catch (e) {
+      console.warn('[renderAvailableSources] Failed to get ADS sources:', e);
+    }
+
+    // Determine which sources are already downloaded
+    const existingSourceTypes = existingFiles
+      .filter(f => f.file_role === 'pdf')
+      .map(f => f.source_type);
+
+    const availableSources = [];
+
+    if (sources.arxiv && !existingSourceTypes.includes('EPRINT_PDF')) {
+      availableSources.push({ type: 'EPRINT_PDF', label: 'arXiv' });
+    }
+    if (sources.publisher && !existingSourceTypes.includes('PUB_PDF')) {
+      availableSources.push({ type: 'PUB_PDF', label: 'Publisher' });
+    }
+    if (sources.ads && !existingSourceTypes.includes('ADS_PDF')) {
+      availableSources.push({ type: 'ADS_PDF', label: 'ADS Scan' });
+    }
+
+    if (availableSources.length > 0) {
+      container.innerHTML = `
+        <div class="files-available-header">Available for download</div>
+        ${availableSources.map(s => `
+          <div class="available-source" data-source="${s.type}">
+            <span>⬇ ${s.label}</span>
+            <button class="download-btn" data-source="${s.type}">Download</button>
+          </div>
+        `).join('')}
+      `;
+
+      // Add click handlers for download buttons
+      container.querySelectorAll('.download-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const sourceType = btn.dataset.source;
+          await this.downloadPdfSource(paper.id, sourceType);
+        });
+      });
+    } else {
+      container.innerHTML = '';
+    }
+  }
+
+  setupFileItemListeners(paperId) {
+    const filesList = document.getElementById('files-list');
+    if (!filesList) return;
+
+    // Primary button handlers
+    filesList.querySelectorAll('.file-primary-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const fileId = btn.dataset.fileId;
+        await this.setPrimaryPdf(paperId, fileId);
+      });
+    });
+
+    // Open button handlers
+    filesList.querySelectorAll('.file-open-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const fileId = btn.dataset.fileId;
+        await this.openFileFromPanel(paperId, fileId);
+      });
+    });
+
+    // Delete button handlers
+    filesList.querySelectorAll('.file-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const fileId = btn.dataset.fileId;
+        await this.deleteFileFromPanel(paperId, fileId);
+      });
+    });
+
+    // Click on file item to open
+    filesList.querySelectorAll('.file-item').forEach(item => {
+      item.addEventListener('click', async () => {
+        const fileId = item.dataset.fileId;
+        await this.openFileFromPanel(paperId, fileId);
+      });
+    });
+  }
+
+  async setPrimaryPdf(paperId, fileId) {
+    // Use new API if available
+    if (window.electronAPI?.paperFiles?.setPrimary) {
+      try {
+        await window.electronAPI.paperFiles.setPrimary(paperId, fileId);
+        // Refresh the panel
+        const paper = this.papers.find(p => p.id === paperId);
+        if (paper) await this.renderFilesPanel(paper);
+        this.addConsoleMessage('Primary PDF updated', 'success');
+      } catch (e) {
+        console.error('[setPrimaryPdf] Failed:', e);
+        this.addConsoleMessage('Failed to set primary PDF', 'error');
+      }
+    } else {
+      // No legacy equivalent - just log
+      console.warn('[setPrimaryPdf] paperFiles.setPrimary API not available');
+    }
+  }
+
+  async openFileFromPanel(paperId, fileId) {
+    const paper = this.papers.find(p => p.id === paperId);
+    if (!paper) return;
+
+    // If fileId starts with 'source-', it's a PDF source
+    if (fileId.startsWith('source-')) {
+      const sourceType = fileId.replace('source-', '');
+      await this.downloadFromSource(paperId, sourceType, null);
+    } else if (fileId.startsWith('att-')) {
+      // It's an attachment
+      const attId = fileId.replace('att-', '');
+      const attachments = await window.electronAPI.getAttachments(paperId);
+      const att = attachments.find(a => a.id.toString() === attId);
+      if (att && att.file_type === 'pdf') {
+        paper.pdf_path = `papers/${att.filename}`;
+        this.selectedPaper = paper;
+        this.switchTab('pdf');
+        await this.loadPDF(paper);
+      }
+    } else if (window.electronAPI?.paperFiles?.open) {
+      // Use new API
+      try {
+        await window.electronAPI.paperFiles.open(paperId, fileId);
+      } catch (e) {
+        console.error('[openFileFromPanel] Failed:', e);
+      }
+    }
+  }
+
+  async deleteFileFromPanel(paperId, fileId) {
+    if (!confirm('Delete this file?')) return;
+
+    // If fileId starts with 'source-', delete the PDF source
+    if (fileId.startsWith('source-')) {
+      const sourceType = fileId.replace('source-', '');
+      const deleted = await window.electronAPI.deletePdfSource(paperId, sourceType);
+      if (deleted) {
+        this.addConsoleMessage(`Deleted ${this.getSourceLabel(sourceType)} PDF`, 'info');
+        const paper = this.papers.find(p => p.id === paperId);
+        if (paper) await this.renderFilesPanel(paper);
+      }
+    } else if (fileId.startsWith('att-')) {
+      // Delete attachment
+      const attId = parseInt(fileId.replace('att-', ''));
+      const result = await window.electronAPI.deleteAttachment(attId);
+      if (result.success) {
+        this.addConsoleMessage('Deleted attachment', 'info');
+        const paper = this.papers.find(p => p.id === paperId);
+        if (paper) await this.renderFilesPanel(paper);
+      }
+    } else if (window.electronAPI?.paperFiles?.delete) {
+      // Use new API
+      try {
+        await window.electronAPI.paperFiles.delete(paperId, fileId);
+        const paper = this.papers.find(p => p.id === paperId);
+        if (paper) await this.renderFilesPanel(paper);
+        this.addConsoleMessage('File deleted', 'info');
+      } catch (e) {
+        console.error('[deleteFileFromPanel] Failed:', e);
+        this.addConsoleMessage('Failed to delete file', 'error');
+      }
+    }
+  }
+
+  async downloadPdfSource(paperId, sourceType) {
+    // Use the download queue if available, otherwise direct download
+    if (window.electronAPI?.downloadQueue?.enqueue) {
+      try {
+        await window.electronAPI.downloadQueue.enqueue(paperId, sourceType);
+        this.showDownloadQueue();
+        this.addConsoleMessage(`Queued ${this.getSourceLabel(sourceType)} download`, 'info');
+      } catch (e) {
+        console.error('[downloadPdfSource] Queue failed, trying direct download:', e);
+        await this.downloadFromSource(paperId, sourceType, null);
+      }
+    } else {
+      // Direct download using legacy method
+      await this.downloadFromSource(paperId, sourceType, null);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DOWNLOAD QUEUE METHODS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  setupDownloadQueue() {
+    // Set up IPC listeners for download queue events if API is available
+    if (window.electronAPI?.downloadQueue) {
+      if (window.electronAPI.downloadQueue.onProgress) {
+        window.electronAPI.downloadQueue.onProgress(data => this.updateQueueItem(data));
+      }
+      if (window.electronAPI.downloadQueue.onComplete) {
+        window.electronAPI.downloadQueue.onComplete(data => this.handleDownloadComplete(data));
+      }
+      if (window.electronAPI.downloadQueue.onError) {
+        window.electronAPI.downloadQueue.onError(data => this.handleDownloadError(data));
+      }
+    }
+
+    // Set up queue panel button handlers
+    document.getElementById('queue-close-btn')?.addEventListener('click', () => {
+      this.hideDownloadQueue();
+    });
+
+    document.getElementById('queue-pause-btn')?.addEventListener('click', async () => {
+      if (window.electronAPI?.downloadQueue?.pauseAll) {
+        await window.electronAPI.downloadQueue.pauseAll();
+      }
+    });
+  }
+
+  showDownloadQueue() {
+    const panel = document.getElementById('download-queue-panel');
+    if (panel) {
+      panel.classList.remove('hidden');
+      this.refreshQueueList();
+    }
+  }
+
+  hideDownloadQueue() {
+    document.getElementById('download-queue-panel')?.classList.add('hidden');
+  }
+
+  async refreshQueueList() {
+    const queueList = document.getElementById('queue-list');
+    const queueSummary = document.getElementById('queue-summary');
+    if (!queueList) return;
+
+    // Get queue state from API if available
+    if (window.electronAPI?.downloadQueue?.getState) {
+      try {
+        const state = await window.electronAPI.downloadQueue.getState();
+        const items = state.items || [];
+
+        if (items.length === 0) {
+          queueList.innerHTML = '<div class="queue-empty">No downloads in queue</div>';
+          queueSummary.textContent = '';
+          return;
+        }
+
+        queueList.innerHTML = items.map(item => this.renderQueueItem(item)).join('');
+
+        // Update summary
+        const active = items.filter(i => i.status === 'downloading').length;
+        const pending = items.filter(i => i.status === 'pending').length;
+        queueSummary.textContent = `${active} active, ${pending} pending`;
+
+        // Set up cancel button handlers
+        queueList.querySelectorAll('.queue-item-cancel').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const paperId = btn.dataset.paperId;
+            if (window.electronAPI?.downloadQueue?.cancel) {
+              await window.electronAPI.downloadQueue.cancel(paperId);
+              this.refreshQueueList();
+            }
+          });
+        });
+      } catch (e) {
+        console.warn('[refreshQueueList] Failed:', e);
+        queueList.innerHTML = '<div class="queue-empty">Queue unavailable</div>';
+      }
+    } else {
+      queueList.innerHTML = '<div class="queue-empty">Download queue not available</div>';
+    }
+  }
+
+  renderQueueItem(item) {
+    const statusClass = item.status === 'downloading' ? 'downloading' :
+                        item.status === 'error' ? 'error' :
+                        item.status === 'complete' ? 'complete' : '';
+    const progress = item.percent || 0;
+    const statusText = item.status === 'downloading' ? `Downloading... ${progress}%` :
+                       item.status === 'pending' ? 'Pending' :
+                       item.status === 'error' ? 'Failed' :
+                       item.status === 'complete' ? 'Complete' : item.status;
+
+    return `
+      <div class="queue-item" data-paper-id="${item.paperId}">
+        <span class="queue-item-icon">📄</span>
+        <div class="queue-item-info">
+          <div class="queue-item-title">${this.escapeHtml(item.title || 'Downloading...')}</div>
+          <div class="queue-item-status ${statusClass}">${statusText}</div>
+          ${item.status === 'downloading' ? `
+            <div class="queue-progress">
+              <div class="queue-progress-bar" style="width: ${progress}%"></div>
+            </div>
+          ` : ''}
+        </div>
+        <button class="queue-item-cancel" data-paper-id="${item.paperId}" title="Cancel">×</button>
+      </div>
+    `;
+  }
+
+  updateQueueItem(data) {
+    const queueList = document.getElementById('queue-list');
+    if (!queueList) return;
+
+    const item = queueList.querySelector(`[data-paper-id="${data.paperId}"]`);
+    if (item) {
+      const bar = item.querySelector('.queue-progress-bar');
+      const status = item.querySelector('.queue-item-status');
+      if (bar) bar.style.width = `${data.percent || 0}%`;
+      if (status) status.textContent = `Downloading... ${data.percent || 0}%`;
+    }
+
+    // Show queue panel if not visible
+    this.showDownloadQueue();
+  }
+
+  async handleDownloadComplete(data) {
+    this.addConsoleMessage(`Downloaded: ${data.sourceType || 'PDF'}`, 'success');
+    this.refreshQueueList();
+
+    // Refresh the files panel if viewing this paper
+    if (this.selectedPaper?.id === data.paperId) {
+      await this.renderFilesPanel(this.selectedPaper);
+      // Also reload PDF if on PDF tab
+      const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+      if (currentTab === 'pdf') {
+        await this.loadPDF(this.selectedPaper);
+      }
+    }
+  }
+
+  handleDownloadError(data) {
+    this.addConsoleMessage(`Download failed: ${data.error || 'Unknown error'}`, 'error');
+    this.refreshQueueList();
+  }
+
   // Custom prompt dialog since Electron doesn't support native prompt()
   showPrompt(message, defaultValue = '') {
     return new Promise((resolve) => {
@@ -1678,6 +2147,8 @@ class ADSReader {
     document.getElementById('copy-cite-btn')?.addEventListener('click', () => this.copyCite());
     document.getElementById('open-ads-btn')?.addEventListener('click', () => this.openInADS());
     document.getElementById('attach-file-btn')?.addEventListener('click', () => this.attachFiles());
+    // Files Panel attach button (in BibTeX tab)
+    document.getElementById('files-attach-btn')?.addEventListener('click', () => this.attachFiles());
     document.getElementById('copy-bibtex-btn')?.addEventListener('click', () => this.copyBibtex());
     document.getElementById('export-bibtex-btn')?.addEventListener('click', () => this.exportBibtexToFile());
     document.getElementById('edit-bibtex-btn')?.addEventListener('click', () => this.enterBibtexEditMode());
@@ -2213,8 +2684,10 @@ class ADSReader {
         }
 
         // Save preferences
-        localStorage.setItem('sortField', this.sortField);
-        localStorage.setItem('sortOrder', this.sortOrder);
+        // Save sort preferences via API (works on both macOS and iOS)
+        if (window.electronAPI.setSortPreferences) {
+          window.electronAPI.setSortPreferences(this.sortField, this.sortOrder);
+        }
 
         // Update UI and re-render
         updateSortUI();
@@ -2485,7 +2958,14 @@ class ADSReader {
         }
         break;
       case 'f':
-        if (this.selectedPaper && this.hasAdsToken) this.fetchMetadata();
+        // 'f' toggles focus mode for PDF reading
+        if (this.selectedPaper) {
+          if (this.isFocusNotesMode) {
+            this.exitFocusNotesMode();
+          } else {
+            this.enterFocusNotesMode();
+          }
+        }
         break;
       case '+':
       case '=':
@@ -2534,6 +3014,7 @@ class ADSReader {
   }
 
   showSetupScreen() {
+    document.getElementById('loading-screen')?.classList.add('hidden');
     document.getElementById('setup-screen').classList.remove('hidden');
     document.getElementById('main-screen').classList.add('hidden');
 
@@ -2643,12 +3124,21 @@ class ADSReader {
   }
 
   showMainScreen(info) {
+    document.getElementById('loading-screen')?.classList.add('hidden');
     document.getElementById('setup-screen').classList.add('hidden');
     document.getElementById('main-screen').classList.remove('hidden');
     this.updateLibraryDisplay(info);
 
     // Hide splash screen now that UI is ready
     this.hideSplashScreen();
+  }
+
+  // Update loading screen text
+  updateLoadingText(text) {
+    const loadingText = document.querySelector('.loading-text');
+    if (loadingText) {
+      loadingText.textContent = text;
+    }
   }
 
   // Hide the native splash screen (Capacitor)
@@ -3563,17 +4053,8 @@ class ADSReader {
       document.getElementById('keywords-section').classList.add('hidden');
     }
 
-    // Update BibTeX
-    document.getElementById('bibtex-content').value = paper.bibtex || '';
-
-    // Show BibTeX source if available
-    const sourceInfo = document.getElementById('bibtex-source-info');
-    if (paper.import_source) {
-      sourceInfo.textContent = `Imported from: ${paper.import_source}`;
-      sourceInfo.classList.remove('hidden');
-    } else {
-      sourceInfo.classList.add('hidden');
-    }
+    // Update BibTeX tab with full information
+    await this.displayBibtex(paper);
 
     // Load references and citations
     await this.loadReferences(paper.id);
@@ -3592,9 +4073,13 @@ class ADSReader {
     const pdfAttachments = attachments.filter(a => a.file_type === 'pdf');
     const hasAnyPdf = downloadedSources.length > 0 || pdfAttachments.length > 0 || !!paper.pdf_path;
 
+    // Save original pdf_path from database (for legacy PDFs)
+    const originalPdfPath = paper.pdf_path;
+
     // If paper has PDFs, determine which one to load based on last viewed
     if (hasAnyPdf) {
       const lastSource = this.lastPdfSources[paper.id];
+      let pdfPathSet = false;
 
       if (lastSource) {
         // Check if last source is an attachment
@@ -3603,23 +4088,37 @@ class ADSReader {
           const attachment = pdfAttachments.find(a => a.filename === filename);
           if (attachment) {
             paper.pdf_path = `papers/${filename}`;
+            pdfPathSet = true;
           }
+        } else if (lastSource === 'LEGACY' && downloadedSources.includes('LEGACY')) {
+          // Legacy PDF - use original path from database
+          paper.pdf_path = originalPdfPath;
+          pdfPathSet = true;
         } else {
           // It's a source type (EPRINT_PDF, PUB_PDF, ADS_PDF)
           if (downloadedSources.includes(lastSource) && paper.bibcode) {
             const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
             paper.pdf_path = `papers/${baseFilename}_${lastSource}.pdf`;
+            pdfPathSet = true;
           }
         }
       }
 
       // If no last source or last source not available, use first available
-      if (!paper.pdf_path) {
-        if (downloadedSources.length > 0 && paper.bibcode) {
-          const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-          paper.pdf_path = `papers/${baseFilename}_${downloadedSources[0]}.pdf`;
+      if (!pdfPathSet) {
+        if (downloadedSources.length > 0) {
+          if (downloadedSources[0] === 'LEGACY') {
+            // Legacy PDF - use the pdf_path stored in database
+            paper.pdf_path = originalPdfPath;
+          } else if (paper.bibcode) {
+            const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+            paper.pdf_path = `papers/${baseFilename}_${downloadedSources[0]}.pdf`;
+          }
         } else if (pdfAttachments.length > 0) {
           paper.pdf_path = `papers/${pdfAttachments[0].filename}`;
+        } else if (originalPdfPath) {
+          // Fallback to original pdf_path if it exists
+          paper.pdf_path = originalPdfPath;
         }
       }
     }
@@ -4027,6 +4526,90 @@ class ADSReader {
   updateCurrentPage() {
     const currentPage = this.getCurrentVisiblePage();
     document.getElementById('current-page').textContent = currentPage;
+  }
+
+  async displayBibtex(paper) {
+    // Update BibTeX content
+    document.getElementById('bibtex-content').value = paper.bibtex || '';
+
+    // Show BibTeX source if available
+    const sourceInfo = document.getElementById('bibtex-source-info');
+    if (paper.import_source) {
+      sourceInfo.textContent = `Imported from: ${paper.import_source}`;
+      sourceInfo.classList.remove('hidden');
+    } else {
+      sourceInfo.classList.add('hidden');
+    }
+
+    // Render the new unified Files Panel
+    await this.renderFilesPanel(paper);
+
+    // Legacy display file information (hidden, but keeping for backwards compatibility)
+    const filesListEl = document.getElementById('bibtex-files-list');
+    const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
+    const attachments = await window.electronAPI.getAttachments(paper.id);
+
+    const fileItems = [];
+
+    // Add PDFs
+    for (const source of downloadedSources) {
+      const sourceLabels = {
+        'EPRINT_PDF': 'arXiv',
+        'PUB_PDF': 'Publisher',
+        'ADS_PDF': 'ADS Scan',
+        'LEGACY': 'PDF',
+        'ATTACHED': 'Attached'
+      };
+      const label = sourceLabels[source] || source;
+      fileItems.push(`<span class="bibtex-file-item"><span class="file-icon">📄</span>${label}<span class="file-type">PDF</span></span>`);
+    }
+
+    // Add attachments
+    for (const att of attachments) {
+      const icon = att.file_type === 'pdf' ? '📄' : '📎';
+      fileItems.push(`<span class="bibtex-file-item"><span class="file-icon">${icon}</span>${this.escapeHtml(att.filename)}<span class="file-type">${att.file_type}</span></span>`);
+    }
+
+    if (fileItems.length > 0) {
+      filesListEl.innerHTML = fileItems.join('');
+    } else {
+      filesListEl.innerHTML = '<span class="no-files">No files attached</span>';
+    }
+
+    // Display record information
+    const recordInfoEl = document.getElementById('bibtex-record-info');
+    const recordItems = [];
+
+    if (paper.bibcode) {
+      recordItems.push(`<span class="record-label">Bibcode:</span><span class="record-value"><a href="https://ui.adsabs.harvard.edu/abs/${paper.bibcode}" target="_blank">${this.escapeHtml(paper.bibcode)}</a></span>`);
+    }
+    if (paper.doi) {
+      recordItems.push(`<span class="record-label">DOI:</span><span class="record-value"><a href="https://doi.org/${paper.doi}" target="_blank">${this.escapeHtml(paper.doi)}</a></span>`);
+    }
+    if (paper.arxiv_id) {
+      recordItems.push(`<span class="record-label">arXiv:</span><span class="record-value"><a href="https://arxiv.org/abs/${paper.arxiv_id}" target="_blank">${this.escapeHtml(paper.arxiv_id)}</a></span>`);
+    }
+    if (paper.journal) {
+      recordItems.push(`<span class="record-label">Journal:</span><span class="record-value">${this.escapeHtml(paper.journal)}</span>`);
+    }
+    if (paper.volume) {
+      recordItems.push(`<span class="record-label">Volume:</span><span class="record-value">${this.escapeHtml(paper.volume)}</span>`);
+    }
+    if (paper.pages) {
+      recordItems.push(`<span class="record-label">Pages:</span><span class="record-value">${this.escapeHtml(paper.pages)}</span>`);
+    }
+    if (paper.year) {
+      recordItems.push(`<span class="record-label">Year:</span><span class="record-value">${paper.year}</span>`);
+    }
+    if (paper.citation_count !== null && paper.citation_count !== undefined) {
+      recordItems.push(`<span class="record-label">Citations:</span><span class="record-value">${paper.citation_count}</span>`);
+    }
+    if (paper.added_date) {
+      const addedDate = new Date(paper.added_date).toLocaleDateString();
+      recordItems.push(`<span class="record-label">Added:</span><span class="record-value">${addedDate}</span>`);
+    }
+
+    recordInfoEl.innerHTML = recordItems.join('');
   }
 
   async loadReferences(paperId) {
@@ -4517,7 +5100,7 @@ class ADSReader {
         await this.loadCitations(paper.id);
         break;
       case 'bibtex':
-        this.displayBibtex(paper);
+        await this.displayBibtex(paper);
         break;
       case 'pdf':
         // PDF usually doesn't need refresh after sync
@@ -5648,6 +6231,9 @@ class ADSReader {
   }
 
   // PDF Source Dropdown
+  // NOTE: This legacy dropdown is still used by paper list PDF source buttons.
+  // The new unified Files Panel (renderFilesPanel) handles file management in the BibTeX tab.
+  // Consider migrating paper list to use the new Files Panel pattern in a future update.
   async showPdfSourceDropdown(btn, paperId, bibcode) {
     // Select this paper so the PDF viewer shows the right paper
     this.selectPaper(paperId);
@@ -6446,7 +7032,7 @@ class ADSReader {
   }
 
   // Focus Notes Mode - Split view with PDF left, Notes right
-  enterFocusNotesMode() {
+  async enterFocusNotesMode() {
     if (this.isFocusNotesMode) return;
     if (!this.selectedPaper) {
       this.showNotification('Select a paper first', 'warn');
@@ -6476,7 +7062,114 @@ class ADSReader {
       notesPanel.classList.remove('hidden');
     }
 
+    // Set up resize handle for focus mode (creates the handle element)
+    this.setupFocusModeResize();
+
+    // Load saved split position and apply it
+    let splitPosition = 50; // Default 50%
+    if (window.electronAPI.getFocusSplitPosition) {
+      const saved = await window.electronAPI.getFocusSplitPosition();
+      if (saved) splitPosition = saved;
+    }
+    this.setFocusSplitPosition(splitPosition);
+
     console.log('[ADSReader] Entered Focus Notes mode');
+  }
+
+  setFocusSplitPosition(percent) {
+    const tabContent = document.querySelector('.tab-content');
+    const notesPanel = document.getElementById('annotations-panel');
+    const resizeHandle = document.getElementById('focus-mode-resize');
+
+    if (tabContent && notesPanel && this.isFocusNotesMode) {
+      tabContent.style.flex = `0 0 ${percent}%`;
+      tabContent.style.maxWidth = `${percent}%`;
+      tabContent.style.minWidth = `${percent}%`;
+      notesPanel.style.flex = `0 0 ${100 - percent}%`;
+      notesPanel.style.maxWidth = `${100 - percent}%`;
+      notesPanel.style.minWidth = `${100 - percent}%`;
+
+      // Update resize handle position
+      if (resizeHandle) {
+        resizeHandle.style.left = `${percent}%`;
+      }
+    }
+    this.focusSplitPosition = percent;
+  }
+
+  setupFocusModeResize() {
+    // Create resize handle if it doesn't exist
+    let resizeHandle = document.getElementById('focus-mode-resize');
+    if (!resizeHandle) {
+      resizeHandle = document.createElement('div');
+      resizeHandle.id = 'focus-mode-resize';
+      resizeHandle.className = 'focus-mode-resize-handle';
+
+      // Insert between tab-content and annotations-panel
+      const annotationsPanel = document.getElementById('annotations-panel');
+      if (annotationsPanel && annotationsPanel.parentNode) {
+        annotationsPanel.parentNode.insertBefore(resizeHandle, annotationsPanel);
+      }
+    }
+    resizeHandle.classList.remove('hidden');
+
+    let isResizing = false;
+    let startX = 0;
+    let startPercent = 50;
+
+    const onMouseDown = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      isResizing = true;
+      startX = e.clientX;
+      startPercent = this.focusSplitPosition || 50;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    };
+
+    const onMouseMove = (e) => {
+      if (!isResizing) return;
+
+      const container = document.querySelector('.viewer-content-row');
+      if (!container) return;
+
+      const containerWidth = container.offsetWidth;
+      const deltaX = e.clientX - startX;
+      const deltaPercent = (deltaX / containerWidth) * 100;
+      let newPercent = startPercent + deltaPercent;
+
+      // Clamp between 20% and 80%
+      newPercent = Math.max(20, Math.min(80, newPercent));
+
+      this.setFocusSplitPosition(newPercent);
+    };
+
+    const onMouseUp = () => {
+      if (isResizing) {
+        isResizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+
+        // Save the position
+        if (window.electronAPI.setFocusSplitPosition) {
+          window.electronAPI.setFocusSplitPosition(this.focusSplitPosition);
+        }
+      }
+    };
+
+    // Remove old listeners if any
+    resizeHandle.removeEventListener('mousedown', resizeHandle._onMouseDown);
+    document.removeEventListener('mousemove', resizeHandle._onMouseMove);
+    document.removeEventListener('mouseup', resizeHandle._onMouseUp);
+
+    // Store references for cleanup
+    resizeHandle._onMouseDown = onMouseDown;
+    resizeHandle._onMouseMove = onMouseMove;
+    resizeHandle._onMouseUp = onMouseUp;
+
+    resizeHandle.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
   }
 
   exitFocusNotesMode() {
@@ -6489,6 +7182,26 @@ class ADSReader {
     const toolbar = document.getElementById('focus-notes-toolbar');
     if (toolbar) {
       toolbar.classList.add('hidden');
+    }
+
+    // Hide the resize handle
+    const resizeHandle = document.getElementById('focus-mode-resize');
+    if (resizeHandle) {
+      resizeHandle.classList.add('hidden');
+    }
+
+    // Reset panel styles
+    const tabContent = document.querySelector('.tab-content');
+    const notesPanel = document.getElementById('annotations-panel');
+    if (tabContent) {
+      tabContent.style.flex = '';
+      tabContent.style.maxWidth = '';
+      tabContent.style.minWidth = '';
+    }
+    if (notesPanel) {
+      notesPanel.style.flex = '';
+      notesPanel.style.maxWidth = '';
+      notesPanel.style.minWidth = '';
     }
 
     // Notes are auto-saved, but show confirmation
