@@ -434,11 +434,114 @@ body.resizing * {
 .settings-items {
   overflow: hidden;
   transition: max-height 0.2s ease;
-  max-height: 200px;
+  max-height: 400px;
 }
 
 .settings-items.collapsed {
   max-height: 0;
+}
+
+/* Inline Settings Groups */
+.settings-group {
+  margin-bottom: 2px;
+}
+
+.settings-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+  font-size: 12px;
+}
+
+.settings-group-header:hover {
+  background: var(--bg-hover);
+}
+
+.settings-group-header .nav-icon {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.settings-group-header .nav-status {
+  margin-left: auto;
+  font-size: 8px;
+}
+
+.settings-expand-icon {
+  font-size: 8px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  margin-left: 4px;
+}
+
+.settings-group.expanded .settings-expand-icon {
+  transform: rotate(90deg);
+}
+
+.settings-group-content {
+  padding: 8px 12px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 0 0 4px 4px;
+  margin: 0 8px 8px;
+}
+
+.settings-group-content.hidden {
+  display: none;
+}
+
+.settings-group-content input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.settings-group-content input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.settings-help-link {
+  font-size: 10px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.settings-help-link:hover {
+  text-decoration: underline;
+}
+
+.settings-save-btn {
+  padding: 4px 12px;
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: white;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.settings-save-btn:hover {
+  background: var(--accent-hover);
+}
+
+.settings-save-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .add-collection-btn {
@@ -1388,55 +1491,88 @@ body.ios .desktop-only {
   border-color: var(--accent);
 }
 
-/* Sort Toolbar */
-.sort-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
+/* Sort Dropdown */
+.sort-dropdown-container {
+  position: relative;
   padding: 4px 8px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
 }
 
-.sort-btn {
+.sort-dropdown-trigger {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px 6px;
+  gap: 6px;
+  padding: 4px 10px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: 4px;
-  color: var(--text-secondary);
-  font-size: 10px;
+  color: var(--text-primary);
+  font-size: 12px;
   cursor: pointer;
-  transition: all 0.1s;
+  transition: all 0.15s;
+  min-width: 120px;
+  justify-content: space-between;
 }
 
-.sort-btn:hover {
+.sort-dropdown-trigger:hover {
   background: var(--bg-hover);
-  color: var(--text-primary);
   border-color: var(--accent);
 }
 
-.sort-btn.active {
-  background: var(--bg-selected);
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-
-.sort-label {
+.sort-field-label {
   font-weight: 500;
 }
 
-.sort-arrow {
-  font-size: 9px;
-  opacity: 0.7;
+.sort-direction {
+  font-size: 11px;
+  color: var(--accent);
 }
 
-.sort-btn.active .sort-arrow {
-  opacity: 1;
+.sort-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 8px;
+  right: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.sort-dropdown-menu.hidden {
+  display: none;
+}
+
+.sort-option {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sort-option:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sort-option.active {
+  background: var(--bg-selected);
   color: var(--accent);
+  font-weight: 500;
+}
+
+.sort-option.active::after {
+  content: attr(data-direction);
+  font-size: 10px;
+  opacity: 0.8;
 }
 
 /* Content Split */
@@ -1450,6 +1586,17 @@ body.ios .desktop-only {
   flex: 1;
   overflow-y: auto;
   background: var(--bg-primary);
+}
+
+/* Virtual scrolling container */
+.virtual-scroll-container {
+  position: relative;
+  width: 100%;
+}
+
+.virtual-scroll-container .paper-item {
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .paper-list-footer {
@@ -1573,8 +1720,26 @@ body.ios .desktop-only {
 
 .citation-count {
   font-size: 10px;
-  color: var(--text-muted);
-  opacity: 0.8;
+  color: var(--text-secondary);
+  font-weight: 500;
+  background: var(--bg-tertiary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.reading-progress {
+  font-size: 10px;
+  color: var(--accent);
+  font-weight: 500;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  padding: 1px 4px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .paper-item-status {
@@ -4373,6 +4538,16 @@ body.ios-platform .titlebar-drag-region {
   border-radius: 12px;
   cursor: pointer;
   transition: background 0.2s, transform 0.1s;
+  /* Button reset for iOS WKWebView compatibility */
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+  -webkit-appearance: none;
+  touch-action: manipulation;
 }
 
 .ios-library-item:hover {
@@ -5504,4 +5679,449 @@ body.ios-platform .sidebar {
   .mobile-view-active .viewing-pdf #pdf-container {
     bottom: calc(56px + env(safe-area-inset-bottom)) !important;
   }
+}
+
+/* PDF Fullscreen Mode */
+.pdf-fullscreen-close {
+  position: fixed;
+  top: env(safe-area-inset-top, 20px);
+  right: 16px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pdf-fullscreen-close.visible {
+  opacity: 0.8;
+}
+
+.pdf-fullscreen-close:hover,
+.pdf-fullscreen-close:active {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.pdf-fullscreen-close.hidden {
+  display: none;
+}
+
+/* Fullscreen mode - hide everything except PDF */
+body.pdf-fullscreen {
+  overflow: hidden;
+}
+
+body.pdf-fullscreen .mobile-nav,
+body.pdf-fullscreen .mobile-pdf-controls,
+body.pdf-fullscreen .mobile-tab-bar,
+body.pdf-fullscreen .app-header,
+body.pdf-fullscreen .sidebar,
+body.pdf-fullscreen .paper-list-panel,
+body.pdf-fullscreen .detail-content,
+body.pdf-fullscreen .resize-handle,
+body.pdf-fullscreen .detail-panel > *:not(.pdf-container) {
+  display: none !important;
+}
+
+body.pdf-fullscreen .pdf-container,
+body.pdf-fullscreen #pdf-container {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 10000 !important;
+  background: var(--bg-primary) !important;
+}
+
+body.pdf-fullscreen .detail-panel {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 9999 !important;
+}
+
+/* PDF Source Bottom Sheet (Mobile) */
+.pdf-source-sheet-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 9998;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.pdf-source-sheet-overlay.visible {
+  opacity: 1;
+}
+
+.pdf-source-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-secondary);
+  border-radius: 16px 16px 0 0;
+  z-index: 9999;
+  max-height: 70vh;
+  transform: translateY(100%);
+  transition: transform 0.3s ease;
+  padding-bottom: env(safe-area-inset-bottom, 20px);
+}
+
+.pdf-source-sheet.visible {
+  transform: translateY(0);
+}
+
+.sheet-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--text-muted);
+  border-radius: 2px;
+  margin: 12px auto 8px;
+}
+
+.sheet-title {
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-primary);
+  padding: 8px 16px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sheet-options {
+  max-height: calc(70vh - 80px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sheet-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  min-height: 56px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sheet-option:active {
+  background: var(--bg-hover);
+}
+
+.sheet-option:last-child {
+  border-bottom: none;
+}
+
+.sheet-option-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.sheet-option-icon {
+  font-size: 20px;
+  width: 28px;
+  text-align: center;
+}
+
+.sheet-option-label {
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.sheet-option.downloaded .sheet-option-label::before {
+  content: '✓ ';
+  color: var(--success);
+}
+
+.sheet-option-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sheet-option .note-count-badge {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.sheet-option .sheet-delete-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--error);
+  color: white;
+  border: none;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sheet-option .sheet-delete-btn:active {
+  opacity: 1;
+}
+
+.sheet-separator {
+  height: 8px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+}
+
+.sheet-section-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 12px 20px 8px;
+  background: var(--bg-primary);
+}
+
+/* Cancel button at bottom */
+.sheet-cancel {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 16px;
+  padding: 14px;
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sheet-cancel:active {
+  background: var(--bg-hover);
+}
+
+/* Focus Notes Mode - Split view with PDF left, Notes right */
+.focus-notes-toolbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  z-index: 10002;
+  -webkit-app-region: drag;
+}
+
+.focus-notes-toolbar.hidden {
+  display: none;
+}
+
+.focus-notes-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.focus-notes-icon {
+  font-size: 18px;
+}
+
+.focus-notes-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-notes-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  -webkit-app-region: no-drag;
+}
+
+.focus-notes-add-btn {
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.focus-notes-add-btn:hover {
+  background: var(--bg-hover);
+}
+
+.focus-notes-exit-btn {
+  padding: 6px 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.focus-notes-exit-btn:hover {
+  background: var(--accent-hover);
+}
+
+/* Focus mode body class - hides everything except PDF and Notes */
+body.focus-notes-mode {
+  overflow: hidden;
+}
+
+body.focus-notes-mode .sidebar,
+body.focus-notes-mode .sidebar-collapsed-toggle,
+body.focus-notes-mode .paper-list-panel,
+body.focus-notes-mode .resize-handle[data-resize="sidebar"],
+body.focus-notes-mode .resize-handle[data-resize="list"],
+body.focus-notes-mode .bottom-bar,
+body.focus-notes-mode .info-tabs,
+body.focus-notes-mode .mobile-nav,
+body.focus-notes-mode .mobile-tab-bar,
+body.focus-notes-mode .titlebar-drag-region {
+  display: none !important;
+}
+
+/* Main content takes full width */
+body.focus-notes-mode .main-content {
+  margin-left: 0 !important;
+}
+
+body.focus-notes-mode .content-split {
+  margin-left: 0 !important;
+}
+
+/* Paper detail expands to fill */
+body.focus-notes-mode .paper-detail {
+  position: fixed !important;
+  top: 44px !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  z-index: 10001;
+}
+
+/* Viewer wrapper fills the space */
+body.focus-notes-mode .viewer-wrapper {
+  height: 100% !important;
+}
+
+body.focus-notes-mode .viewer-content-row {
+  height: 100% !important;
+}
+
+/* Tab content (PDF) takes left half */
+body.focus-notes-mode .tab-content {
+  flex: 1 !important;
+  max-width: 50% !important;
+  min-width: 50% !important;
+}
+
+/* PDF container fills its half */
+body.focus-notes-mode #tab-pdf {
+  display: block !important;
+  height: 100%;
+}
+
+body.focus-notes-mode #pdf-container {
+  height: 100% !important;
+}
+
+/* Hide all tabs except PDF in focus mode */
+body.focus-notes-mode #tab-abstract,
+body.focus-notes-mode #tab-refs,
+body.focus-notes-mode #tab-cites,
+body.focus-notes-mode #tab-bibtex,
+body.focus-notes-mode #tab-ai {
+  display: none !important;
+}
+
+/* Annotations panel takes right half */
+body.focus-notes-mode #annotations-panel {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 !important;
+  max-width: 50% !important;
+  min-width: 50% !important;
+  height: 100% !important;
+  border-left: 1px solid var(--border);
+}
+
+/* Hide the collapse button in focus mode */
+body.focus-notes-mode #notes-collapse-btn,
+body.focus-notes-mode #focus-notes-btn,
+body.focus-notes-mode .notes-collapsed-toggle {
+  display: none !important;
+}
+
+/* Annotations resize handle in focus mode */
+body.focus-notes-mode #annotations-resize {
+  display: block !important;
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  margin-left: -3px;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+/* Annotations list fills available space */
+body.focus-notes-mode .annotations-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Focus mode adjustments for the header */
+body.focus-notes-mode .annotations-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+body.focus-notes-mode .annotations-header h3 {
+  font-size: 16px;
 }

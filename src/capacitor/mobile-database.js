@@ -41,25 +41,67 @@ async function readDbFile(path, location) {
 
 /**
  * Write file to appropriate storage backend
+ * For large iCloud files (>5MB), uses native copy to avoid memory issues
  */
 async function writeDbFile(path, data, location) {
   console.log(`[MobileDB] writeDbFile: ${path} to ${location}`);
+
+  // Estimate decoded size (base64 is ~1.33x larger than binary)
+  const estimatedBytes = data.length * 0.75;
+  const isLargeFile = estimatedBytes > 5 * 1024 * 1024; // 5MB threshold
+
   try {
     if (location === 'icloud') {
-      // Ensure parent directory exists
-      const parentDir = path.substring(0, path.lastIndexOf('/'));
-      if (parentDir) {
-        console.log(`[MobileDB] Ensuring iCloud directory exists: ${parentDir}`);
+      if (isLargeFile) {
+        // Large file: write to local temp first, then copy to iCloud natively
+        // This avoids passing large base64 data through JavaScript bridge
+        console.log(`[MobileDB] Large file (${Math.round(estimatedBytes / 1024 / 1024)}MB), using temp file approach`);
+
+        const tempPath = `_temp_db_${Date.now()}.sqlite`;
+
+        // Write to local temp file
+        await Filesystem.writeFile({
+          path: tempPath,
+          data: data,
+          directory: Directory.Documents
+        });
+        console.log(`[MobileDB] Temp file written: ${tempPath}`);
+
+        // Copy from local to iCloud using native Swift (no base64 in JS)
         try {
-          await ICloud.mkdir({ path: parentDir, recursive: true });
-        } catch (e) {
-          // Directory might already exist
-          console.log(`[MobileDB] mkdir result:`, e.message || 'ok');
+          await ICloud.copyFromLocal({
+            sourcePath: tempPath,
+            destPath: path
+          });
+          console.log(`[MobileDB] Copied to iCloud: ${path}`);
+        } finally {
+          // Clean up temp file
+          try {
+            await Filesystem.deleteFile({
+              path: tempPath,
+              directory: Directory.Documents
+            });
+            console.log(`[MobileDB] Temp file cleaned up`);
+          } catch (cleanupErr) {
+            console.warn(`[MobileDB] Failed to clean up temp file:`, cleanupErr.message);
+          }
         }
+      } else {
+        // Small file: use existing base64 approach
+        const parentDir = path.substring(0, path.lastIndexOf('/'));
+        if (parentDir) {
+          console.log(`[MobileDB] Ensuring iCloud directory exists: ${parentDir}`);
+          try {
+            await ICloud.mkdir({ path: parentDir, recursive: true });
+          } catch (e) {
+            // Directory might already exist
+            console.log(`[MobileDB] mkdir result:`, e.message || 'ok');
+          }
+        }
+        await ICloud.writeFile({ path, data, encoding: null, recursive: true });
       }
-      await ICloud.writeFile({ path, data, encoding: null, recursive: true });
     } else {
-      // Ensure parent directory exists for local
+      // Local storage: always use Filesystem directly
       const parentDir = path.substring(0, path.lastIndexOf('/'));
       if (parentDir) {
         try {
@@ -124,10 +166,9 @@ export async function initDatabase(libPath, location = 'local') {
     db = new SQL.Database(bytes);
     console.log('[MobileDB] Loaded existing database');
   } catch (e) {
-    // Database doesn't exist, create new one
-    console.log('[MobileDB] No existing database, creating new:', e.message);
+    // Database doesn't exist, create new one (expected for new libraries)
+    console.log('[MobileDB] No existing database, creating new');
     db = new SQL.Database();
-    console.log('[MobileDB] Created new database');
   }
 
   // Ensure schema exists

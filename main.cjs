@@ -4802,9 +4802,12 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
           // Use setTimeout to avoid blocking the callback
           setTimeout(() => {
             if (!downloadCompleted && detectedPdfUrl && detectedPdfUrl !== downloadTriggeredForUrl) {
-              console.log('Triggering explicit downloadURL for:', detectedPdfUrl);
-              downloadTriggeredForUrl = detectedPdfUrl;
-              authWindow.webContents.downloadURL(detectedPdfUrl);
+              // Check if window still exists before accessing webContents
+              if (authWindow && !authWindow.isDestroyed()) {
+                console.log('Triggering explicit downloadURL for:', detectedPdfUrl);
+                downloadTriggeredForUrl = detectedPdfUrl;
+                authWindow.webContents.downloadURL(detectedPdfUrl);
+              }
             }
           }, 500);
 

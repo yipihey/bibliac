@@ -7,7 +7,7 @@ module.exports = {
     name: 'ADS Reader',
     executableName: 'ADS Reader',
     appBundleId: 'io.adsreader.app',
-    // icon: './assets/icon',  // TODO: Add app icon
+    icon: './assets/icon',  // Electron finds .icns/.ico automatically
     // macOS code signing configuration
     // Uses environment variables for flexibility between dev and CI environments
     osxSign: {
@@ -47,7 +47,7 @@ module.exports = {
       platforms: ['darwin'],
       config: {
         name: 'ADS Reader',
-        // icon: './assets/icon.icns',  // TODO: Add DMG icon
+        icon: './assets/icon.icns',
         format: 'ULFO'
       }
     },

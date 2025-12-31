@@ -16,7 +16,8 @@ public class ICloudPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "readdir", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stat", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "copy", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "rename", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "rename", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "copyFromLocal", returnType: CAPPluginReturnPromise)
     ]
 
     private let containerIdentifier = "iCloud.io.adsreader.app"
@@ -336,6 +337,43 @@ public class ICloudPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve()
         } catch {
             call.reject(error.localizedDescription)
+        }
+    }
+
+    // Copy a file from local Documents to iCloud container
+    // This avoids passing large base64 data through JavaScript
+    @objc func copyFromLocal(_ call: CAPPluginCall) {
+        guard let sourcePath = call.getString("sourcePath"),
+              let destPath = call.getString("destPath") else {
+            call.reject("sourcePath and destPath are required")
+            return
+        }
+
+        // Get source from local Documents directory
+        let docsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let sourceURL = docsURL.appendingPathComponent(sourcePath)
+
+        // Get destination in iCloud container
+        guard let destURL = getFullPath(destPath) else {
+            call.reject("iCloud container not available")
+            return
+        }
+
+        do {
+            // Create parent directory if needed
+            let parentDir = destURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+
+            // Remove destination if it exists
+            if FileManager.default.fileExists(atPath: destURL.path) {
+                try FileManager.default.removeItem(at: destURL)
+            }
+
+            // Copy file from local to iCloud
+            try FileManager.default.copyItem(at: sourceURL, to: destURL)
+            call.resolve(["uri": destURL.absoluteString])
+        } catch {
+            call.reject("Copy failed: \(error.localizedDescription)")
         }
     }
 }

@@ -150,30 +150,50 @@
         </div>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section settings-section">
         <div class="section-header collapsible" id="settings-header">
           <span>Settings</span>
           <span class="section-toggle" id="settings-toggle">▼</span>
         </div>
         <div class="settings-items" id="settings-items">
-          <div class="nav-item" id="ads-settings-btn">
-            <span class="nav-icon">🔑</span>
-            <span>ADS API Token</span>
-            <span class="nav-status" id="ads-status">●</span>
+          <!-- ADS API Token - Inline expandable -->
+          <div class="settings-group" id="ads-settings-group">
+            <div class="settings-group-header" id="ads-settings-btn">
+              <span class="nav-icon">🔑</span>
+              <span>ADS API Token</span>
+              <span class="nav-status" id="ads-status">●</span>
+              <span class="settings-expand-icon">▶</span>
+            </div>
+            <div class="settings-group-content hidden" id="ads-settings-content">
+              <input type="password" id="ads-token-inline" placeholder="Enter ADS API token">
+              <div class="settings-inline-actions">
+                <a href="#" class="settings-help-link" id="ads-token-help-link">Get token</a>
+                <button class="settings-save-btn" id="ads-token-save-inline">Save</button>
+              </div>
+            </div>
           </div>
-          <div class="nav-item" id="library-proxy-btn">
-            <span class="nav-icon">🏛️</span>
-            <span>Library Proxy</span>
-            <span class="nav-status" id="proxy-status">●</span>
+
+          <!-- Library Proxy - Inline expandable -->
+          <div class="settings-group" id="proxy-settings-group">
+            <div class="settings-group-header" id="library-proxy-btn">
+              <span class="nav-icon">🏛️</span>
+              <span>Library Proxy</span>
+              <span class="nav-status" id="proxy-status">●</span>
+              <span class="settings-expand-icon">▶</span>
+            </div>
+            <div class="settings-group-content hidden" id="proxy-settings-content">
+              <input type="text" id="proxy-url-inline" placeholder="https://proxy.library.edu/login?url=">
+              <div class="settings-inline-actions">
+                <button class="settings-save-btn" id="proxy-save-inline">Save</button>
+              </div>
+            </div>
           </div>
+
+          <!-- AI Integration - Opens modal (too complex for inline) -->
           <div class="nav-item" id="llm-settings-btn">
             <span class="nav-icon">🤖</span>
             <span>AI Integration</span>
             <span class="nav-status" id="llm-status">●</span>
-          </div>
-          <div class="nav-item" id="preferences-btn">
-            <span class="nav-icon">⚙️</span>
-            <span>Preferences</span>
           </div>
         </div>
       </div>
@@ -193,6 +213,7 @@
           <span class="shortcut-key">⇧P</span><span>Open in Preview</span>
           <span class="shortcut-key">c</span><span>Collections</span>
           <span class="shortcut-key">n</span><span>Notes Panel</span>
+          <span class="shortcut-key">⌘⇧N</span><span>Focus Mode</span>
           <span class="shortcut-key">1-3</span><span>Read status</span>
           <span class="shortcut-key">⇧1-4</span><span>Rating</span>
           <span class="shortcut-key">+/-</span><span>Zoom</span>
@@ -273,39 +294,21 @@
             <button class="search-shortcut-btn" data-insert="journal:">journal:</button>
             <button class="search-shortcut-btn" data-insert="source:">source:</button>
           </div>
-          <div class="sort-toolbar">
-            <button class="sort-btn active" data-sort="added" data-order="desc" title="Date Added">
-              <span class="sort-label">Added</span>
-              <span class="sort-arrow">↓</span>
+          <div class="sort-dropdown-container">
+            <button class="sort-dropdown-trigger" id="sort-dropdown-trigger">
+              <span class="sort-field-label">Date Added</span>
+              <span class="sort-direction">↓</span>
             </button>
-            <button class="sort-btn" data-sort="title" data-order="asc" title="Title">
-              <span class="sort-label">Title</span>
-              <span class="sort-arrow">↑</span>
-            </button>
-            <button class="sort-btn" data-sort="author" data-order="asc" title="First Author">
-              <span class="sort-label">Author</span>
-              <span class="sort-arrow">↑</span>
-            </button>
-            <button class="sort-btn" data-sort="year" data-order="desc" title="Publication Year">
-              <span class="sort-label">Year</span>
-              <span class="sort-arrow">↓</span>
-            </button>
-            <button class="sort-btn" data-sort="journal" data-order="asc" title="Journal">
-              <span class="sort-label">Journal</span>
-              <span class="sort-arrow">↑</span>
-            </button>
-            <button class="sort-btn" data-sort="rating" data-order="asc" title="Rating (1=seminal, 4=meh)">
-              <span class="sort-label">Rating</span>
-              <span class="sort-arrow">↑</span>
-            </button>
-            <button class="sort-btn" data-sort="citations" data-order="desc" title="Citation Count">
-              <span class="sort-label">Cites</span>
-              <span class="sort-arrow">↓</span>
-            </button>
-            <button class="sort-btn" data-sort="bibcode" data-order="asc" title="Bibcode">
-              <span class="sort-label">Bibcode</span>
-              <span class="sort-arrow">↑</span>
-            </button>
+            <div class="sort-dropdown-menu hidden" id="sort-dropdown-menu">
+              <div class="sort-option" data-sort="added">Date Added</div>
+              <div class="sort-option" data-sort="year">Year</div>
+              <div class="sort-option" data-sort="title">Title</div>
+              <div class="sort-option" data-sort="author">Author</div>
+              <div class="sort-option" data-sort="citations">Citations</div>
+              <div class="sort-option" data-sort="rating">Rating</div>
+              <div class="sort-option" data-sort="journal">Journal</div>
+              <div class="sort-option" data-sort="bibcode">Bibcode</div>
+            </div>
           </div>
           <div class="paper-list" id="paper-list">
             <!-- Paper items rendered dynamically -->
@@ -515,6 +518,7 @@
                   <button id="notes-collapse-btn" class="collapse-btn" title="Hide Notes (⌘⌥N)">▶</button>
                   <h3>Notes <span class="annotations-count" id="annotations-count"></span></h3>
                   <div class="annotations-actions">
+                    <button class="text-button desktop-only" id="focus-notes-btn" title="Focus Mode (⌘⇧N)">Focus</button>
                     <button class="text-button" id="export-annotations-btn" title="Export annotations to Markdown">Export</button>
                     <button class="text-button" id="add-note-btn" title="Add general note">+ Add</button>
                   </div>
@@ -585,6 +589,18 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Focus Notes Mode Toolbar -->
+  <div class="focus-notes-toolbar hidden" id="focus-notes-toolbar">
+    <div class="focus-notes-info">
+      <span class="focus-notes-icon">📝</span>
+      <span class="focus-notes-title" id="focus-notes-title">Taking notes...</span>
+    </div>
+    <div class="focus-notes-actions">
+      <button class="focus-notes-add-btn" id="focus-add-note-btn" title="Add note">+ Add Note</button>
+      <button class="focus-notes-exit-btn" id="focus-exit-btn">Save &amp; Exit</button>
     </div>
   </div>
 
@@ -671,8 +687,8 @@
         </label>
       </div>
       <div class="smart-collection-options hidden" id="smart-collection-options">
-        <textarea id="collection-query-input" placeholder="Enter search query (e.g., author:Smith year:2024)"></textarea>
-        <p class="query-help">Supports: author:, year:, title:, journal:, or plain text search</p>
+        <textarea id="collection-query-input" placeholder="Enter search query (e.g., status:unread year:2024)"></textarea>
+        <p class="query-help">Filters: author:, year:, title:, journal:, status:(unread|reading|read), rating:(1-4), has:(pdf|notes), citations:>N</p>
       </div>
       <div class="modal-actions">
         <button class="secondary-button" id="collection-cancel-btn">Cancel</button>
@@ -1134,6 +1150,20 @@
       <span class="pdf-zoom-level" id="pdf-zoom-display">100%</span>
       <button class="pdf-ctrl-btn" id="pdf-zoom-in">+</button>
       <button class="pdf-ctrl-btn" id="pdf-fit-width">&#8596;</button>
+      <button class="pdf-ctrl-btn" id="pdf-fullscreen-btn" title="Fullscreen">&#x26F6;</button>
+    </div>
+  </div>
+
+  <!-- PDF Fullscreen Close Button -->
+  <button class="pdf-fullscreen-close hidden" id="pdf-fullscreen-close" title="Exit fullscreen">&times;</button>
+
+  <!-- PDF Source Bottom Sheet (Mobile) -->
+  <div class="pdf-source-sheet-overlay hidden" id="pdf-source-sheet-overlay"></div>
+  <div class="pdf-source-sheet hidden" id="pdf-source-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Select PDF Source</div>
+    <div class="sheet-options" id="sheet-options">
+      <!-- Options populated by JS -->
     </div>
   </div>
 

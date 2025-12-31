@@ -127,7 +127,29 @@ class ADSReader {
     // Check if migration is needed for existing users
     await this.checkMigration();
 
-    if (this.libraryPath) {
+    // Try to auto-load the last used library
+    let libraryLoaded = false;
+
+    if (!this.libraryPath) {
+      // No library path set - check if we have a last used library ID
+      const lastLibraryId = await window.electronAPI.getCurrentLibraryId?.();
+      if (lastLibraryId) {
+        console.log('[ADSReader] Found last library ID:', lastLibraryId);
+        const libraries = await window.electronAPI.getAllLibraries();
+        const lastLib = libraries.find(l => l.id === lastLibraryId);
+        if (lastLib) {
+          console.log('[ADSReader] Auto-loading last library:', lastLib.name);
+          try {
+            await this.switchLibrary(lastLibraryId);
+            libraryLoaded = true;
+          } catch (e) {
+            console.warn('[ADSReader] Failed to auto-load last library:', e);
+          }
+        }
+      }
+    }
+
+    if (!libraryLoaded && this.libraryPath) {
       const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
       if (info) {
         this.showMainScreen(info);
@@ -148,10 +170,11 @@ class ADSReader {
             this.selectPaper(lastPaperId);
           });
         }
-      } else {
-        this.showSetupScreen();
+        libraryLoaded = true;
       }
-    } else {
+    }
+
+    if (!libraryLoaded) {
       this.showSetupScreen();
     }
 
@@ -455,9 +478,31 @@ class ADSReader {
   }
 
   setPdfScale(scale) {
+    const container = document.getElementById('pdf-container');
+
+    // Capture current page position before re-rendering
+    const targetPage = this.getCurrentVisiblePage();
+    let pageOffset = 0;
+
+    if (container) {
+      const currentWrapper = container.querySelector(`.pdf-page-wrapper[data-page="${targetPage}"]`);
+      if (currentWrapper) {
+        const wrapperRect = currentWrapper.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        // How far into the page is the viewport top?
+        const offsetIntoPage = containerRect.top - wrapperRect.top;
+        pageOffset = offsetIntoPage / currentWrapper.offsetHeight;
+        // Clamp to valid range
+        pageOffset = Math.max(0, Math.min(1, pageOffset));
+      }
+    }
+
     this.pdfScale = Math.max(0.5, Math.min(3, scale));
-    this.renderAllPages();
+    this.renderAllPages(targetPage, pageOffset);
     this.updateMobilePdfControls();
+
+    // Save zoom level
+    window.electronAPI?.setPdfZoom?.(this.pdfScale);
   }
 
   initMobilePdfControls() {
@@ -485,10 +530,124 @@ class ADSReader {
       this.fitPdfToWidth();
     });
 
+    // Fullscreen button
+    document.getElementById('pdf-fullscreen-btn')?.addEventListener('click', () => {
+      this.enterPdfFullscreen();
+    });
+
+    // Fullscreen close button
+    document.getElementById('pdf-fullscreen-close')?.addEventListener('click', () => {
+      this.exitPdfFullscreen();
+    });
+
+    // Double-tap to enter fullscreen on PDF container
+    this.setupPdfDoubleTap();
+
     // Update controls when scrolling through pages
     document.getElementById('pdf-container')?.addEventListener('scroll', () => {
       this.updateMobilePdfControls();
+      // Show close button briefly on scroll in fullscreen mode
+      if (this.isPdfFullscreen) {
+        this.showFullscreenCloseButton();
+      }
     });
+  }
+
+  setupPdfDoubleTap() {
+    const container = document.getElementById('pdf-container');
+    if (!container) return;
+
+    let lastTapTime = 0;
+    const doubleTapDelay = 300; // ms
+
+    container.addEventListener('touchend', (e) => {
+      // Only handle single-finger taps, not pinch gestures
+      if (e.touches.length > 0) return;
+
+      const currentTime = Date.now();
+      const tapLength = currentTime - lastTapTime;
+
+      if (tapLength < doubleTapDelay && tapLength > 0) {
+        // Double-tap detected
+        e.preventDefault();
+        if (this.isPdfFullscreen) {
+          this.exitPdfFullscreen();
+        } else {
+          this.enterPdfFullscreen();
+        }
+        lastTapTime = 0;
+      } else {
+        lastTapTime = currentTime;
+      }
+    });
+  }
+
+  enterPdfFullscreen() {
+    if (this.isPdfFullscreen) return;
+    this.isPdfFullscreen = true;
+
+    document.body.classList.add('pdf-fullscreen');
+
+    // Show close button
+    const closeBtn = document.getElementById('pdf-fullscreen-close');
+    if (closeBtn) {
+      closeBtn.classList.remove('hidden');
+      this.showFullscreenCloseButton();
+    }
+
+    // Hide status bar on iOS if possible
+    if (window.StatusBar?.hide) {
+      window.StatusBar.hide();
+    }
+
+    console.log('[ADSReader] Entered PDF fullscreen mode');
+  }
+
+  exitPdfFullscreen() {
+    if (!this.isPdfFullscreen) return;
+    this.isPdfFullscreen = false;
+
+    document.body.classList.remove('pdf-fullscreen');
+
+    // Hide close button
+    const closeBtn = document.getElementById('pdf-fullscreen-close');
+    if (closeBtn) {
+      closeBtn.classList.add('hidden');
+      closeBtn.classList.remove('visible');
+    }
+
+    // Clear any pending auto-hide timer
+    if (this._fullscreenCloseTimer) {
+      clearTimeout(this._fullscreenCloseTimer);
+      this._fullscreenCloseTimer = null;
+    }
+
+    // Show status bar on iOS if possible
+    if (window.StatusBar?.show) {
+      window.StatusBar.show();
+    }
+
+    console.log('[ADSReader] Exited PDF fullscreen mode');
+  }
+
+  showFullscreenCloseButton() {
+    const closeBtn = document.getElementById('pdf-fullscreen-close');
+    if (!closeBtn || !this.isPdfFullscreen) return;
+
+    // Show button
+    closeBtn.classList.add('visible');
+
+    // Clear previous timer
+    if (this._fullscreenCloseTimer) {
+      clearTimeout(this._fullscreenCloseTimer);
+    }
+
+    // Auto-hide after 3 seconds
+    this._fullscreenCloseTimer = setTimeout(() => {
+      if (this.isPdfFullscreen) {
+        closeBtn.classList.remove('visible');
+      }
+    }, 3000);
   }
 
   goToPdfPage(pageNum) {
@@ -1324,16 +1483,30 @@ class ADSReader {
           case 'console-header':
             this.toggleConsole();
             break;
-          // Settings nav-items (iOS compatibility)
+          // Settings nav-items - inline for desktop, modal for iOS
           case 'ads-settings-btn':
             console.log('[Debug] ads-settings-btn clicked via delegation');
-            this.showAdsTokenModal();
+            if (this.isIOS) {
+              this.showAdsTokenModal();
+            } else {
+              this.toggleInlineSettings('ads');
+            }
             break;
           case 'library-proxy-btn':
-            this.showLibraryProxyModal();
+            if (this.isIOS) {
+              this.showLibraryProxyModal();
+            } else {
+              this.toggleInlineSettings('proxy');
+            }
             break;
           case 'llm-settings-btn':
             this.showLlmModal();
+            break;
+          case 'ads-token-save-inline':
+            this.saveAdsTokenInline();
+            break;
+          case 'proxy-save-inline':
+            this.saveProxyInline();
             break;
           // Modal buttons (iOS compatibility)
           case 'ads-save-btn':
@@ -1565,25 +1738,25 @@ class ADSReader {
     // Settings section toggle
     document.getElementById('settings-header')?.addEventListener('click', () => this.toggleSettings());
 
-    // ADS settings
-    const adsBtn = document.getElementById('ads-settings-btn');
-    console.log('[Debug] ads-settings-btn element:', adsBtn);
-    adsBtn?.addEventListener('click', (e) => {
-      console.log('[Debug] ADS settings btn clicked', e);
-      this.showAdsTokenModal();
+    // ADS settings - Inline expandable
+    document.getElementById('ads-settings-btn')?.addEventListener('click', () => this.toggleInlineSettings('ads'));
+    document.getElementById('ads-token-save-inline')?.addEventListener('click', () => this.saveAdsTokenInline());
+    document.getElementById('ads-token-help-link')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.electronAPI.openExternal('https://ui.adsabs.harvard.edu/user/settings/token');
     });
+    // Keep modal handlers for backward compatibility
     document.getElementById('ads-cancel-btn')?.addEventListener('click', () => this.hideAdsTokenModal());
     document.getElementById('ads-save-btn')?.addEventListener('click', () => this.saveAdsToken());
 
-    // Library Proxy settings
-    document.getElementById('library-proxy-btn')?.addEventListener('click', () => this.showLibraryProxyModal());
+    // Library Proxy settings - Inline expandable
+    document.getElementById('library-proxy-btn')?.addEventListener('click', () => this.toggleInlineSettings('proxy'));
+    document.getElementById('proxy-save-inline')?.addEventListener('click', () => this.saveProxyInline());
+    // Keep modal handlers for backward compatibility
     document.getElementById('proxy-cancel-btn')?.addEventListener('click', () => this.hideLibraryProxyModal());
     document.getElementById('proxy-save-btn')?.addEventListener('click', () => this.saveLibraryProxy());
 
-    // Preferences
-    document.getElementById('preferences-btn')?.addEventListener('click', () => this.showPreferencesModal());
-    document.getElementById('preferences-cancel-btn')?.addEventListener('click', () => this.hidePreferencesModal());
-    document.getElementById('preferences-save-btn')?.addEventListener('click', () => this.savePreferences());
+    // Preferences modal removed - using defaults
     document.getElementById('ads-token-link')?.addEventListener('click', (e) => {
       e.preventDefault();
       window.electronAPI.openExternal('https://ui.adsabs.harvard.edu/user/settings/token');
@@ -1812,6 +1985,11 @@ class ADSReader {
     document.getElementById('notes-collapse-btn')?.addEventListener('click', () => this.toggleNotesPanel());
     document.getElementById('notes-collapsed-toggle')?.addEventListener('click', () => this.toggleNotesPanel());
 
+    // Focus Notes Mode (desktop only)
+    document.getElementById('focus-notes-btn')?.addEventListener('click', () => this.enterFocusNotesMode());
+    document.getElementById('focus-exit-btn')?.addEventListener('click', () => this.exitFocusNotesMode());
+    document.getElementById('focus-add-note-btn')?.addEventListener('click', () => this.addNote());
+
     // Resize handles
     this.setupResizeHandlers();
 
@@ -1947,58 +2125,93 @@ class ADSReader {
     document.addEventListener('mouseup', stopResizeAll);
 
     // Setup sort buttons
-    this.setupSortButtons();
+    this.setupSortDropdown();
 
     // Setup AI section resize handles
     this.setupAISectionResize();
   }
 
-  setupSortButtons() {
-    const sortBtns = document.querySelectorAll('.sort-btn');
+  setupSortDropdown() {
+    const trigger = document.getElementById('sort-dropdown-trigger');
+    const menu = document.getElementById('sort-dropdown-menu');
+    const options = document.querySelectorAll('.sort-option');
 
-    // Restore saved sort state
-    sortBtns.forEach(btn => {
-      const field = btn.dataset.sort;
-      if (field === this.sortField) {
-        btn.classList.add('active');
-        btn.dataset.order = this.sortOrder;
-        btn.querySelector('.sort-arrow').textContent = this.sortOrder === 'asc' ? '↑' : '↓';
-      } else {
-        btn.classList.remove('active');
-      }
+    if (!trigger || !menu) return;
+
+    // Field labels for display
+    const fieldLabels = {
+      added: 'Date Added',
+      year: 'Year',
+      title: 'Title',
+      author: 'Author',
+      citations: 'Citations',
+      rating: 'Rating',
+      journal: 'Journal',
+      bibcode: 'Bibcode'
+    };
+
+    // Update UI to reflect current sort state
+    const updateSortUI = () => {
+      const label = trigger.querySelector('.sort-field-label');
+      const direction = trigger.querySelector('.sort-direction');
+
+      label.textContent = fieldLabels[this.sortField] || 'Sort';
+      direction.textContent = this.sortOrder === 'asc' ? '↑' : '↓';
+
+      // Update active option
+      options.forEach(opt => {
+        if (opt.dataset.sort === this.sortField) {
+          opt.classList.add('active');
+          opt.dataset.direction = this.sortOrder === 'asc' ? '↑' : '↓';
+        } else {
+          opt.classList.remove('active');
+          opt.dataset.direction = '';
+        }
+      });
+    };
+
+    // Initialize UI
+    updateSortUI();
+
+    // Toggle dropdown on trigger click
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menu.classList.toggle('hidden');
     });
 
-    // Add click handlers
-    sortBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const field = btn.dataset.sort;
+    // Handle option clicks
+    options.forEach(opt => {
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const field = opt.dataset.sort;
 
         if (field === this.sortField) {
-          // Toggle order if same field
+          // Same field - toggle direction
           this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
         } else {
-          // New field - use button's default order
+          // New field - default to descending for date/year/citations, ascending for text fields
           this.sortField = field;
-          this.sortOrder = btn.dataset.order;
+          this.sortOrder = ['added', 'year', 'citations'].includes(field) ? 'desc' : 'asc';
         }
 
-        // Update all buttons
-        sortBtns.forEach(b => {
-          if (b.dataset.sort === this.sortField) {
-            b.classList.add('active');
-            b.querySelector('.sort-arrow').textContent = this.sortOrder === 'asc' ? '↑' : '↓';
-          } else {
-            b.classList.remove('active');
-          }
-        });
-
-        // Save and re-render
+        // Save preferences
         localStorage.setItem('sortField', this.sortField);
         localStorage.setItem('sortOrder', this.sortOrder);
+
+        // Update UI and re-render
+        updateSortUI();
+        menu.classList.add('hidden');
         this.sortPapers();
         this.renderPaperList();
         this.scrollToSelectedPaper();
       });
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!trigger.contains(e.target) && !menu.contains(e.target)) {
+        menu.classList.add('hidden');
+      }
     });
   }
 
@@ -2231,8 +2444,18 @@ class ADSReader {
         this.toggleSidebar();
         break;
       case 'n':
+      case 'N':
         e.preventDefault();
-        this.toggleNotesPanel();
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
+          // Cmd+Shift+N: Toggle Focus Notes Mode
+          if (this.isFocusNotesMode) {
+            this.exitFocusNotesMode();
+          } else {
+            this.enterFocusNotesMode();
+          }
+        } else {
+          this.toggleNotesPanel();
+        }
         break;
       case 'a':
         if (e.metaKey || e.ctrlKey) {
@@ -2281,12 +2504,23 @@ class ADSReader {
           this.removeSelectedPapers();
         }
         break;
+      case 'Escape':
+        // Exit focus notes mode or PDF fullscreen
+        if (this.isFocusNotesMode) {
+          this.exitFocusNotesMode();
+        } else if (this.isPdfFullscreen) {
+          this.exitPdfFullscreen();
+        }
+        break;
     }
   }
 
   showSetupScreen() {
     document.getElementById('setup-screen').classList.remove('hidden');
     document.getElementById('main-screen').classList.add('hidden');
+
+    // Hide splash screen now that UI is ready
+    this.hideSplashScreen();
 
     console.log('[ADSReader] showSetupScreen called, isIOS:', this.isIOS);
 
@@ -2394,6 +2628,24 @@ class ADSReader {
     document.getElementById('setup-screen').classList.add('hidden');
     document.getElementById('main-screen').classList.remove('hidden');
     this.updateLibraryDisplay(info);
+
+    // Hide splash screen now that UI is ready
+    this.hideSplashScreen();
+  }
+
+  // Hide the native splash screen (Capacitor)
+  hideSplashScreen() {
+    if (this._splashHidden) return; // Only hide once
+    this._splashHidden = true;
+
+    if (window.Capacitor) {
+      import('@capacitor/splash-screen').then(({ SplashScreen }) => {
+        SplashScreen.hide();
+        console.log('[ADSReader] Splash screen hidden');
+      }).catch(err => {
+        console.log('[ADSReader] SplashScreen not available:', err.message);
+      });
+    }
   }
 
   async selectLibraryFolder() {
@@ -2723,6 +2975,10 @@ class ADSReader {
     this.renderCollections();
   }
 
+  // Virtual scrolling configuration
+  PAPER_ITEM_HEIGHT = 58; // Fixed height per paper item in pixels
+  VIRTUAL_BUFFER = 5; // Extra items to render above/below visible area
+
   renderPaperList() {
     const listEl = document.getElementById('paper-list');
     console.log('renderPaperList called, papers:', this.papers.length);
@@ -2736,12 +2992,27 @@ class ADSReader {
           <button class="primary-button" id="import-first-btn">Import PDF</button>
         </div>
       `;
-      // Re-attach click handler for the import button
       document.getElementById('import-first-btn')?.addEventListener('click', () => this.importPDFs());
       return;
     }
 
-    listEl.innerHTML = this.papers.map((paper, index) => `
+    // Use virtual scrolling for large lists (>100 papers)
+    if (this.papers.length > 100) {
+      this.renderVirtualPaperList();
+    } else {
+      this.renderFullPaperList();
+    }
+  }
+
+  renderFullPaperList() {
+    const listEl = document.getElementById('paper-list');
+
+    listEl.innerHTML = this.papers.map((paper, index) => {
+      const pos = this.pdfPagePositions[paper.id];
+      const hasProgress = pos && pos.totalPages > 0 && pos.page > 1;
+      const progressPct = hasProgress ? Math.round((pos.page / pos.totalPages) * 100) : 0;
+
+      return `
       <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}" data-id="${paper.id}" data-index="${index}" draggable="true">
         <div class="paper-item-title">
           <span class="paper-item-status ${paper.read_status}"></span>
@@ -2752,14 +3023,99 @@ class ADSReader {
           <span>${paper.year || ''}</span>
           ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
           ${this.getRatingEmoji(paper.rating)}
+          ${hasProgress ? `<span class="reading-progress" title="Page ${pos.page}/${pos.totalPages} (${progressPct}%)">📖${progressPct}%</span>` : ''}
           ${paper.pdf_path ? `<button class="pdf-source-btn" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode || ''}" title="PDF">📄${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>` : ''}
           ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
         </div>
       </div>
-    `).join('');
+    `}).join('');
 
+    this.attachPaperListHandlers(listEl);
+  }
+
+  renderVirtualPaperList() {
+    const listEl = document.getElementById('paper-list');
+    const totalHeight = this.papers.length * this.PAPER_ITEM_HEIGHT;
+
+    // Create virtual scroll container
+    listEl.innerHTML = `<div class="virtual-scroll-container" style="height: ${totalHeight}px; position: relative;"></div>`;
+    const container = listEl.querySelector('.virtual-scroll-container');
+
+    // Store reference for scroll updates
+    this._virtualContainer = container;
+    this._virtualListEl = listEl;
+
+    // Initial render
+    this.updateVirtualPaperList();
+
+    // Setup scroll listener (throttled)
+    if (!this._virtualScrollHandler) {
+      let scrollTicking = false;
+      this._virtualScrollHandler = () => {
+        if (!scrollTicking) {
+          requestAnimationFrame(() => {
+            this.updateVirtualPaperList();
+            scrollTicking = false;
+          });
+          scrollTicking = true;
+        }
+      };
+      listEl.addEventListener('scroll', this._virtualScrollHandler);
+    }
+  }
+
+  updateVirtualPaperList() {
+    const listEl = this._virtualListEl || document.getElementById('paper-list');
+    const container = this._virtualContainer || listEl.querySelector('.virtual-scroll-container');
+    if (!container || !listEl) return;
+
+    const scrollTop = listEl.scrollTop;
+    const viewportHeight = listEl.clientHeight;
+
+    // Calculate visible range
+    const startIndex = Math.max(0, Math.floor(scrollTop / this.PAPER_ITEM_HEIGHT) - this.VIRTUAL_BUFFER);
+    const endIndex = Math.min(
+      this.papers.length - 1,
+      Math.ceil((scrollTop + viewportHeight) / this.PAPER_ITEM_HEIGHT) + this.VIRTUAL_BUFFER
+    );
+
+    // Generate HTML for visible items only
+    let html = '';
+    for (let i = startIndex; i <= endIndex; i++) {
+      const paper = this.papers[i];
+      const top = i * this.PAPER_ITEM_HEIGHT;
+      const pos = this.pdfPagePositions[paper.id];
+      const hasProgress = pos && pos.totalPages > 0 && pos.page > 1;
+      const progressPct = hasProgress ? Math.round((pos.page / pos.totalPages) * 100) : 0;
+
+      html += `
+        <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}"
+             data-id="${paper.id}" data-index="${i}" draggable="true"
+             style="position: absolute; top: ${top}px; left: 0; right: 0; height: ${this.PAPER_ITEM_HEIGHT}px;">
+          <div class="paper-item-title">
+            <span class="paper-item-status ${paper.read_status}"></span>
+            ${this.escapeHtml(paper.title || 'Untitled')}
+          </div>
+          <div class="paper-item-meta">
+            <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
+            <span>${paper.year || ''}</span>
+            ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
+            ${this.getRatingEmoji(paper.rating)}
+            ${hasProgress ? `<span class="reading-progress" title="Page ${pos.page}/${pos.totalPages} (${progressPct}%)">📖${progressPct}%</span>` : ''}
+            ${paper.pdf_path ? `<button class="pdf-source-btn" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode || ''}" title="PDF">📄${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>` : ''}
+            ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    container.innerHTML = html;
+    this.attachPaperListHandlers(container);
+  }
+
+  attachPaperListHandlers(container) {
     // Add click handlers with multi-select support
-    listEl.querySelectorAll('.paper-item').forEach(item => {
+    container.querySelectorAll('.paper-item').forEach(item => {
       item.addEventListener('click', (e) => {
         const id = parseInt(item.dataset.id);
         const index = parseInt(item.dataset.index);
@@ -2769,17 +3125,14 @@ class ADSReader {
       // Drag support
       item.addEventListener('dragstart', (e) => {
         const id = parseInt(item.dataset.id);
-        // If dragging an unselected item, select only it
         if (!this.selectedPapers.has(id)) {
           this.selectedPapers.clear();
           this.selectedPapers.add(id);
           this.updatePaperListSelection();
           this.updateSelectionUI();
         }
-        // Set drag data
         e.dataTransfer.setData('text/plain', 'papers');
         e.dataTransfer.effectAllowed = 'move';
-        // Show count in drag image
         item.classList.add('dragging');
       });
 
@@ -2789,7 +3142,6 @@ class ADSReader {
 
       // Drop support for attaching PDFs
       item.addEventListener('dragover', (e) => {
-        // Only accept files
         if (e.dataTransfer.types.includes('Files')) {
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
@@ -2808,7 +3160,6 @@ class ADSReader {
         const pdfFiles = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
         if (pdfFiles.length > 0) {
           const paperId = parseInt(item.dataset.id);
-          // Use webUtils.getPathForFile exposed through preload for context-isolated apps
           const pdfPath = window.electronAPI.getPathForFile(pdfFiles[0]);
           await this.attachDroppedPdf(paperId, pdfPath);
         }
@@ -2816,9 +3167,9 @@ class ADSReader {
     });
 
     // Add PDF source button handlers
-    listEl.querySelectorAll('.pdf-source-btn').forEach(btn => {
+    container.querySelectorAll('.pdf-source-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
-        e.stopPropagation(); // Don't trigger paper selection
+        e.stopPropagation();
         const paperId = parseInt(btn.dataset.paperId);
         const bibcode = btn.dataset.bibcode;
         await this.showPdfSourceDropdown(btn, paperId, bibcode);
@@ -3129,7 +3480,11 @@ class ADSReader {
         pageOffset = offsetIntoPage / currentWrapper.offsetHeight;
       }
 
-      const position = { page: currentPage, offset: pageOffset };
+      const position = {
+        page: currentPage,
+        offset: pageOffset,
+        totalPages: this.pdfDoc?.numPages || 0
+      };
       this.pdfPagePositions[this.selectedPaper.id] = position;
       // Persist to storage
       window.electronAPI.setPdfPosition(this.selectedPaper.id, position);
@@ -5366,7 +5721,13 @@ class ADSReader {
         return;
       }
 
-      // Multiple sources - show dropdown menu
+      // Multiple sources - show bottom sheet on mobile, dropdown on desktop
+      if (this.isMobileView) {
+        this.showPdfSourceSheet(paperId, availableSources, attachments);
+        return;
+      }
+
+      // Desktop: show dropdown menu
       const dropdown = document.createElement('div');
       dropdown.className = 'pdf-source-dropdown';
       dropdown.dataset.paperId = paperId;
@@ -5510,8 +5871,225 @@ class ADSReader {
     }
   }
 
+  // Mobile bottom sheet for PDF source selection
+  showPdfSourceSheet(paperId, availableSources, attachments) {
+    const overlay = document.getElementById('pdf-source-sheet-overlay');
+    const sheet = document.getElementById('pdf-source-sheet');
+    const optionsContainer = document.getElementById('sheet-options');
+
+    if (!overlay || !sheet || !optionsContainer) return;
+
+    // Store paperId for later use
+    this.sheetPaperId = paperId;
+
+    // Build options HTML
+    let html = '';
+
+    // PDF sources
+    if (availableSources.length > 0) {
+      html += '<div class="sheet-section-label">PDF Sources</div>';
+      availableSources.forEach(s => {
+        const notesBadge = s.noteCount > 0 ? `<span class="note-count-badge">${s.noteCount} notes</span>` : '';
+        const deleteBtn = s.downloaded ? `<button class="sheet-delete-btn" data-source="${s.type}">×</button>` : '';
+        const icon = s.label.split(' ')[0]; // Get emoji from label
+        const labelText = s.label.split(' ').slice(1).join(' '); // Get text without emoji
+
+        html += `
+          <div class="sheet-option${s.downloaded ? ' downloaded' : ''}" data-source="${s.type}">
+            <div class="sheet-option-content">
+              <span class="sheet-option-icon">${icon}</span>
+              <span class="sheet-option-label">${labelText}</span>
+            </div>
+            <div class="sheet-option-meta">
+              ${notesBadge}
+              ${deleteBtn}
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    // Attachments
+    if (attachments.length > 0) {
+      if (availableSources.length > 0) {
+        html += '<div class="sheet-separator"></div>';
+      }
+      html += '<div class="sheet-section-label">Attachments</div>';
+      attachments.forEach(att => {
+        const icon = att.file_type === 'pdf' ? '📄' : '📎';
+        html += `
+          <div class="sheet-option attachment-option" data-attachment-id="${att.id}" data-filename="${att.filename}" data-is-pdf="${att.file_type === 'pdf'}">
+            <div class="sheet-option-content">
+              <span class="sheet-option-icon">${icon}</span>
+              <span class="sheet-option-label">${att.original_name}</span>
+            </div>
+            <div class="sheet-option-meta">
+              <button class="sheet-delete-btn" data-attachment-id="${att.id}">×</button>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    // Cancel button
+    html += '<button class="sheet-cancel" id="sheet-cancel-btn">Cancel</button>';
+
+    optionsContainer.innerHTML = html;
+
+    // Show sheet with animation
+    overlay.classList.remove('hidden');
+    sheet.classList.remove('hidden');
+
+    // Trigger animation on next frame
+    requestAnimationFrame(() => {
+      overlay.classList.add('visible');
+      sheet.classList.add('visible');
+    });
+
+    // Add event listeners
+    this.setupSheetEventListeners(paperId);
+  }
+
+  setupSheetEventListeners(paperId) {
+    const overlay = document.getElementById('pdf-source-sheet-overlay');
+    const sheet = document.getElementById('pdf-source-sheet');
+    const optionsContainer = document.getElementById('sheet-options');
+    const cancelBtn = document.getElementById('sheet-cancel-btn');
+
+    // Close on overlay tap
+    overlay.addEventListener('click', () => this.hidePdfSourceSheet());
+
+    // Close on cancel button
+    cancelBtn?.addEventListener('click', () => this.hidePdfSourceSheet());
+
+    // Handle swipe down to dismiss
+    let startY = 0;
+    let currentY = 0;
+
+    sheet.addEventListener('touchstart', (e) => {
+      startY = e.touches[0].clientY;
+    });
+
+    sheet.addEventListener('touchmove', (e) => {
+      currentY = e.touches[0].clientY;
+      const deltaY = currentY - startY;
+      if (deltaY > 0) {
+        sheet.style.transform = `translateY(${deltaY}px)`;
+      }
+    });
+
+    sheet.addEventListener('touchend', () => {
+      const deltaY = currentY - startY;
+      if (deltaY > 100) {
+        this.hidePdfSourceSheet();
+      } else {
+        sheet.style.transform = '';
+      }
+      startY = 0;
+      currentY = 0;
+    });
+
+    // Handle PDF source taps
+    optionsContainer.querySelectorAll('.sheet-option:not(.attachment-option)').forEach(option => {
+      option.addEventListener('click', async (e) => {
+        // Don't trigger if clicking delete button
+        if (e.target.classList.contains('sheet-delete-btn')) return;
+
+        const sourceType = option.dataset.source;
+        this.hidePdfSourceSheet();
+        await this.downloadFromSource(paperId, sourceType, null);
+      });
+    });
+
+    // Handle attachment taps
+    optionsContainer.querySelectorAll('.attachment-option').forEach(option => {
+      option.addEventListener('click', async (e) => {
+        // Don't trigger if clicking delete button
+        if (e.target.classList.contains('sheet-delete-btn')) return;
+
+        const filename = option.dataset.filename;
+        const isPdf = option.dataset.isPdf === 'true';
+
+        this.hidePdfSourceSheet();
+
+        if (isPdf) {
+          const paper = this.papers.find(p => p.id === paperId);
+          if (paper) {
+            paper.pdf_path = `papers/${filename}`;
+            this.selectedPaper = paper;
+            this.switchTab('pdf');
+            await this.loadPDF(paper);
+            this.lastPdfSources[paperId] = `ATTACHMENT:${filename}`;
+            window.electronAPI.setLastPdfSource(paperId, `ATTACHMENT:${filename}`);
+          }
+        } else {
+          await window.electronAPI.openAttachment(filename);
+        }
+      });
+    });
+
+    // Handle delete buttons for PDF sources
+    optionsContainer.querySelectorAll('.sheet-option:not(.attachment-option) .sheet-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const sourceType = btn.dataset.source;
+        const paper = this.papers.find(p => p.id === paperId);
+        if (!paper) return;
+
+        const sourceTypeMap = { 'arxiv': 'EPRINT_PDF', 'publisher': 'PUB_PDF', 'ads': 'ADS_PDF' };
+        const pdfSourceType = sourceTypeMap[sourceType] || sourceType;
+
+        if (confirm(`Delete the ${sourceType} PDF for this paper?`)) {
+          const deleted = await window.electronAPI.deletePdf(paperId, pdfSourceType);
+          if (deleted) {
+            const option = btn.closest('.sheet-option');
+            option.classList.remove('downloaded');
+            option.querySelector('.sheet-option-label').textContent = option.querySelector('.sheet-option-label').textContent.replace('✓ ', '');
+            btn.remove();
+            this.addConsoleMessage(`Deleted ${sourceType} PDF`, 'info');
+          }
+        }
+      });
+    });
+
+    // Handle delete buttons for attachments
+    optionsContainer.querySelectorAll('.attachment-option .sheet-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const attachmentId = parseInt(btn.dataset.attachmentId);
+        const option = btn.closest('.sheet-option');
+        const filename = option.dataset.filename;
+
+        const result = await window.electronAPI.deleteAttachment(attachmentId);
+        if (result.success) {
+          option.remove();
+          this.addConsoleMessage(`Deleted attachment: ${filename}`, 'info');
+        }
+      });
+    });
+  }
+
+  hidePdfSourceSheet() {
+    const overlay = document.getElementById('pdf-source-sheet-overlay');
+    const sheet = document.getElementById('pdf-source-sheet');
+
+    if (!overlay || !sheet) return;
+
+    // Animate out
+    overlay.classList.remove('visible');
+    sheet.classList.remove('visible');
+    sheet.style.transform = '';
+
+    // Hide after animation
+    setTimeout(() => {
+      overlay.classList.add('hidden');
+      sheet.classList.add('hidden');
+    }, 300);
+  }
+
   async downloadFromSource(paperId, sourceType, menuItem) {
     this.hidePdfSourceDropdown();
+    this.hidePdfSourceSheet();
     console.log(`[downloadFromSource] Starting download: paperId=${paperId}, sourceType=${sourceType}`);
 
     const paper = this.papers.find(p => p.id === paperId);
@@ -5849,6 +6427,58 @@ class ADSReader {
     collapsedToggle.classList.toggle('hidden', !isHidden);
   }
 
+  // Focus Notes Mode - Split view with PDF left, Notes right
+  enterFocusNotesMode() {
+    if (this.isFocusNotesMode) return;
+    if (!this.selectedPaper) {
+      this.showNotification('Select a paper first', 'warn');
+      return;
+    }
+
+    // Ensure we're on the PDF tab and notes panel is visible
+    this.switchTab('pdf');
+
+    this.isFocusNotesMode = true;
+    document.body.classList.add('focus-notes-mode');
+
+    // Show the focus toolbar
+    const toolbar = document.getElementById('focus-notes-toolbar');
+    if (toolbar) {
+      toolbar.classList.remove('hidden');
+      // Update title with paper name
+      const titleEl = document.getElementById('focus-notes-title');
+      if (titleEl && this.selectedPaper) {
+        titleEl.textContent = this.selectedPaper.title || 'Taking notes...';
+      }
+    }
+
+    // Ensure notes panel is visible
+    const notesPanel = document.getElementById('annotations-panel');
+    if (notesPanel) {
+      notesPanel.classList.remove('hidden');
+    }
+
+    console.log('[ADSReader] Entered Focus Notes mode');
+  }
+
+  exitFocusNotesMode() {
+    if (!this.isFocusNotesMode) return;
+    this.isFocusNotesMode = false;
+
+    document.body.classList.remove('focus-notes-mode');
+
+    // Hide the focus toolbar
+    const toolbar = document.getElementById('focus-notes-toolbar');
+    if (toolbar) {
+      toolbar.classList.add('hidden');
+    }
+
+    // Notes are auto-saved, but show confirmation
+    this.showNotification('Notes saved', 'success');
+
+    console.log('[ADSReader] Exited Focus Notes mode');
+  }
+
   // ADS Token Modal
   async checkAdsToken() {
     const token = await window.electronAPI.getAdsToken();
@@ -5944,6 +6574,89 @@ class ADSReader {
     statusEl.className = 'modal-status success';
     statusEl.textContent = proxyUrl ? 'Proxy saved!' : 'Proxy cleared!';
     setTimeout(() => this.hideLibraryProxyModal(), 1000);
+  }
+
+  // Inline Settings Toggle
+  async toggleInlineSettings(type) {
+    const groupId = type === 'ads' ? 'ads-settings-group' : 'proxy-settings-group';
+    const contentId = type === 'ads' ? 'ads-settings-content' : 'proxy-settings-content';
+
+    const group = document.getElementById(groupId);
+    const content = document.getElementById(contentId);
+
+    if (!group || !content) return;
+
+    const isExpanded = group.classList.toggle('expanded');
+    content.classList.toggle('hidden', !isExpanded);
+
+    // Load current values when expanding
+    if (isExpanded) {
+      if (type === 'ads') {
+        const token = await window.electronAPI.getAdsToken();
+        document.getElementById('ads-token-inline').value = token || '';
+        document.getElementById('ads-token-inline').focus();
+      } else {
+        const proxyUrl = await window.electronAPI.getLibraryProxy();
+        document.getElementById('proxy-url-inline').value = proxyUrl || '';
+        document.getElementById('proxy-url-inline').focus();
+      }
+    }
+  }
+
+  async saveAdsTokenInline() {
+    const input = document.getElementById('ads-token-inline');
+    const btn = document.getElementById('ads-token-save-inline');
+    const token = input.value.trim();
+
+    if (!token) {
+      this.showNotification('Please enter a token', 'warn');
+      return;
+    }
+
+    btn.textContent = 'Saving...';
+    btn.disabled = true;
+
+    const result = await window.electronAPI.setAdsToken(token);
+
+    if (result.success) {
+      this.hasAdsToken = true;
+      document.getElementById('ads-status').classList.add('connected');
+      btn.textContent = '✓ Saved';
+      this.showNotification('ADS token saved', 'success');
+
+      // Collapse after success
+      setTimeout(() => {
+        btn.textContent = 'Save';
+        btn.disabled = false;
+        this.toggleInlineSettings('ads');
+      }, 1000);
+    } else {
+      btn.textContent = 'Save';
+      btn.disabled = false;
+      this.showNotification(`Invalid token: ${result.error}`, 'error');
+    }
+  }
+
+  async saveProxyInline() {
+    const input = document.getElementById('proxy-url-inline');
+    const btn = document.getElementById('proxy-save-inline');
+    const proxyUrl = input.value.trim();
+
+    btn.textContent = 'Saving...';
+    btn.disabled = true;
+
+    await window.electronAPI.setLibraryProxy(proxyUrl);
+
+    document.getElementById('proxy-status').classList.toggle('connected', !!proxyUrl);
+    btn.textContent = '✓ Saved';
+    this.showNotification(proxyUrl ? 'Proxy saved' : 'Proxy cleared', 'success');
+
+    // Collapse after success
+    setTimeout(() => {
+      btn.textContent = 'Save';
+      btn.disabled = false;
+      this.toggleInlineSettings('proxy');
+    }, 1000);
   }
 
   // Preferences Modal

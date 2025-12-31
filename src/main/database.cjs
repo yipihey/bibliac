@@ -350,8 +350,9 @@ function parseSearchQuery(query) {
   const fields = {};
   const generalTerms = [];
 
-  // Match field:value patterns (supports quoted values)
-  const fieldPattern = /(author|year|title|bibcode|journal|source):("([^"]+)"|(\S+))/gi;
+  // Match field:value patterns (supports quoted values and comparison operators)
+  // Supports: author, year, title, bibcode, journal, source, status, rating, has, citations
+  const fieldPattern = /(author|year|title|bibcode|journal|source|status|rating|has|citations):("([^"]+)"|([<>=]*\S+))/gi;
   let remaining = query;
   let match;
 
@@ -428,6 +429,53 @@ function searchPapersFullText(searchTerm, libraryPath) {
       if (fields.source && fieldMatch) {
         const sourceLower = (paper.import_source || '').toLowerCase();
         if (!sourceLower.includes(fields.source)) fieldMatch = false;
+      }
+
+      // Status filter: status:unread, status:reading, status:read
+      if (fields.status && fieldMatch) {
+        const statusLower = (paper.read_status || 'unread').toLowerCase();
+        if (statusLower !== fields.status) fieldMatch = false;
+      }
+
+      // Rating filter: rating:1, rating:2, rating:3, rating:4 (or seminal, important, useful, meh)
+      if (fields.rating && fieldMatch) {
+        const ratingMap = { 'seminal': 1, 'important': 2, 'useful': 3, 'meh': 4 };
+        let targetRating = parseInt(fields.rating);
+        if (isNaN(targetRating)) {
+          targetRating = ratingMap[fields.rating] || 0;
+        }
+        if ((paper.rating || 0) !== targetRating) fieldMatch = false;
+      }
+
+      // Has filter: has:pdf, has:notes, has:abstract
+      if (fields.has && fieldMatch) {
+        const hasType = fields.has;
+        if (hasType === 'pdf' && !paper.pdf_path) fieldMatch = false;
+        if (hasType === 'notes' && !(paper.annotation_count > 0)) fieldMatch = false;
+        if (hasType === 'abstract' && !paper.abstract) fieldMatch = false;
+      }
+
+      // Citations filter: citations:>10, citations:<5, citations:>=100
+      if (fields.citations && fieldMatch) {
+        const citationStr = fields.citations;
+        const paperCitations = paper.citation_count || 0;
+
+        if (citationStr.startsWith('>=')) {
+          const num = parseInt(citationStr.substring(2));
+          if (paperCitations < num) fieldMatch = false;
+        } else if (citationStr.startsWith('<=')) {
+          const num = parseInt(citationStr.substring(2));
+          if (paperCitations > num) fieldMatch = false;
+        } else if (citationStr.startsWith('>')) {
+          const num = parseInt(citationStr.substring(1));
+          if (paperCitations <= num) fieldMatch = false;
+        } else if (citationStr.startsWith('<')) {
+          const num = parseInt(citationStr.substring(1));
+          if (paperCitations >= num) fieldMatch = false;
+        } else {
+          const num = parseInt(citationStr);
+          if (paperCitations !== num) fieldMatch = false;
+        }
       }
 
       if (!fieldMatch) continue; // Skip this paper if field filter doesn't match

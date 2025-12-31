@@ -250,9 +250,13 @@ async function migrateLegacyData() {
 
     console.log('[API] Migration complete');
   } catch (e) {
-    // No legacy file or already migrated
-    if (!e.message?.includes('File does not exist')) {
-      console.log('[API] No legacy data to migrate or already migrated');
+    // No legacy file or already migrated - silently ignore expected file-not-found errors
+    const isExpectedError = e.message?.includes('File does not exist') ||
+                           e.message?.includes("couldn't be opened") ||
+                           e.message?.includes('no such file') ||
+                           e.message?.includes('File not found');
+    if (!isExpectedError) {
+      console.log('[API] Legacy migration error:', e.message);
     }
   }
 }
@@ -758,7 +762,13 @@ const capacitorAPI = {
           });
         }
       } catch (e) {
-        console.log('[API] No iCloud libraries.json found:', e.message);
+        // Silently ignore expected file-not-found errors for iCloud libraries.json
+        const isExpectedError = e.message?.includes("couldn't be opened") ||
+                               e.message?.includes('no such file') ||
+                               e.message?.includes('File not found');
+        if (!isExpectedError) {
+          console.log('[API] Error reading iCloud libraries.json:', e.message);
+        }
       }
     }
 
@@ -1070,7 +1080,14 @@ const capacitorAPI = {
           }
         }
       } catch (e) {
-        console.log('[API] No PDFs to migrate or error:', e.message);
+        // Silently ignore expected directory-not-found errors
+        const isExpectedError = e.message?.includes("couldn't be opened") ||
+                               e.message?.includes('no such file') ||
+                               e.message?.includes('File not found') ||
+                               e.message?.includes('does not exist');
+        if (!isExpectedError) {
+          console.log('[API] PDF migration error:', e.message);
+        }
       }
 
       // Update libraries.json in iCloud
