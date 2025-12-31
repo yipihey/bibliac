@@ -18,7 +18,27 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+// webUtils is available in Electron 22+ for getting file paths from File objects
+let webUtils;
+try {
+  webUtils = require('electron').webUtils;
+} catch (e) {
+  console.warn('webUtils not available:', e.message);
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FILE UTILITIES (for drag & drop)
+  // ═══════════════════════════════════════════════════════════════════════════
+  getPathForFile: (file) => {
+    if (webUtils && webUtils.getPathForFile) {
+      return webUtils.getPathForFile(file);
+    }
+    // Fallback for older Electron versions - file.path might work with nodeIntegration
+    return file.path || null;
+  },
+
+
   // ═══════════════════════════════════════════════════════════════════════════
   // LIBRARY MANAGEMENT
   // ═══════════════════════════════════════════════════════════════════════════
@@ -60,6 +80,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPdfPositions: () => ipcRenderer.invoke('get-pdf-positions'),
   setPdfPosition: (paperId, position) => ipcRenderer.invoke('set-pdf-position', paperId, position),
 
+  // Last viewed PDF source persistence
+  getLastPdfSources: () => ipcRenderer.invoke('get-last-pdf-sources'),
+  setLastPdfSource: (paperId, sourceType) => ipcRenderer.invoke('set-last-pdf-source', paperId, sourceType),
+
   // ═══════════════════════════════════════════════════════════════════════════
   // PAPER MANAGEMENT
   // ═══════════════════════════════════════════════════════════════════════════
@@ -83,13 +107,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setPdfPriority: (priority) => ipcRenderer.invoke('set-pdf-priority', priority),
   adsSearch: (query, options) => ipcRenderer.invoke('ads-search', query, options),
   adsLookup: (identifier, type) => ipcRenderer.invoke('ads-lookup', identifier, type),
-  adsGetReferences: (bibcode) => ipcRenderer.invoke('ads-get-references', bibcode),
-  adsGetCitations: (bibcode) => ipcRenderer.invoke('ads-get-citations', bibcode),
+  adsGetReferences: (bibcode, options) => ipcRenderer.invoke('ads-get-references', bibcode, options),
+  adsGetCitations: (bibcode, options) => ipcRenderer.invoke('ads-get-citations', bibcode, options),
   adsGetEsources: (bibcode) => ipcRenderer.invoke('ads-get-esources', bibcode),
   downloadPdfFromSource: (paperId, sourceType) => ipcRenderer.invoke('download-pdf-from-source', paperId, sourceType),
+  batchDownloadPdfs: (paperIds) => ipcRenderer.invoke('batch-download-pdfs', paperIds),
+  onBatchDownloadProgress: (callback) => ipcRenderer.on('batch-download-progress', (event, data) => callback(data)),
+  removeBatchDownloadListeners: () => ipcRenderer.removeAllListeners('batch-download-progress'),
+  attachPdfToPaper: (paperId, pdfPath) => ipcRenderer.invoke('attach-pdf-to-paper', paperId, pdfPath),
   checkPdfExists: (paperId, sourceType) => ipcRenderer.invoke('check-pdf-exists', paperId, sourceType),
   adsSyncPapers: (paperIds) => ipcRenderer.invoke('ads-sync-papers', paperIds),
   adsCancelSync: () => ipcRenderer.invoke('ads-cancel-sync'),
+  adsUpdateCitationCounts: (paperIds) => ipcRenderer.invoke('ads-update-citation-counts', paperIds),
   onAdsSyncProgress: (callback) => ipcRenderer.on('ads-sync-progress', (event, data) => callback(data)),
   removeAdsSyncListeners: () => ipcRenderer.removeAllListeners('ads-sync-progress'),
 
@@ -111,7 +140,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyCite: (paperId, style) => ipcRenderer.invoke('copy-cite', paperId, style),
   exportBibtex: (paperIds) => ipcRenderer.invoke('export-bibtex', paperIds),
   saveBibtexFile: (content) => ipcRenderer.invoke('save-bibtex-file', content),
+  saveBibtex: (paperId, bibtex) => ipcRenderer.invoke('save-bibtex', paperId, bibtex),
   importBibtex: () => ipcRenderer.invoke('import-bibtex'),
+  importBibtexFromPath: (filePath) => ipcRenderer.invoke('import-bibtex-from-path', filePath),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COLLECTIONS
@@ -128,6 +159,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ═══════════════════════════════════════════════════════════════════════════
   getReferences: (paperId) => ipcRenderer.invoke('get-references', paperId),
   getCitations: (paperId) => ipcRenderer.invoke('get-citations', paperId),
+  addReferences: (paperId, refs) => ipcRenderer.invoke('add-references', paperId, refs),
+  addCitations: (paperId, cites) => ipcRenderer.invoke('add-citations', paperId, cites),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // LLM / AI
@@ -137,7 +170,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkLlmConnection: () => ipcRenderer.invoke('check-llm-connection'),
   listLlmModels: () => ipcRenderer.invoke('list-llm-models'),
   llmSummarize: (paperId, options) => ipcRenderer.invoke('llm-summarize', paperId, options),
-  llmAsk: (paperId, question) => ipcRenderer.invoke('llm-ask', paperId, question),
+  llmAsk: (paperId, question, options) => ipcRenderer.invoke('llm-ask', paperId, question, options),
   llmExplain: (text, paperId) => ipcRenderer.invoke('llm-explain', text, paperId),
   llmGenerateEmbeddings: (paperId) => ipcRenderer.invoke('llm-generate-embeddings', paperId),
   llmGetUnindexedPapers: () => ipcRenderer.invoke('llm-get-unindexed-papers'),
@@ -151,6 +184,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onLlmStream: (callback) => ipcRenderer.on('llm-stream', (event, data) => callback(data)),
   removeLlmListeners: () => ipcRenderer.removeAllListeners('llm-stream'),
 
+  // Multi-provider LLM support
+  getAllProviders: () => ipcRenderer.invoke('get-all-providers'),
+  getApiKey: (provider) => ipcRenderer.invoke('get-api-key', provider),
+  setApiKey: (provider, key) => ipcRenderer.invoke('set-api-key', provider, key),
+  deleteApiKey: (provider) => ipcRenderer.invoke('delete-api-key', provider),
+  testProviderConnection: (provider) => ipcRenderer.invoke('test-provider-connection', provider),
+  getProviderModels: (provider) => ipcRenderer.invoke('get-provider-models', provider),
+  getSummaryPrompt: () => ipcRenderer.invoke('get-summary-prompt'),
+  setSummaryPrompt: (prompt) => ipcRenderer.invoke('set-summary-prompt', prompt),
+  resetSummaryPrompt: () => ipcRenderer.invoke('reset-summary-prompt'),
+
   // ═══════════════════════════════════════════════════════════════════════════
   // ANNOTATIONS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -161,6 +205,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createAnnotation: (paperId, data) => ipcRenderer.invoke('create-annotation', paperId, data),
   updateAnnotation: (id, data) => ipcRenderer.invoke('update-annotation', id, data),
   deleteAnnotation: (id) => ipcRenderer.invoke('delete-annotation', id),
+  exportAnnotations: (paperId) => ipcRenderer.invoke('export-annotations', paperId),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ATTACHMENTS
+  // ═══════════════════════════════════════════════════════════════════════════
+  attachFiles: (paperId, bibcode) => ipcRenderer.invoke('attach-files', paperId, bibcode),
+  getAttachments: (paperId) => ipcRenderer.invoke('get-attachments', paperId),
+  openAttachment: (filename) => ipcRenderer.invoke('open-attachment', filename),
+  deleteAttachment: (attachmentId) => ipcRenderer.invoke('delete-attachment', attachmentId),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILITIES

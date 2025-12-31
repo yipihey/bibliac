@@ -146,8 +146,33 @@ Files stored as: `papers/BIBCODE_SOURCETYPE.pdf`
 - Library proxy URL for institutional access
 - Library folder location
 
+### iCloud Libraries
+- Multiple libraries support (iCloud or local)
+- iCloud container: `iCloud.io.adsreader.app`
+- Path: `~/Library/Mobile Documents/iCloud~io~adsreader~app/Documents/`
+- Fallback for unsigned builds: `~/Documents/ADSReader-Cloud/`
+- Libraries registry: `libraries.json` in container root
+- Create, switch, and delete libraries
+- Sync conflict detection for iCloud
+
+## Code Signing
+
+See `SIGNING.md` for full documentation on:
+- Setting up Developer ID certificates
+- Environment variables for signing
+- Build commands (signed vs unsigned)
+- Notarization process
+- Troubleshooting
+
+Key files:
+- `forge.config.js` - Electron Forge signing config
+- `entitlements.mac.plist` - macOS entitlements (iCloud, network, files)
+- `ios/App/App/App.entitlements` - iOS entitlements
+
 ## Current State (Dec 2024)
 Recent work:
+- iCloud library support with multiple libraries
+- Code signing and notarization setup
 - Multi-PDF support (arxiv + publisher versions per paper)
 - PDF source dropdown with delete button
 - Citation count display and sorting

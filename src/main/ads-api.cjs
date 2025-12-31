@@ -118,7 +118,7 @@ function adsRequest(endpoint, method, token, body = null) {
  * @returns {Promise<{docs: ADSDocument[], numFound: number}>} Search results
  */
 async function search(token, query, options = {}) {
-  const fields = options.fields || 'bibcode,title,author,year,doi,abstract,keyword,pub,identifier,arxiv_class';
+  const fields = options.fields || 'bibcode,title,author,year,doi,abstract,keyword,pub,identifier,arxiv_class,citation_count';
   const rows = options.rows || 25;
   const start = options.start || 0;
 
@@ -147,11 +147,15 @@ async function getByBibcode(token, bibcode) {
  * Implements retry logic for 500/502/503 errors (up to 3 attempts with exponential backoff).
  * @param {string} token - ADS API token
  * @param {string[]} bibcodes - Array of bibcodes to look up
- * @param {number} [batchSize=50] - Number of bibcodes per API request
+ * @param {Object} [options={}] - Options (fields, batchSize)
  * @returns {Promise<ADSDocument[]>} Found documents (may be fewer than input if some not found)
  */
-async function getByBibcodes(token, bibcodes, batchSize = 50) {
+async function getByBibcodes(token, bibcodes, options = {}) {
   if (!bibcodes || bibcodes.length === 0) return [];
+
+  // Support legacy batchSize parameter
+  const batchSize = typeof options === 'number' ? options : (options.batchSize || 50);
+  const fields = typeof options === 'object' ? options.fields : undefined;
 
   const results = [];
 
@@ -168,7 +172,9 @@ async function getByBibcodes(token, bibcodes, batchSize = 50) {
     // Retry up to 3 times for server errors
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const result = await search(token, query, { rows: batch.length });
+        const searchOptions = { rows: batch.length };
+        if (fields) searchOptions.fields = fields;
+        const result = await search(token, query, searchOptions);
         console.log(`ADS returned ${result.docs?.length || 0} results for ${batch.length} bibcodes`);
         if (result.docs) {
           results.push(...result.docs);
@@ -206,7 +212,7 @@ async function getByArxiv(token, arxivId) {
 
 // Get references (papers this paper cites)
 async function getReferences(token, bibcode, options = {}) {
-  const rows = options.rows || 200;
+  const rows = options.rows || 50;
   // Quote bibcode to handle special characters like ".."
   const result = await search(token, `references(bibcode:"${bibcode}")`, {
     fields: 'bibcode,title,author,year',
@@ -217,7 +223,7 @@ async function getReferences(token, bibcode, options = {}) {
 
 // Get citations (papers that cite this paper)
 async function getCitations(token, bibcode, options = {}) {
-  const rows = options.rows || 200;
+  const rows = options.rows || 50;
   // Quote bibcode to handle special characters like ".."
   const result = await search(token, `citations(bibcode:"${bibcode}")`, {
     fields: 'bibcode,title,author,year',

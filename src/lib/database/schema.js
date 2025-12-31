@@ -1,12 +1,14 @@
 /**
- * ADS Reader - Database Schema (CommonJS version)
- * Shared schema definition for desktop platform
+ * ADS Reader Core - Database Schema
+ *
+ * Shared schema definition for both desktop and mobile platforms.
  */
 
 /**
  * SQL statements to create the database schema
  */
-const SCHEMA_SQL = `
+export const SCHEMA_SQL = `
+-- Papers table - core paper metadata
 CREATE TABLE IF NOT EXISTS papers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   bibcode TEXT UNIQUE,
@@ -31,6 +33,7 @@ CREATE TABLE IF NOT EXISTS papers (
   citation_count INTEGER DEFAULT 0
 );
 
+-- References table - papers this paper cites
 CREATE TABLE IF NOT EXISTS refs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id INTEGER,
@@ -41,6 +44,7 @@ CREATE TABLE IF NOT EXISTS refs (
   FOREIGN KEY (paper_id) REFERENCES papers(id)
 );
 
+-- Citations table - papers that cite this paper
 CREATE TABLE IF NOT EXISTS citations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id INTEGER,
@@ -51,6 +55,7 @@ CREATE TABLE IF NOT EXISTS citations (
   FOREIGN KEY (paper_id) REFERENCES papers(id)
 );
 
+-- Collections table - user-defined folders
 CREATE TABLE IF NOT EXISTS collections (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -60,6 +65,7 @@ CREATE TABLE IF NOT EXISTS collections (
   created_date TEXT
 );
 
+-- Paper-Collection junction table
 CREATE TABLE IF NOT EXISTS paper_collections (
   paper_id INTEGER,
   collection_id INTEGER,
@@ -68,6 +74,7 @@ CREATE TABLE IF NOT EXISTS paper_collections (
   FOREIGN KEY (collection_id) REFERENCES collections(id)
 );
 
+-- Annotations table - PDF highlights and notes
 CREATE TABLE IF NOT EXISTS annotations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id INTEGER NOT NULL,
@@ -82,16 +89,7 @@ CREATE TABLE IF NOT EXISTS annotations (
   FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS attachments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  paper_id INTEGER NOT NULL,
-  filename TEXT NOT NULL,
-  original_name TEXT NOT NULL,
-  file_type TEXT,
-  added_date TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
-);
-
+-- Paper summaries (LLM-generated)
 CREATE TABLE IF NOT EXISTS paper_summaries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id INTEGER UNIQUE,
@@ -102,6 +100,7 @@ CREATE TABLE IF NOT EXISTS paper_summaries (
   FOREIGN KEY (paper_id) REFERENCES papers(id)
 );
 
+-- Paper Q&A history (LLM-generated)
 CREATE TABLE IF NOT EXISTS paper_qa (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id INTEGER,
@@ -113,6 +112,7 @@ CREATE TABLE IF NOT EXISTS paper_qa (
   FOREIGN KEY (paper_id) REFERENCES papers(id)
 );
 
+-- Text embeddings for semantic search
 CREATE TABLE IF NOT EXISTS text_embeddings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id INTEGER,
@@ -122,31 +122,42 @@ CREATE TABLE IF NOT EXISTS text_embeddings (
   created_date TEXT,
   FOREIGN KEY (paper_id) REFERENCES papers(id)
 );
+
+-- Attachments table - supplementary files
+CREATE TABLE IF NOT EXISTS attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id INTEGER NOT NULL,
+  filename TEXT NOT NULL,
+  original_name TEXT,
+  file_type TEXT,
+  added_date TEXT,
+  FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
 `;
 
 /**
  * SQL statements to create indexes
  */
-const INDEXES_SQL = [
-  'CREATE INDEX IF NOT EXISTS idx_papers_bibcode ON papers(bibcode)',
-  'CREATE INDEX IF NOT EXISTS idx_papers_doi ON papers(doi)',
-  'CREATE INDEX IF NOT EXISTS idx_papers_arxiv ON papers(arxiv_id)',
-  'CREATE INDEX IF NOT EXISTS idx_papers_year ON papers(year)',
-  'CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(read_status)',
-  'CREATE INDEX IF NOT EXISTS idx_papers_rating ON papers(rating)',
-  'CREATE INDEX IF NOT EXISTS idx_refs_paper ON refs(paper_id)',
-  'CREATE INDEX IF NOT EXISTS idx_citations_paper ON citations(paper_id)',
-  'CREATE INDEX IF NOT EXISTS idx_annotations_paper ON annotations(paper_id)',
-  'CREATE INDEX IF NOT EXISTS idx_attachments_paper ON attachments(paper_id)',
-  'CREATE INDEX IF NOT EXISTS idx_embeddings_paper ON text_embeddings(paper_id)',
-  'CREATE INDEX IF NOT EXISTS idx_qa_paper ON paper_qa(paper_id)',
-  'CREATE INDEX IF NOT EXISTS idx_collections_parent ON collections(parent_id)'
-];
+export const INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_papers_bibcode ON papers(bibcode);
+CREATE INDEX IF NOT EXISTS idx_papers_doi ON papers(doi);
+CREATE INDEX IF NOT EXISTS idx_papers_arxiv ON papers(arxiv_id);
+CREATE INDEX IF NOT EXISTS idx_papers_year ON papers(year);
+CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(read_status);
+CREATE INDEX IF NOT EXISTS idx_papers_rating ON papers(rating);
+CREATE INDEX IF NOT EXISTS idx_refs_paper ON refs(paper_id);
+CREATE INDEX IF NOT EXISTS idx_citations_paper ON citations(paper_id);
+CREATE INDEX IF NOT EXISTS idx_annotations_paper ON annotations(paper_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_paper ON text_embeddings(paper_id);
+CREATE INDEX IF NOT EXISTS idx_qa_paper ON paper_qa(paper_id);
+CREATE INDEX IF NOT EXISTS idx_collections_parent ON collections(parent_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_paper ON attachments(paper_id);
+`;
 
 /**
  * Migration statements for schema updates
  */
-const MIGRATIONS = [
+export const MIGRATIONS = [
   'ALTER TABLE papers ADD COLUMN rating INTEGER DEFAULT 0',
   'ALTER TABLE papers ADD COLUMN import_source TEXT',
   'ALTER TABLE papers ADD COLUMN import_source_key TEXT',
@@ -159,18 +170,16 @@ const MIGRATIONS = [
  * Apply schema to a database
  * @param {Object} db - sql.js database instance
  */
-function applySchema(db) {
-  // Run main schema - split by semicolon and execute each statement
-  const statements = SCHEMA_SQL.split(';').filter(s => s.trim());
-  for (const stmt of statements) {
+export function applySchema(db) {
+  // Run main schema
+  db.run(SCHEMA_SQL);
+
+  // Run indexes
+  const indexStatements = INDEXES_SQL.trim().split(';').filter(s => s.trim());
+  for (const stmt of indexStatements) {
     if (stmt.trim()) {
       db.run(stmt);
     }
-  }
-
-  // Run indexes
-  for (const indexSql of INDEXES_SQL) {
-    db.run(indexSql);
   }
 
   // Run migrations (ignore errors for existing columns)
@@ -183,9 +192,20 @@ function applySchema(db) {
   }
 }
 
-module.exports = {
-  SCHEMA_SQL,
-  INDEXES_SQL,
-  MIGRATIONS,
-  applySchema
+/**
+ * Paper columns for SELECT queries
+ */
+export const PAPER_COLUMNS = [
+  'id', 'bibcode', 'doi', 'arxiv_id', 'title', 'authors', 'year',
+  'journal', 'abstract', 'keywords', 'pdf_path', 'pdf_source', 'text_path', 'bibtex',
+  'read_status', 'rating', 'added_date', 'modified_date',
+  'import_source', 'import_source_key', 'citation_count'
+];
+
+/**
+ * Default sort options
+ */
+export const DEFAULT_SORT = {
+  orderBy: 'added_date',
+  order: 'DESC'
 };

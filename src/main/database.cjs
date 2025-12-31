@@ -303,11 +303,12 @@ function getPaperByBibcode(bibcode) {
  * @returns {Paper[]} Array of papers with computed fields (is_indexed, annotation_count, citation_count)
  */
 function getAllPapers(options = {}) {
+  // Note: citation_count comes from p.citation_count (stored from ADS metadata)
+  // not from counting citations table rows (which may only have 50 entries)
   let query = `
     SELECT p.*,
       (SELECT COUNT(*) FROM text_embeddings e WHERE e.paper_id = p.id) > 0 AS is_indexed,
-      (SELECT COUNT(*) FROM annotations a WHERE a.paper_id = p.id) AS annotation_count,
-      (SELECT COUNT(*) FROM citations c WHERE c.paper_id = p.id) AS citation_count
+      (SELECT COUNT(*) FROM annotations a WHERE a.paper_id = p.id) AS annotation_count
     FROM papers p`;
   const conditions = [];
   const values = [];
@@ -514,6 +515,27 @@ function searchPapersFullText(searchTerm, libraryPath) {
       }
     }
 
+    // Search in annotations/notes for this paper
+    const annotations = getAnnotations(paper.id);
+    for (const annotation of annotations) {
+      const noteContent = (annotation.note_content || '').toLowerCase();
+      const selectionText = (annotation.selection_text || '').toLowerCase();
+      const combinedText = noteContent + ' ' + selectionText;
+
+      if (combinedText.includes(searchLower)) {
+        matchCount += 4; // Weight note matches higher than abstract
+        if (!matchSource) {
+          matchSource = 'notes';
+          // Show the matching note as context
+          const noteText = annotation.note_content || annotation.selection_text || '';
+          const idx = combinedText.indexOf(searchLower);
+          const start = Math.max(0, idx - 50);
+          const end = Math.min(noteText.length, idx + searchTerm.length + 50);
+          context = (start > 0 ? '...' : '') + noteText.substring(start, end) + (end < noteText.length ? '...' : '');
+        }
+      }
+    }
+
     if (matchCount > 0) {
       results.push({
         paper,
@@ -671,6 +693,34 @@ function getPapersInCollection(collectionId) {
     columns.forEach((col, i) => obj[col] = row[i]);
     return parsePaperRow(obj);
   });
+}
+
+/**
+ * Get a single collection by ID
+ */
+function getCollection(collectionId) {
+  const results = db.exec(`SELECT * FROM collections WHERE id = ?`, [collectionId]);
+  if (results.length === 0 || results[0].values.length === 0) return null;
+
+  const columns = results[0].columns;
+  const row = results[0].values[0];
+  const obj = {};
+  columns.forEach((col, i) => obj[col] = row[i]);
+  obj.is_smart = obj.is_smart === 1;
+  return obj;
+}
+
+/**
+ * Get papers matching a smart collection's query
+ */
+function getPapersInSmartCollection(collectionId, libraryPath) {
+  const collection = getCollection(collectionId);
+  if (!collection || !collection.is_smart || !collection.query) {
+    return [];
+  }
+
+  // Use existing search function with the stored query
+  return searchPapersFullText(collection.query, libraryPath);
 }
 
 function deleteCollection(collectionId) {
@@ -861,18 +911,17 @@ function getAllEmbeddings() {
 // Annotations
 
 function getAnnotations(paperId) {
-  const results = db.exec(`
+  // Use prepared statement since db.exec doesn't support parameterized queries
+  const stmt = db.prepare(`
     SELECT * FROM annotations
     WHERE paper_id = ?
     ORDER BY page_number, id
-  `, [paperId]);
+  `);
+  stmt.bind([paperId]);
 
-  if (results.length === 0) return [];
-
-  const columns = results[0].columns;
-  return results[0].values.map(row => {
-    const obj = {};
-    columns.forEach((col, i) => obj[col] = row[i]);
+  const annotations = [];
+  while (stmt.step()) {
+    const obj = stmt.getAsObject();
     // Parse selection_rects JSON
     if (obj.selection_rects) {
       try {
@@ -881,36 +930,40 @@ function getAnnotations(paperId) {
         obj.selection_rects = [];
       }
     }
-    return obj;
-  });
+    annotations.push(obj);
+  }
+  stmt.free();
+  return annotations;
 }
 
 function getAnnotationCountsBySource(paperId) {
-  const results = db.exec(`
+  // Use prepared statement since db.exec doesn't support parameterized queries
+  const stmt = db.prepare(`
     SELECT pdf_source, COUNT(*) as count
     FROM annotations
     WHERE paper_id = ?
     GROUP BY pdf_source
-  `, [paperId]);
-
-  if (results.length === 0) return {};
+  `);
+  stmt.bind([paperId]);
 
   const counts = {};
-  results[0].values.forEach(row => {
+  while (stmt.step()) {
+    const row = stmt.get();
     const source = row[0] || 'unknown';
     counts[source] = row[1];
-  });
+  }
+  stmt.free();
   return counts;
 }
 
 function createAnnotation(paperId, data) {
   const now = new Date().toISOString();
-  const stmt = db.prepare(`
+
+  // Use db.run() like other functions - it works with parameters
+  db.run(`
     INSERT INTO annotations (paper_id, page_number, selection_text, selection_rects, note_content, color, pdf_source, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  stmt.run([
+  `, [
     paperId,
     data.page_number || 1,
     data.selection_text || null,
@@ -921,19 +974,42 @@ function createAnnotation(paperId, data) {
     now,
     now
   ]);
-  stmt.free();
-  saveDatabase();
 
+  // Get ID immediately after insert, before saveDatabase
   const result = db.exec(`SELECT last_insert_rowid() as id`);
   const id = result[0].values[0][0];
 
-  // Return the created annotation
-  const annotation = db.exec(`SELECT * FROM annotations WHERE id = ?`, [id]);
-  if (annotation.length === 0) return null;
+  saveDatabase();
 
-  const columns = annotation[0].columns;
+  // Return the created annotation - use exec with ID directly (safe since it's from db)
+  const selectResult = db.exec(`SELECT * FROM annotations WHERE id = ${id}`);
+
+  if (selectResult.length === 0 || selectResult[0].values.length === 0) {
+    // Fallback: get the most recent annotation for this paper
+    const fallbackResult = db.exec(`SELECT * FROM annotations WHERE paper_id = ${paperId} ORDER BY id DESC LIMIT 1`);
+    if (fallbackResult.length > 0 && fallbackResult[0].values.length > 0) {
+      const columns = fallbackResult[0].columns;
+      const row = fallbackResult[0].values[0];
+      const obj = {};
+      columns.forEach((col, i) => obj[col] = row[i]);
+      if (obj.selection_rects) {
+        try {
+          obj.selection_rects = JSON.parse(obj.selection_rects);
+        } catch (e) {
+          obj.selection_rects = [];
+        }
+      }
+      return obj;
+    }
+    return null;
+  }
+
+  const columns = selectResult[0].columns;
+  const row = selectResult[0].values[0];
   const obj = {};
-  columns.forEach((col, i) => obj[col] = annotation[0].values[0][i]);
+  columns.forEach((col, i) => obj[col] = row[i]);
+
+  // Parse selection_rects JSON
   if (obj.selection_rects) {
     try {
       obj.selection_rects = JSON.parse(obj.selection_rects);
@@ -985,6 +1061,61 @@ function deleteAnnotationsForPaper(paperId) {
   saveDatabase();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ATTACHMENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function addAttachment(paperId, filename, originalName, fileType) {
+  const stmt = db.prepare(`
+    INSERT INTO attachments (paper_id, filename, original_name, file_type, added_date)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmt.bind([paperId, filename, originalName, fileType, new Date().toISOString()]);
+  stmt.step();
+  stmt.free();
+
+  const result = db.exec(`SELECT last_insert_rowid() as id`);
+  const id = result[0].values[0][0];
+  saveDatabase();
+
+  return { id, paper_id: paperId, filename, original_name: originalName, file_type: fileType };
+}
+
+function getAttachments(paperId) {
+  const stmt = db.prepare(`
+    SELECT * FROM attachments
+    WHERE paper_id = ?
+    ORDER BY added_date DESC
+  `);
+  stmt.bind([paperId]);
+
+  const attachments = [];
+  while (stmt.step()) {
+    attachments.push(stmt.getAsObject());
+  }
+  stmt.free();
+
+  return attachments;
+}
+
+function getAttachment(id) {
+  const stmt = db.prepare(`SELECT * FROM attachments WHERE id = ?`);
+  stmt.bind([id]);
+
+  let attachment = null;
+  if (stmt.step()) {
+    attachment = stmt.getAsObject();
+  }
+  stmt.free();
+
+  return attachment;
+}
+
+function deleteAttachment(id) {
+  db.run(`DELETE FROM attachments WHERE id = ?`, [id]);
+  saveDatabase();
+}
+
 module.exports = {
   initDatabase,
   closeDatabase,
@@ -1006,6 +1137,8 @@ module.exports = {
   addPaperToCollection,
   removePaperFromCollection,
   getPapersInCollection,
+  getCollection,
+  getPapersInSmartCollection,
   deleteCollection,
   getStats,
   // LLM functions
@@ -1027,5 +1160,10 @@ module.exports = {
   createAnnotation,
   updateAnnotation,
   deleteAnnotation,
-  deleteAnnotationsForPaper
+  deleteAnnotationsForPaper,
+  // Attachments
+  addAttachment,
+  getAttachments,
+  getAttachment,
+  deleteAttachment
 };

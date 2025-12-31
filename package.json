@@ -5,6 +5,37 @@
   "description": "Scientific publication reader with NASA ADS integration",
   "main": "main.cjs",
   "type": "module",
+  "author": "ADS Reader Team",
+  "license": "MIT",
+  "config": {
+    "forge": "./forge.config.cjs"
+  },
+  "build": {
+    "appId": "io.adsreader.app",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    }
+  },
   "scripts": {
     "start": "electron-forge start",
     "dev": "electron . --dev",
@@ -15,18 +46,20 @@
     "cap:ios": "npm run build:web && npx cap sync ios && npx cap open ios",
     "cap:ios:dev": "npx cap run ios --livereload --external",
     "package": "electron-forge package",
+    "package:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-forge package",
     "make": "electron-forge make",
+    "make:unsigned": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-forge make",
+    "make:signed": "electron-forge make",
     "lint": "eslint .",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest --watch"
   },
-  "author": "",
-  "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",
     "@aparajita/capacitor-secure-storage": "^7.1.6",
+    "@capacitor-community/file-opener": "^6.0.1",
     "@capacitor/core": "^6.0.0",
     "@capacitor/filesystem": "^6.0.0",
     "@capacitor/haptics": "^6.0.0",
@@ -37,12 +70,14 @@
     "@capacitor/status-bar": "^6.0.0",
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^8.1.0",
+    "keytar": "^7.9.0",
     "sql.js": "^1.10.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.0.0",
     "@electron-forge/cli": "^7.10.2",
     "@electron-forge/maker-deb": "^7.10.2",
+    "@electron-forge/maker-dmg": "^7.10.2",
     "@electron-forge/maker-rpm": "^7.10.2",
     "@electron-forge/maker-squirrel": "^7.10.2",
     "@electron-forge/maker-zip": "^7.10.2",

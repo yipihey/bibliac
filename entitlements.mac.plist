@@ -2,9 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Allow the app to be run -->
-    <key>com.apple.security.app-sandbox</key>
-    <false/>
+    <!-- Hardened Runtime - Required for Electron apps -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 
     <!-- iCloud Document Storage -->
     <key>com.apple.developer.icloud-container-identifiers</key>
@@ -22,12 +26,16 @@
         <string>iCloud.io.adsreader.app</string>
     </array>
 
-    <!-- Network access for ADS API -->
+    <!-- Network access for ADS API and PDF downloads -->
     <key>com.apple.security.network.client</key>
     <true/>
 
-    <!-- File access -->
+    <!-- File access for user-selected library folders -->
     <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Downloads folder access for PDFs -->
+    <key>com.apple.security.files.downloads.read-write</key>
     <true/>
 </dict>
 </plist>

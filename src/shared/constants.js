@@ -1,7 +1,13 @@
 /**
  * ADS Reader - Shared Constants
  * Used by both desktop (Electron) and mobile (Capacitor) platforms
+ *
+ * NOTE: Some constants are now available from '../lib/index.js'
  */
+
+// Re-export PDF constants from core library
+export { PDF_SOURCE_TYPES, DEFAULT_PDF_PRIORITY, PDF_SOURCE_LABELS } from '../lib/pdf/index.js';
+export { ReadStatus, RatingLabels, PDFSourceType } from '../lib/types.js';
 
 // ADS API Configuration
 export const ADS_API_BASE = 'https://api.adsabs.harvard.edu/v1';
@@ -48,22 +54,6 @@ export const APP_BUNDLE_ID = 'io.adsreader.app';
 export const LIBRARY_FOLDER_NAME = 'ADSReader';
 export const LIBRARIES_JSON = 'libraries.json';
 
-// PDF source types (in priority order by default)
-export const PDF_SOURCE_TYPES = {
-  ARXIV: 'EPRINT_PDF',
-  PUBLISHER: 'PUB_PDF',
-  ADS_SCAN: 'ADS_PDF'
-};
-
-export const DEFAULT_PDF_PRIORITY = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'];
-
-// Source type labels for UI
-export const PDF_SOURCE_LABELS = {
-  'EPRINT_PDF': 'arXiv',
-  'PUB_PDF': 'Publisher',
-  'ADS_PDF': 'ADS Scan'
-};
-
 // Database table names
 export const DB_TABLES = {
   PAPERS: 'papers',
@@ -77,14 +67,14 @@ export const DB_TABLES = {
   TEXT_EMBEDDINGS: 'text_embeddings'
 };
 
-// Read status values
+// Read status values (kept for backwards compatibility)
 export const READ_STATUS = {
   UNREAD: 'unread',
   READING: 'reading',
   READ: 'read'
 };
 
-// Rating values (1-4 scale)
+// Rating values (1-4 scale) - kept for backwards compatibility
 export const RATING_LABELS = {
   1: 'Seminal',
   2: 'Important',

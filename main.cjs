@@ -80,9 +80,46 @@ const pdfDownload = require('./src/main/pdf-download.cjs');
 const adsApi = require('./src/main/ads-api.cjs');
 const bibtex = require('./src/main/bibtex.cjs');
 const { OllamaService, PROMPTS, chunkText, cosineSimilarity, parseSummaryResponse, parseMetadataResponse } = require('./src/main/llm-service.cjs');
+const { CloudLLMService, PROVIDERS: CLOUD_PROVIDERS } = require('./src/main/cloud-llm-service.cjs');
 
-// Initialize LLM service (will be configured from settings)
-let llmService = null;
+/**
+ * Clean a DOI by removing common garbage suffixes and malformed paths
+ * @param {string} doi - Raw DOI string
+ * @returns {string} Cleaned DOI
+ */
+function cleanDOI(doi) {
+  if (!doi) return doi;
+  return doi
+    .replace(/^https?:\/\/doi\.org\//i, '')
+    .replace(/^doi:/i, '')
+    .replace(/\/CITE\/REFWORKS$/i, '')
+    .replace(/\/abstract$/i, '')
+    .replace(/\/full$/i, '')
+    .replace(/\/pdf$/i, '')
+    // Remove asset paths (e.g., /ASSET/.../filename.JPEG)
+    .replace(/\/ASSET\/.*$/i, '')
+    // Remove image file extensions and paths (e.g., /2/M_filename.GIF)
+    .replace(/\/\d+\/[^\/]*\.(gif|jpeg|jpg|png|svg|webp)$/i, '')
+    // Remove trailing image paths that don't start with /number/
+    .replace(/\/[^\/]*\.(gif|jpeg|jpg|png|svg|webp)$/i, '')
+    .trim();
+}
+
+// Optional keytar for secure API key storage (falls back to electron-store if not available)
+let keytar = null;
+try {
+  keytar = require('keytar');
+} catch (e) {
+  console.log('Keytar not available, using fallback storage for API keys');
+}
+
+// Keychain service name
+const KEYCHAIN_SERVICE = 'ads-reader';
+
+// Initialize LLM services (will be configured from settings)
+let ollamaService = null;
+let cloudService = null;
+let llmService = null; // Legacy alias for backward compatibility
 
 // Helper to send console log messages to renderer
 function sendConsoleLog(message, type = 'info') {
@@ -92,6 +129,25 @@ function sendConsoleLog(message, type = 'info') {
   // Also log to terminal
   console.log(`[${type.toUpperCase()}] ${message}`);
 }
+
+/**
+ * Wrap a promise with a timeout
+ * @param {Promise} promise - The promise to wrap
+ * @param {number} ms - Timeout in milliseconds
+ * @param {string} [operation='Operation'] - Description for error message
+ * @returns {Promise}
+ */
+function withTimeout(promise, ms, operation = 'Operation') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${operation} timed out after ${ms}ms`)), ms)
+    )
+  ]);
+}
+
+// Sync state management
+let syncInProgress = false;
 
 // Initialize preferences store
 const store = new Store({
@@ -105,6 +161,28 @@ const store = new Store({
     pdfZoom: 1.0,
     lastSelectedPaperId: null,
     llmConfig: {
+      // Provider selection: 'ollama', 'anthropic', 'gemini', 'perplexity'
+      activeProvider: 'ollama',
+      // Per-provider settings
+      ollama: {
+        endpoint: 'http://127.0.0.1:11434',
+        model: 'qwen3:30b',
+        embeddingModel: 'nomic-embed-text'
+      },
+      anthropic: {
+        model: 'claude-3-5-sonnet-20241022'
+      },
+      gemini: {
+        model: 'gemini-1.5-flash'
+      },
+      perplexity: {
+        model: 'llama-3.1-sonar-small-128k-online'
+      },
+      // Selected model for AI panel (remembers selection)
+      selectedModel: null,
+      // Custom summary prompt
+      summaryPrompt: null,
+      // Legacy fields for backward compatibility
       endpoint: 'http://127.0.0.1:11434',
       model: 'qwen3:30b',
       embeddingModel: 'nomic-embed-text'
@@ -113,22 +191,111 @@ const store = new Store({
   }
 });
 
-// Migration: fix localhost to 127.0.0.1 for IPv6 compatibility and update model
+// Migration: upgrade old llmConfig format to new multi-provider format
 const llmConfig = store.get('llmConfig');
 if (llmConfig) {
   let updated = false;
+
+  // Migrate from old flat config to new provider-based config
+  if (!llmConfig.activeProvider) {
+    llmConfig.activeProvider = 'ollama';
+    llmConfig.ollama = {
+      endpoint: llmConfig.endpoint || 'http://127.0.0.1:11434',
+      model: llmConfig.model || 'qwen3:30b',
+      embeddingModel: llmConfig.embeddingModel || 'nomic-embed-text'
+    };
+    llmConfig.anthropic = { model: 'claude-3-5-sonnet-20241022' };
+    llmConfig.gemini = { model: 'gemini-1.5-flash' };
+    llmConfig.perplexity = { model: 'llama-3.1-sonar-small-128k-online' };
+    updated = true;
+  }
+
+  // Fix localhost to 127.0.0.1 for IPv6 compatibility
   if (llmConfig.endpoint && llmConfig.endpoint.includes('localhost')) {
     llmConfig.endpoint = llmConfig.endpoint.replace('localhost', '127.0.0.1');
     updated = true;
   }
+  if (llmConfig.ollama?.endpoint && llmConfig.ollama.endpoint.includes('localhost')) {
+    llmConfig.ollama.endpoint = llmConfig.ollama.endpoint.replace('localhost', '127.0.0.1');
+    updated = true;
+  }
+
   // Update model if it's the old default
   if (llmConfig.model === 'qwen3:8b') {
     llmConfig.model = 'qwen3:30b';
     updated = true;
   }
+  if (llmConfig.ollama?.model === 'qwen3:8b') {
+    llmConfig.ollama.model = 'qwen3:30b';
+    updated = true;
+  }
+
+  // Remove legacy selectedModel and derive activeProvider from it if needed
+  if (llmConfig.selectedModel) {
+    const [provider] = llmConfig.selectedModel.split(':');
+    if (provider && ['ollama', 'anthropic', 'gemini', 'perplexity'].includes(provider)) {
+      llmConfig.activeProvider = provider;
+    }
+    delete llmConfig.selectedModel;
+    updated = true;
+  }
+
+  // Remove legacy root-level fields (now stored per-provider)
+  if ('model' in llmConfig && llmConfig.ollama) {
+    delete llmConfig.model;
+    updated = true;
+  }
+  if ('endpoint' in llmConfig && llmConfig.ollama) {
+    delete llmConfig.endpoint;
+    updated = true;
+  }
+  if ('embeddingModel' in llmConfig && llmConfig.ollama) {
+    delete llmConfig.embeddingModel;
+    updated = true;
+  }
+
   if (updated) {
     store.set('llmConfig', llmConfig);
   }
+}
+
+// Helper functions for secure API key storage
+async function getApiKey(provider) {
+  if (keytar) {
+    try {
+      return await keytar.getPassword(KEYCHAIN_SERVICE, `${provider}-api-key`);
+    } catch (e) {
+      console.error('Keytar getPassword failed:', e.message);
+    }
+  }
+  // Fallback to electron-store (less secure)
+  return store.get(`apiKeys.${provider}`);
+}
+
+async function setApiKey(provider, key) {
+  if (keytar) {
+    try {
+      if (key) {
+        await keytar.setPassword(KEYCHAIN_SERVICE, `${provider}-api-key`, key);
+      } else {
+        await keytar.deletePassword(KEYCHAIN_SERVICE, `${provider}-api-key`);
+      }
+      return true;
+    } catch (e) {
+      console.error('Keytar setPassword failed:', e.message);
+    }
+  }
+  // Fallback to electron-store (less secure)
+  if (key) {
+    store.set(`apiKeys.${provider}`, key);
+  } else {
+    store.delete(`apiKeys.${provider}`);
+  }
+  return true;
+}
+
+async function deleteApiKey(provider) {
+  return setApiKey(provider, null);
 }
 
 // Helper to extract arXiv ID from ADS identifier array
@@ -184,8 +351,9 @@ async function fetchAndApplyAdsMetadata(paperId, extractedMetadata = null) {
         database.updatePaper(paperId, { bibcode: bibcodeFromAdsUrl });
       }
     } else if (paper.doi) {
-      console.log(`Trying DOI lookup: ${paper.doi}`);
-      adsData = await adsApi.getByDOI(token, paper.doi);
+      const cleanedDoi = cleanDOI(paper.doi);
+      console.log(`Trying DOI lookup: ${cleanedDoi}`);
+      adsData = await adsApi.getByDOI(token, cleanedDoi);
     } else if (paper.arxiv_id) {
       console.log(`Trying arXiv lookup: ${paper.arxiv_id}`);
       adsData = await adsApi.getByArxiv(token, paper.arxiv_id);
@@ -203,11 +371,12 @@ async function fetchAndApplyAdsMetadata(paperId, extractedMetadata = null) {
         console.log('Extracted identifiers from content:', contentIds);
 
         if (contentIds.doi) {
-          console.log(`Trying extracted DOI: ${contentIds.doi}`);
-          adsData = await adsApi.getByDOI(token, contentIds.doi);
+          const cleanedDoi = cleanDOI(contentIds.doi);
+          console.log(`Trying extracted DOI: ${cleanedDoi}`);
+          adsData = await adsApi.getByDOI(token, cleanedDoi);
           if (adsData) {
-            // Update paper with found DOI
-            database.updatePaper(paperId, { doi: contentIds.doi });
+            // Update paper with found DOI (store cleaned version)
+            database.updatePaper(paperId, { doi: cleanedDoi });
           }
         }
         if (!adsData && contentIds.arxiv_id) {
@@ -237,14 +406,18 @@ async function fetchAndApplyAdsMetadata(paperId, extractedMetadata = null) {
           if (connectionCheck.connected) {
             try {
               console.log('Using LLM to extract metadata...');
-              const llmResponse = await service.generate(
-                PROMPTS.extractMetadata.user(textContent),
-                {
-                  systemPrompt: PROMPTS.extractMetadata.system,
-                  temperature: 0.1,
-                  maxTokens: 500,
-                  noThink: true  // Disable thinking mode for faster extraction
-                }
+              const llmResponse = await withTimeout(
+                service.generate(
+                  PROMPTS.extractMetadata.user(textContent),
+                  {
+                    systemPrompt: PROMPTS.extractMetadata.system,
+                    temperature: 0.1,
+                    maxTokens: 500,
+                    noThink: true  // Disable thinking mode for faster extraction
+                  }
+                ),
+                30000,
+                'LLM metadata extraction'
               );
               const llmMeta = parseMetadataResponse(llmResponse);
               console.log('LLM-extracted metadata:', llmMeta);
@@ -471,6 +644,15 @@ ipcMain.handle('set-pdf-position', (event, paperId, position) => {
   return true;
 });
 
+// Last viewed PDF source persistence (per paper)
+ipcMain.handle('get-last-pdf-sources', () => store.get('lastPdfSources') || {});
+ipcMain.handle('set-last-pdf-source', (event, paperId, sourceType) => {
+  const sources = store.get('lastPdfSources') || {};
+  sources[paperId] = sourceType;
+  store.set('lastPdfSources', sources);
+  return true;
+});
+
 ipcMain.handle('select-library-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Select Library Folder',
@@ -528,6 +710,33 @@ ipcMain.handle('is-icloud-available', () => {
   return isICloudAvailable();
 });
 
+// Helper function to count papers in a library folder
+function countPapersInLibrary(libraryPath) {
+  try {
+    const papersDir = path.join(libraryPath, 'papers');
+    if (!fs.existsSync(papersDir)) return 0;
+
+    const files = fs.readdirSync(papersDir);
+    // Count unique bibcodes (papers may have multiple PDFs like _EPRINT_PDF, _PUB_PDF)
+    const bibcodes = new Set();
+    for (const file of files) {
+      if (file.endsWith('.pdf')) {
+        // Extract bibcode from filename (format: BIBCODE_SOURCETYPE.pdf)
+        const match = file.match(/^(.+?)_(?:EPRINT_PDF|PUB_PDF|ADS_PDF)\.pdf$/);
+        if (match) {
+          bibcodes.add(match[1]);
+        } else {
+          // Fallback: count as unique paper
+          bibcodes.add(file);
+        }
+      }
+    }
+    return bibcodes.size;
+  } catch (e) {
+    return 0;
+  }
+}
+
 // Helper function to get all libraries (used internally and via IPC)
 function getAllLibraries() {
   const libraries = [];
@@ -554,13 +763,15 @@ function getAllLibraries() {
         for (const lib of data.libraries || []) {
           const libPath = path.join(basePath, lib.path);
           const exists = fs.existsSync(libPath);
+          const paperCount = exists ? countPapersInLibrary(libPath) : 0;
           // Avoid duplicates
           if (!libraries.find(l => l.id === lib.id)) {
             libraries.push({
               ...lib,
               fullPath: libPath,
               location: 'icloud',
-              exists
+              exists,
+              paperCount
             });
           }
         }
@@ -574,11 +785,13 @@ function getAllLibraries() {
   const localLibraries = store.get('localLibraries') || [];
   for (const lib of localLibraries) {
     const exists = fs.existsSync(lib.path);
+    const paperCount = exists ? countPapersInLibrary(lib.path) : 0;
     libraries.push({
       ...lib,
       fullPath: lib.path,
       location: 'local',
-      exists
+      exists,
+      paperCount
     });
   }
 
@@ -1217,7 +1430,37 @@ ipcMain.handle('import-pdfs', async () => {
 
 ipcMain.handle('get-all-papers', (event, options) => {
   if (!dbInitialized) return [];
-  return database.getAllPapers(options);
+  const papers = database.getAllPapers(options);
+  const libraryPath = store.get('libraryPath');
+
+  // Check for PDFs on disk for papers without pdf_path set
+  if (libraryPath) {
+    const papersDir = path.join(libraryPath, 'papers');
+    const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF', 'ATTACHED'];
+
+    for (const paper of papers) {
+      // Skip if already has pdf_path
+      if (paper.pdf_path) continue;
+
+      // Check if any PDF exists for this paper
+      if (paper.bibcode) {
+        const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+        for (const sourceType of sourceTypes) {
+          const filename = `${baseFilename}_${sourceType}.pdf`;
+          const filePath = path.join(papersDir, filename);
+          if (fs.existsSync(filePath)) {
+            // Found a PDF, set pdf_path for display purposes
+            paper.pdf_path = `papers/${filename}`;
+            // Also update database so this fix persists
+            database.updatePaper(paper.id, { pdf_path: paper.pdf_path });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return papers;
 });
 
 ipcMain.handle('get-paper', (event, id) => {
@@ -1312,7 +1555,8 @@ ipcMain.handle('set-ads-token', async (event, token) => {
 });
 
 // Library proxy URL for accessing publisher PDFs through institutional access
-ipcMain.handle('get-library-proxy', () => store.get('libraryProxyUrl'));
+const DEFAULT_LIBRARY_PROXY = 'https://stanford.idm.oclc.org/login?url=';
+ipcMain.handle('get-library-proxy', () => store.get('libraryProxyUrl') || DEFAULT_LIBRARY_PROXY);
 
 ipcMain.handle('set-library-proxy', (event, proxyUrl) => {
   // Validate and normalize the proxy URL for EZProxy format
@@ -1402,24 +1646,24 @@ ipcMain.handle('ads-lookup', async (event, identifier, type) => {
   }
 });
 
-ipcMain.handle('ads-get-references', async (event, bibcode) => {
+ipcMain.handle('ads-get-references', async (event, bibcode, options = {}) => {
   const token = store.get('adsToken');
   if (!token) return { success: false, error: 'No ADS API token configured' };
 
   try {
-    const refs = await adsApi.getReferences(token, bibcode);
+    const refs = await adsApi.getReferences(token, bibcode, { rows: options.limit || 50 });
     return { success: true, data: refs };
   } catch (error) {
     return { success: false, error: error.message };
   }
 });
 
-ipcMain.handle('ads-get-citations', async (event, bibcode) => {
+ipcMain.handle('ads-get-citations', async (event, bibcode, options = {}) => {
   const token = store.get('adsToken');
   if (!token) return { success: false, error: 'No ADS API token configured' };
 
   try {
-    const cits = await adsApi.getCitations(token, bibcode);
+    const cits = await adsApi.getCitations(token, bibcode, { rows: options.limit || 50 });
     return { success: true, data: cits };
   } catch (error) {
     return { success: false, error: error.message };
@@ -1684,6 +1928,182 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
   }
 });
 
+// Batch download PDFs for multiple papers
+ipcMain.handle('batch-download-pdfs', async (event, paperIds) => {
+  const token = store.get('adsToken');
+  const libraryPath = store.get('libraryPath');
+  const proxyUrl = store.get('libraryProxyUrl');
+  const pdfPriority = store.get('pdfPriority', ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF']);
+
+  if (!libraryPath) return { success: false, error: 'No library path configured' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  if (!token) return { success: false, error: 'ADS token not configured' };
+
+  const results = { success: [], failed: [], skipped: [] };
+  const total = paperIds.length;
+
+  sendConsoleLog(`Starting batch PDF download for ${total} papers...`, 'info');
+
+  for (let i = 0; i < paperIds.length; i++) {
+    const paperId = paperIds[i];
+    const paper = database.getPaper(paperId);
+
+    if (!paper) {
+      results.failed.push({ paperId, error: 'Paper not found' });
+      continue;
+    }
+
+    // Skip papers that already have a PDF
+    if (paper.pdf_path && fs.existsSync(path.join(libraryPath, paper.pdf_path))) {
+      results.skipped.push({ paperId, bibcode: paper.bibcode, reason: 'Already has PDF' });
+      event.sender.send('batch-download-progress', {
+        current: i + 1,
+        total,
+        status: 'skipped',
+        bibcode: paper.bibcode
+      });
+      continue;
+    }
+
+    if (!paper.bibcode) {
+      results.failed.push({ paperId, error: 'No bibcode' });
+      event.sender.send('batch-download-progress', {
+        current: i + 1,
+        total,
+        status: 'failed',
+        error: 'No bibcode'
+      });
+      continue;
+    }
+
+    try {
+      // Get esources
+      const esources = await adsApi.getEsources(token, paper.bibcode);
+      if (!esources || esources.length === 0) {
+        results.failed.push({ paperId, bibcode: paper.bibcode, error: 'No PDF sources' });
+        event.sender.send('batch-download-progress', {
+          current: i + 1,
+          total,
+          status: 'failed',
+          bibcode: paper.bibcode,
+          error: 'No PDF sources'
+        });
+        continue;
+      }
+
+      // Try to download PDF based on priority
+      let downloaded = false;
+      for (const sourceType of pdfPriority) {
+        let targetSource = null;
+        for (const source of esources) {
+          const linkType = source.link_type || source.type || '';
+          if (linkType.includes(sourceType) && source.url && source.url.startsWith('http')) {
+            targetSource = source;
+            break;
+          }
+        }
+
+        if (targetSource) {
+          // Generate filename
+          const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const filename = `${baseFilename}_${sourceType}.pdf`;
+          const destPath = path.join(libraryPath, 'papers', filename);
+
+          // Ensure papers directory exists
+          const papersDir = path.join(libraryPath, 'papers');
+          if (!fs.existsSync(papersDir)) {
+            fs.mkdirSync(papersDir, { recursive: true });
+          }
+
+          // Download
+          let downloadUrl = targetSource.url;
+          if (sourceType === 'PUB_PDF' && proxyUrl) {
+            downloadUrl = proxyUrl + encodeURIComponent(targetSource.url);
+          }
+
+          try {
+            await pdfDownload.downloadFile(downloadUrl, destPath);
+            const relativePath = `papers/${filename}`;
+            database.updatePaper(paperId, { pdf_path: relativePath });
+            results.success.push({ paperId, bibcode: paper.bibcode, source: sourceType });
+            downloaded = true;
+            break;
+          } catch (dlErr) {
+            // Try next source type
+            continue;
+          }
+        }
+      }
+
+      if (!downloaded) {
+        results.failed.push({ paperId, bibcode: paper.bibcode, error: 'All sources failed' });
+      }
+
+      event.sender.send('batch-download-progress', {
+        current: i + 1,
+        total,
+        status: downloaded ? 'success' : 'failed',
+        bibcode: paper.bibcode
+      });
+
+      // Rate limiting - delay between downloads
+      if (i < paperIds.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    } catch (error) {
+      results.failed.push({ paperId, bibcode: paper.bibcode, error: error.message });
+      event.sender.send('batch-download-progress', {
+        current: i + 1,
+        total,
+        status: 'failed',
+        bibcode: paper.bibcode,
+        error: error.message
+      });
+    }
+  }
+
+  sendConsoleLog(`Batch download complete: ${results.success.length} downloaded, ${results.skipped.length} skipped, ${results.failed.length} failed`, 'success');
+  return { success: true, results };
+});
+
+// Attach a PDF file to a paper (copies file to library storage)
+ipcMain.handle('attach-pdf-to-paper', async (event, paperId, sourcePdfPath) => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library path configured' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  const paper = database.getPaper(paperId);
+  if (!paper) return { success: false, error: 'Paper not found' };
+
+  try {
+    // Ensure papers directory exists
+    const papersDir = path.join(libraryPath, 'papers');
+    if (!fs.existsSync(papersDir)) {
+      fs.mkdirSync(papersDir, { recursive: true });
+    }
+
+    // Generate filename based on bibcode or paper ID
+    const baseFilename = paper.bibcode
+      ? paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_')
+      : `paper_${paperId}`;
+    const filename = `${baseFilename}_ATTACHED.pdf`;
+    const destPath = path.join(papersDir, filename);
+
+    // Copy the file to library storage
+    fs.copyFileSync(sourcePdfPath, destPath);
+
+    // Update database with relative path and source type
+    const relativePath = `papers/${filename}`;
+    database.updatePaper(paperId, { pdf_path: relativePath, pdf_source: 'ATTACHED' });
+
+    sendConsoleLog(`Attached PDF to paper: ${paper.title?.substring(0, 40)}...`, 'success');
+    return { success: true, pdfPath: relativePath, sourceType: 'ATTACHED' };
+  } catch (error) {
+    sendConsoleLog(`Failed to attach PDF: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
+});
+
 // Sync cancellation flag
 let syncCancelled = false;
 
@@ -1696,12 +2116,25 @@ ipcMain.handle('ads-cancel-sync', () => {
 
 // Sync selected papers with ADS - optimized bulk sync with parallel processing
 ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
+  // Prevent concurrent syncs
+  if (syncInProgress) {
+    sendConsoleLog('Sync already in progress, please wait', 'warn');
+    return { success: false, error: 'Sync already in progress' };
+  }
+  syncInProgress = true;
+
   // Reset cancel flag at start
   syncCancelled = false;
 
   const token = store.get('adsToken');
-  if (!token) return { success: false, error: 'No ADS API token configured' };
-  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  if (!token) {
+    syncInProgress = false;
+    return { success: false, error: 'No ADS API token configured' };
+  }
+  if (!dbInitialized) {
+    syncInProgress = false;
+    return { success: false, error: 'Database not initialized' };
+  }
 
   const libraryPath = store.get('libraryPath');
 
@@ -1815,7 +2248,7 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
           const proxyUrl = store.get('libraryProxyUrl');
           const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
           const downloadResult = await pdfDownload.downloadPDF(
-            { ...paper, ...metadata },
+            { ...paper, ...mergedMetadata },
             libraryPath,
             token,
             adsApi,
@@ -1996,19 +2429,11 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
     try {
       let adsData = null;
       if (paper.doi) {
-        // Clean DOI - remove common garbage suffixes and prefixes
-        let cleanDoi = paper.doi
-          .replace(/^https?:\/\/doi\.org\//i, '')
-          .replace(/^doi:/i, '')
-          .replace(/\/CITE\/REFWORKS$/i, '')
-          .replace(/\/abstract$/i, '')
-          .replace(/\/full$/i, '')
-          .replace(/\/pdf$/i, '')
-          .trim();
-        sendConsoleLog(`Trying DOI: ${cleanDoi}`, 'info');
-        adsData = await adsApi.getByDOI(token, cleanDoi);
+        const cleanedDoi = cleanDOI(paper.doi);
+        sendConsoleLog(`Trying DOI: ${cleanedDoi}`, 'info');
+        adsData = await adsApi.getByDOI(token, cleanedDoi);
         if (adsData) {
-          sendConsoleLog(`Found via DOI: ${cleanDoi}`, 'success');
+          sendConsoleLog(`Found via DOI: ${cleanedDoi}`, 'success');
         }
       }
       if (!adsData && paper.arxiv_id) {
@@ -2169,14 +2594,18 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
               if (connectionCheck.connected) {
                 try {
                   sendConsoleLog(`[${shortTitle}] Using LLM to extract metadata...`, 'info');
-                  const llmResponse = await service.generate(
-                    PROMPTS.extractMetadata.user(textContent.substring(0, 8000)),
-                    {
-                      systemPrompt: PROMPTS.extractMetadata.system,
-                      temperature: 0.1,
-                      maxTokens: 500,
-                      noThink: true
-                    }
+                  const llmResponse = await withTimeout(
+                    service.generate(
+                      PROMPTS.extractMetadata.user(textContent.substring(0, 8000)),
+                      {
+                        systemPrompt: PROMPTS.extractMetadata.system,
+                        temperature: 0.1,
+                        maxTokens: 500,
+                        noThink: true
+                      }
+                    ),
+                    30000,
+                    'LLM metadata extraction'
                   );
                   const llmMeta = parseMetadataResponse(llmResponse);
 
@@ -2298,7 +2727,68 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
     cancelled ? 'warn' : (results.failed > 0 ? 'warn' : 'success'));
   mainWindow.webContents.send('ads-sync-progress', { done: true, results, cancelled });
 
+  // Release sync lock
+  syncInProgress = false;
+
   return { success: true, results, cancelled };
+});
+
+// Update citation counts only (lightweight sync - just gets citation_count from ADS)
+ipcMain.handle('ads-update-citation-counts', async (event, paperIds = null) => {
+  const token = store.get('adsToken');
+  if (!token) {
+    return { success: false, error: 'No ADS API token configured' };
+  }
+  if (!dbInitialized) {
+    return { success: false, error: 'Database not initialized' };
+  }
+
+  // Get papers to update
+  let papers;
+  if (paperIds && paperIds.length > 0) {
+    papers = paperIds.map(id => database.getPaper(id)).filter(p => p && p.bibcode);
+  } else {
+    papers = database.getAllPapers().filter(p => p.bibcode);
+  }
+
+  if (papers.length === 0) {
+    return { success: true, updated: 0 };
+  }
+
+  sendConsoleLog(`Updating citation counts for ${papers.length} papers...`, 'info');
+
+  const bibcodes = papers.map(p => p.bibcode);
+
+  try {
+    // Batch fetch just bibcode and citation_count
+    const adsResults = await adsApi.getByBibcodes(token, bibcodes, {
+      fields: 'bibcode,citation_count'
+    });
+
+    const adsMap = new Map();
+    for (const r of adsResults) {
+      adsMap.set(r.bibcode, r.citation_count || 0);
+      // Also try normalized bibcode
+      adsMap.set(r.bibcode.replace(/\./g, ''), r.citation_count || 0);
+    }
+
+    let updated = 0;
+    for (const paper of papers) {
+      const count = adsMap.get(paper.bibcode) ?? adsMap.get(paper.bibcode.replace(/\./g, ''));
+      if (count !== undefined && count !== paper.citation_count) {
+        database.updatePaper(paper.id, { citation_count: count }, false);
+        updated++;
+      }
+    }
+
+    database.saveDatabase();
+    sendConsoleLog(`Updated citation counts for ${updated} papers`, 'success');
+
+    return { success: true, updated, total: papers.length };
+  } catch (error) {
+    sendConsoleLog(`Citation count update failed: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
 });
 
 // ===== ADS Search & Import IPC Handlers =====
@@ -2364,11 +2854,55 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
     });
 
     try {
-      // Skip if already in library
-      if (paper.bibcode && database.getPaperByBibcode(paper.bibcode)) {
-        sendConsoleLog(`[${paper.bibcode}] Already in library, skipping`, 'warn');
-        results.skipped.push({ paper, reason: 'Already in library' });
-        continue;
+      // Check if already in library - improved duplicate detection
+      if (paper.bibcode) {
+        const existing = database.getPaperByBibcode(paper.bibcode);
+        if (existing) {
+          // Paper exists - check if it already has a PDF
+          if (existing.pdf_path) {
+            // Has PDF - skip entirely
+            sendConsoleLog(`[${paper.bibcode}] Already has PDF, skipping`, 'info');
+            results.skipped.push({ paper, reason: 'Already has PDF' });
+            continue;
+          } else {
+            // No PDF - try to download PDF for existing paper
+            sendConsoleLog(`[${paper.bibcode}] Exists but missing PDF, attempting download...`, 'info');
+
+            const proxyUrl = store.get('libraryProxyUrl');
+            const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
+            const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl, pdfPriority,
+              (msg, type) => sendConsoleLog(`[${paper.bibcode}] ${msg}`, type)
+            );
+
+            if (downloadResult.success && downloadResult.path) {
+              // Extract text from downloaded PDF
+              const textFilename = path.basename(downloadResult.path, '.pdf') + '.txt';
+              const fullTextPath = path.join(libraryPath, 'text', textFilename);
+
+              // Ensure text directory exists
+              const textDir = path.join(libraryPath, 'text');
+              if (!fs.existsSync(textDir)) {
+                fs.mkdirSync(textDir, { recursive: true });
+              }
+
+              await pdfImport.extractText(downloadResult.path, fullTextPath);
+              const textPath = `text/${textFilename}`;
+
+              // Update existing paper with PDF path
+              database.updatePaper(existing.id, {
+                pdf_path: downloadResult.pdf_path,
+                text_path: textPath
+              });
+
+              sendConsoleLog(`[${paper.bibcode}] PDF downloaded for existing paper`, 'success');
+              results.imported.push({ paper, id: existing.id, hasPdf: true, pdfSource: downloadResult.source, wasUpdate: true });
+            } else {
+              sendConsoleLog(`[${paper.bibcode}] Still no PDF available`, 'warn');
+              results.skipped.push({ paper, reason: 'No PDF available (existing paper)' });
+            }
+            continue;
+          }
+        }
       }
 
       sendConsoleLog(`[${paper.bibcode || 'unknown'}] Importing...`, 'info');
@@ -2557,6 +3091,42 @@ ipcMain.handle('save-bibtex-file', async (event, content) => {
   return { success: true, path: result.filePath };
 });
 
+// Save edited BibTeX and update paper metadata
+ipcMain.handle('save-bibtex', async (event, paperId, bibtexString) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    // Parse BibTeX to extract metadata
+    const parsed = bibtex.parseSingleBibtexEntry(bibtexString);
+
+    // Build updates object with bibtex and any parsed fields
+    const updates = {
+      bibtex: bibtexString
+    };
+
+    // Only update fields that were successfully parsed
+    if (parsed) {
+      if (parsed.title) updates.title = parsed.title;
+      if (parsed.authors) updates.authors = parsed.authors;
+      if (parsed.year) updates.year = parsed.year;
+      if (parsed.journal) updates.journal = parsed.journal;
+      if (parsed.doi) updates.doi = parsed.doi;
+      if (parsed.arxiv_id) updates.arxiv_id = parsed.arxiv_id;
+      if (parsed.abstract) updates.abstract = parsed.abstract;
+      // Don't overwrite bibcode from BibTeX - it should remain stable
+    }
+
+    database.updatePaper(paperId, updates);
+
+    // Return the updated paper
+    const updatedPaper = database.getPaper(paperId);
+    return { success: true, paper: updatedPaper };
+  } catch (error) {
+    console.error('Error saving BibTeX:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('import-bibtex', async () => {
   const libraryPath = store.get('libraryPath');
   if (!libraryPath) return { success: false, error: 'No library selected' };
@@ -2626,6 +3196,54 @@ ipcMain.handle('import-bibtex', async () => {
   }
 });
 
+// Import BibTeX from file path (for drag & drop)
+ipcMain.handle('import-bibtex-from-path', async (event, filePath) => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library selected' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    const filename = path.basename(filePath);
+    sendConsoleLog(`Importing BibTeX: ${filename}`, 'info');
+    const entries = bibtex.importBibtex(filePath);  // Already sets import_source
+
+    if (entries.length === 0) {
+      sendConsoleLog(`No entries found in ${filename}`, 'warn');
+      return { success: true, imported: 0, skipped: 0 };
+    }
+    sendConsoleLog(`Found ${entries.length} entries in ${filename}`, 'info');
+
+    mainWindow.webContents.send('import-progress', {
+      current: 0, total: entries.length, paper: 'Starting import...'
+    });
+
+    const bulkResult = database.addPapersBulk(entries, (progress) => {
+      mainWindow.webContents.send('import-progress', {
+        current: progress.current, total: progress.total,
+        inserted: progress.inserted, skipped: progress.skipped,
+        paper: entries[progress.current - 1]?.title || 'Processing...'
+      });
+    });
+
+    const allPapers = database.getAllPapers();
+    bibtex.updateMasterBib(libraryPath, allPapers);
+
+    sendConsoleLog(`Import complete: ${bulkResult.inserted.length} added, ${bulkResult.skipped.length} skipped`,
+      bulkResult.inserted.length > 0 ? 'success' : 'info');
+    mainWindow.webContents.send('import-complete', {
+      imported: bulkResult.inserted.length, skipped: bulkResult.skipped.length
+    });
+
+    return {
+      success: true,
+      imported: bulkResult.inserted.length,
+      skipped: bulkResult.skipped.length
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // ===== Collections IPC Handlers =====
 
 ipcMain.handle('get-collections', () => {
@@ -2658,6 +3276,14 @@ ipcMain.handle('remove-paper-from-collection', (event, paperId, collectionId) =>
 
 ipcMain.handle('get-papers-in-collection', (event, collectionId) => {
   if (!dbInitialized) return [];
+
+  // Check if this is a smart collection
+  const collection = database.getCollection(collectionId);
+  if (collection && collection.is_smart) {
+    const libraryPath = store.get('libraryPath');
+    return database.getPapersInSmartCollection(collectionId, libraryPath);
+  }
+
   return database.getPapersInCollection(collectionId);
 });
 
@@ -2673,15 +3299,134 @@ ipcMain.handle('get-citations', (event, paperId) => {
   return database.getCitations(paperId);
 });
 
+ipcMain.handle('add-references', (event, paperId, refs) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    database.addReferences(paperId, refs);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('add-citations', (event, paperId, cites) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    database.addCitations(paperId, cites);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // ===== LLM IPC Handlers =====
 
-// Initialize or get LLM service
+// Initialize or get Ollama service
+function getOllamaService() {
+  if (!ollamaService) {
+    const config = store.get('llmConfig');
+    const ollamaConfig = config.ollama || {
+      endpoint: config.endpoint || 'http://127.0.0.1:11434',
+      model: config.model || 'qwen3:30b',
+      embeddingModel: config.embeddingModel || 'nomic-embed-text'
+    };
+    ollamaService = new OllamaService(ollamaConfig);
+  }
+  return ollamaService;
+}
+
+// Initialize or get Cloud LLM service for a specific provider
+async function getCloudService(provider) {
+  const config = store.get('llmConfig');
+  const providerConfig = config[provider] || {};
+  const apiKey = await getApiKey(provider);
+
+  if (!cloudService || cloudService.provider !== provider) {
+    cloudService = new CloudLLMService({
+      provider,
+      apiKey,
+      model: providerConfig.model || CLOUD_PROVIDERS[provider]?.defaultModel
+    });
+  } else {
+    cloudService.setConfig({
+      provider,
+      apiKey,
+      model: providerConfig.model
+    });
+  }
+
+  return cloudService;
+}
+
+// Get the active LLM service based on configuration
+async function getActiveLlmService(overrideProvider = null) {
+  const config = store.get('llmConfig');
+  const provider = overrideProvider || config.activeProvider || 'ollama';
+
+  if (provider === 'ollama') {
+    return getOllamaService();
+  } else {
+    return await getCloudService(provider);
+  }
+}
+
+// Legacy function for backward compatibility
 function getLlmService() {
   if (!llmService) {
-    const config = store.get('llmConfig');
-    llmService = new OllamaService(config);
+    llmService = getOllamaService();
   }
   return llmService;
+}
+
+// Get all available providers with their status
+async function getAllProviders() {
+  const config = store.get('llmConfig');
+  const providers = [];
+
+  // Ollama
+  const ollamaConfig = config.ollama || {};
+  let ollamaStatus = { connected: false };
+  try {
+    const ollama = getOllamaService();
+    ollamaStatus = await ollama.checkConnection();
+  } catch (e) {
+    ollamaStatus = { connected: false, error: e.message };
+  }
+
+  providers.push({
+    id: 'ollama',
+    name: 'Ollama (Local)',
+    type: 'local',
+    configured: true, // Ollama doesn't need API key
+    connected: ollamaStatus.connected,
+    error: ollamaStatus.error,
+    config: {
+      endpoint: ollamaConfig.endpoint || 'http://127.0.0.1:11434',
+      model: ollamaConfig.model,
+      embeddingModel: ollamaConfig.embeddingModel
+    }
+  });
+
+  // Cloud providers
+  for (const [providerId, providerInfo] of Object.entries(CLOUD_PROVIDERS)) {
+    const apiKey = await getApiKey(providerId);
+    const providerConfig = config[providerId] || {};
+
+    providers.push({
+      id: providerId,
+      name: providerInfo.name,
+      type: 'cloud',
+      configured: !!apiKey,
+      hasApiKey: !!apiKey,
+      config: {
+        model: providerConfig.model || providerInfo.defaultModel
+      },
+      models: providerInfo.models,
+      defaultModel: providerInfo.defaultModel
+    });
+  }
+
+  return providers;
 }
 
 ipcMain.handle('get-llm-config', () => {
@@ -2690,23 +3435,171 @@ ipcMain.handle('get-llm-config', () => {
 
 ipcMain.handle('set-llm-config', async (event, config) => {
   store.set('llmConfig', config);
-  // Update existing service
-  if (llmService) {
-    llmService.updateConfig(config);
-  } else {
-    llmService = new OllamaService(config);
-  }
+  // Reset services to pick up new config
+  ollamaService = null;
+  cloudService = null;
+  llmService = null;
   return { success: true };
 });
 
+// New handler for API key management
+ipcMain.handle('get-api-key', async (event, provider) => {
+  const key = await getApiKey(provider);
+  return key ? '***configured***' : null; // Don't send actual key to renderer
+});
+
+ipcMain.handle('set-api-key', async (event, provider, key) => {
+  await setApiKey(provider, key);
+  cloudService = null; // Reset to pick up new key
+  return { success: true };
+});
+
+ipcMain.handle('delete-api-key', async (event, provider) => {
+  await deleteApiKey(provider);
+  cloudService = null;
+  return { success: true };
+});
+
+// Get all providers with status
+ipcMain.handle('get-all-providers', async () => {
+  return await getAllProviders();
+});
+
+// Test connection for a specific provider
+ipcMain.handle('test-provider-connection', async (event, provider) => {
+  try {
+    if (provider === 'ollama') {
+      const ollama = getOllamaService();
+      return await ollama.checkConnection();
+    } else {
+      const service = await getCloudService(provider);
+      if (!service.isConfigured()) {
+        return { success: false, error: 'API key not configured' };
+      }
+      return await service.testConnection();
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Get available models for a provider
+ipcMain.handle('get-provider-models', async (event, provider) => {
+  if (provider === 'ollama') {
+    const ollama = getOllamaService();
+    return await ollama.listModels();
+  } else {
+    return CLOUD_PROVIDERS[provider]?.models || [];
+  }
+});
+
 ipcMain.handle('check-llm-connection', async () => {
-  const service = getLlmService();
-  return await service.checkConnection();
+  const config = store.get('llmConfig');
+  const provider = config.activeProvider || 'ollama';
+
+  if (provider === 'ollama') {
+    const service = getOllamaService();
+    return await service.checkConnection();
+  } else {
+    try {
+      const service = await getCloudService(provider);
+      if (!service.isConfigured()) {
+        return { connected: false, error: 'API key not configured' };
+      }
+      const result = await service.testConnection();
+      return { connected: result.success, error: result.error };
+    } catch (error) {
+      return { connected: false, error: error.message };
+    }
+  }
 });
 
 ipcMain.handle('list-llm-models', async () => {
-  const service = getLlmService();
+  // Always return Ollama models - this is used for the Ollama model dropdowns
+  const service = getOllamaService();
   return await service.listModels();
+});
+
+// Get all available models across all configured providers
+ipcMain.handle('get-all-models', async () => {
+  const config = store.get('llmConfig');
+  const allModels = [];
+
+  // Ollama models
+  try {
+    const ollama = getOllamaService();
+    const connectionCheck = await ollama.checkConnection();
+    if (connectionCheck.connected) {
+      const models = await ollama.listModels();
+      allModels.push({
+        provider: 'ollama',
+        providerName: 'Ollama (Local)',
+        connected: true,
+        models: models.map(m => ({
+          id: `ollama:${m.name}`,
+          name: m.name,
+          provider: 'ollama'
+        }))
+      });
+    } else {
+      allModels.push({
+        provider: 'ollama',
+        providerName: 'Ollama (Local)',
+        connected: false,
+        error: connectionCheck.error,
+        models: []
+      });
+    }
+  } catch (e) {
+    allModels.push({
+      provider: 'ollama',
+      providerName: 'Ollama (Local)',
+      connected: false,
+      error: e.message,
+      models: []
+    });
+  }
+
+  // Cloud providers
+  for (const [providerId, providerInfo] of Object.entries(CLOUD_PROVIDERS)) {
+    const apiKey = await getApiKey(providerId);
+    if (apiKey) {
+      allModels.push({
+        provider: providerId,
+        providerName: providerInfo.name,
+        connected: true,
+        models: providerInfo.models.map(m => ({
+          id: `${providerId}:${m.id}`,
+          name: m.name,
+          provider: providerId
+        }))
+      });
+    }
+  }
+
+  return allModels;
+});
+
+// Get custom summary prompt
+ipcMain.handle('get-summary-prompt', () => {
+  const config = store.get('llmConfig');
+  return config.summaryPrompt || PROMPTS.summarize.system;
+});
+
+// Set custom summary prompt
+ipcMain.handle('set-summary-prompt', async (event, prompt) => {
+  const config = store.get('llmConfig');
+  config.summaryPrompt = prompt;
+  store.set('llmConfig', config);
+  return { success: true };
+});
+
+// Reset summary prompt to default
+ipcMain.handle('reset-summary-prompt', async () => {
+  const config = store.get('llmConfig');
+  config.summaryPrompt = null;
+  store.set('llmConfig', config);
+  return { success: true, defaultPrompt: PROMPTS.summarize.system };
 });
 
 ipcMain.handle('llm-summarize', async (event, paperId, options = {}) => {
@@ -2726,10 +3619,33 @@ ipcMain.handle('llm-summarize', async (event, paperId, options = {}) => {
     return { success: false, cached: false };
   }
 
-  const service = getLlmService();
-  const connectionCheck = await service.checkConnection();
-  if (!connectionCheck.connected) {
-    return { success: false, error: connectionCheck.error || 'Ollama not connected' };
+  // Get provider and model from config - activeProvider is the single source of truth
+  const config = store.get('llmConfig');
+  const provider = options.provider || config.activeProvider || 'ollama';
+  const providerConfig = config[provider] || {};
+  const modelName = options.model || providerConfig.model;
+
+  // Get the appropriate service
+  let service;
+  let modelId;
+  if (provider === 'ollama') {
+    service = getOllamaService();
+    if (modelName) service.model = modelName;
+    modelId = service.model;
+  } else {
+    service = await getCloudService(provider);
+    if (modelName) service.model = modelName;
+    modelId = service.model;
+  }
+
+  // Check connection
+  if (provider === 'ollama') {
+    const connectionCheck = await service.checkConnection();
+    if (!connectionCheck.connected) {
+      return { success: false, error: connectionCheck.error || 'Ollama not connected' };
+    }
+  } else if (!service.isConfigured()) {
+    return { success: false, error: `${provider} API key not configured` };
   }
 
   // Get paper text content
@@ -2742,32 +3658,42 @@ ipcMain.handle('llm-summarize', async (event, paperId, options = {}) => {
     }
   }
 
+  // Get custom or default system prompt
+  const systemPrompt = config.summaryPrompt || PROMPTS.summarize.system;
+
   // Build prompt
   const prompt = PROMPTS.summarize.user(paper.title, paper.abstract, fullText);
 
   try {
     // Stream chunks to renderer
     let fullResponse = '';
+
+    // Create onChunk handler that works for both Ollama and Cloud services
+    const onChunk = (chunk) => {
+      // Ollama format: { response: "text", done: bool }
+      // Cloud format: { text: "text", fullText: "all text" }
+      const text = chunk.response || chunk.text || '';
+      if (text) {
+        fullResponse += text;
+        mainWindow.webContents.send('llm-stream', {
+          type: 'summarize',
+          paperId,
+          chunk: text,
+          done: chunk.done || false
+        });
+      }
+    };
+
     const response = await service.generate(prompt, {
-      systemPrompt: PROMPTS.summarize.system,
-      onChunk: (chunk) => {
-        if (chunk.response) {
-          fullResponse += chunk.response;
-          mainWindow.webContents.send('llm-stream', {
-            type: 'summarize',
-            paperId,
-            chunk: chunk.response,
-            done: chunk.done
-          });
-        }
-      },
+      systemPrompt,
+      onChunk,
       temperature: 0.3,
       maxTokens: 1024
     });
 
     // Parse and cache result
     const parsed = parseSummaryResponse(fullResponse || response);
-    database.saveSummary(paperId, parsed.summary, parsed.keyPoints, service.model);
+    database.saveSummary(paperId, parsed.summary, parsed.keyPoints, `${provider}:${modelId}`);
 
     return { success: true, data: parsed };
   } catch (error) {
@@ -2775,16 +3701,39 @@ ipcMain.handle('llm-summarize', async (event, paperId, options = {}) => {
   }
 });
 
-ipcMain.handle('llm-ask', async (event, paperId, question) => {
+ipcMain.handle('llm-ask', async (event, paperId, question, options = {}) => {
   if (!dbInitialized) return { success: false, error: 'Database not initialized' };
 
   const paper = database.getPaper(paperId);
   if (!paper) return { success: false, error: 'Paper not found' };
 
-  const service = getLlmService();
-  const connectionCheck = await service.checkConnection();
-  if (!connectionCheck.connected) {
-    return { success: false, error: connectionCheck.error || 'Ollama not connected' };
+  // Get provider and model from config - activeProvider is the single source of truth
+  const config = store.get('llmConfig');
+  const provider = options.provider || config.activeProvider || 'ollama';
+  const providerConfig = config[provider] || {};
+  const modelName = options.model || providerConfig.model;
+
+  // Get the appropriate service
+  let service;
+  let modelId;
+  if (provider === 'ollama') {
+    service = getOllamaService();
+    if (modelName) service.model = modelName;
+    modelId = service.model;
+  } else {
+    service = await getCloudService(provider);
+    if (modelName) service.model = modelName;
+    modelId = service.model;
+  }
+
+  // Check connection
+  if (provider === 'ollama') {
+    const connectionCheck = await service.checkConnection();
+    if (!connectionCheck.connected) {
+      return { success: false, error: connectionCheck.error || 'Ollama not connected' };
+    }
+  } else if (!service.isConfigured()) {
+    return { success: false, error: `${provider} API key not configured` };
   }
 
   // Get paper text content
@@ -2802,29 +3751,35 @@ ipcMain.handle('llm-ask', async (event, paperId, question) => {
 
   try {
     let fullResponse = '';
+
+    // Create onChunk handler that works for both Ollama and Cloud services
+    const onChunk = (chunk) => {
+      // Ollama format: { response: "text", done: bool }
+      // Cloud format: { text: "text", fullText: "all text" }
+      const text = chunk.response || chunk.text || '';
+      if (text) {
+        fullResponse += text;
+        mainWindow.webContents.send('llm-stream', {
+          type: 'qa',
+          paperId,
+          chunk: text,
+          done: false
+        });
+      }
+      // Send done signal separately to trigger markdown rendering
+      if (chunk.done) {
+        mainWindow.webContents.send('llm-stream', {
+          type: 'qa',
+          paperId,
+          chunk: '',
+          done: true
+        });
+      }
+    };
+
     const response = await service.generate(prompt, {
       systemPrompt: PROMPTS.qa.system,
-      onChunk: (chunk) => {
-        // Send content chunks
-        if (chunk.response) {
-          fullResponse += chunk.response;
-          mainWindow.webContents.send('llm-stream', {
-            type: 'qa',
-            paperId,
-            chunk: chunk.response,
-            done: false
-          });
-        }
-        // Send done signal separately to trigger markdown rendering
-        if (chunk.done) {
-          mainWindow.webContents.send('llm-stream', {
-            type: 'qa',
-            paperId,
-            chunk: '',
-            done: true
-          });
-        }
-      },
+      onChunk,
       temperature: 0.5,
       maxTokens: 1024
     });
@@ -2832,7 +3787,7 @@ ipcMain.handle('llm-ask', async (event, paperId, question) => {
     const answer = fullResponse || response;
 
     // Cache the Q&A
-    database.saveQA(paperId, question, answer, null, service.model);
+    database.saveQA(paperId, question, answer, null, `${provider}:${modelId}`);
 
     return { success: true, data: { question, answer } };
   } catch (error) {
@@ -3315,7 +4270,7 @@ ipcMain.handle('get-downloaded-pdf-sources', (event, paperId) => {
   const downloadedSources = [];
 
   // Check for each source type: bibcode_SOURCETYPE.pdf
-  const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'];
+  const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF', 'ATTACHED'];
   for (const sourceType of sourceTypes) {
     const filename = `${baseFilename}_${sourceType}.pdf`;
     const filePath = path.join(papersDir, filename);
@@ -3383,6 +4338,224 @@ ipcMain.handle('delete-annotation', (event, id) => {
   if (!dbInitialized) return { success: false, error: 'Database not initialized' };
   try {
     database.deleteAnnotation(id);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('export-annotations', async (event, paperId) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  const paper = database.getPaper(paperId);
+  if (!paper) return { success: false, error: 'Paper not found' };
+
+  const annotations = database.getAnnotations(paperId);
+  if (!annotations || annotations.length === 0) {
+    return { success: false, error: 'No annotations to export' };
+  }
+
+  // Generate Markdown content
+  const markdown = formatAnnotationsAsMarkdown(paper, annotations);
+
+  // Show save dialog
+  const defaultName = `${paper.bibcode || 'annotations'}_notes.md`;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export Annotations',
+    defaultPath: defaultName,
+    filters: [
+      { name: 'Markdown', extensions: ['md'] },
+      { name: 'Text', extensions: ['txt'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { success: false, canceled: true };
+  }
+
+  try {
+    fs.writeFileSync(result.filePath, markdown, 'utf-8');
+    sendConsoleLog(`Exported ${annotations.length} annotations to ${result.filePath}`, 'success');
+    return { success: true, path: result.filePath, count: annotations.length };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Format annotations as Markdown document
+ */
+function formatAnnotationsAsMarkdown(paper, annotations) {
+  const lines = [];
+
+  // Header
+  lines.push(`# Annotations: ${paper.title || 'Untitled'}`);
+  lines.push('');
+  if (paper.authors) lines.push(`**Authors**: ${paper.authors}`);
+  if (paper.bibcode) lines.push(`**Bibcode**: ${paper.bibcode}`);
+  if (paper.year) lines.push(`**Year**: ${paper.year}`);
+  lines.push(`**Exported**: ${new Date().toISOString().split('T')[0]}`);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+
+  // Group annotations by page
+  const byPage = {};
+  for (const ann of annotations) {
+    const page = ann.page_number || 0;
+    if (!byPage[page]) byPage[page] = [];
+    byPage[page].push(ann);
+  }
+
+  // Sort pages
+  const pages = Object.keys(byPage).map(Number).sort((a, b) => a - b);
+
+  for (const page of pages) {
+    lines.push(`## Page ${page}`);
+    lines.push('');
+
+    const pageAnns = byPage[page];
+    for (let i = 0; i < pageAnns.length; i++) {
+      const ann = pageAnns[i];
+      const colorName = getColorName(ann.color);
+
+      lines.push(`### Highlight ${i + 1}${colorName ? ` (${colorName})` : ''}`);
+      lines.push('');
+
+      if (ann.selection_text) {
+        lines.push(`> ${ann.selection_text.replace(/\n/g, '\n> ')}`);
+        lines.push('');
+      }
+
+      if (ann.note_content) {
+        lines.push('**Note:**');
+        lines.push('');
+        lines.push(ann.note_content);
+        lines.push('');
+      }
+
+      lines.push('---');
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function getColorName(hexColor) {
+  const colors = {
+    '#ffeb3b': 'Yellow',
+    '#a5d6a7': 'Green',
+    '#90caf9': 'Blue',
+    '#f48fb1': 'Pink',
+    '#ffcc80': 'Orange'
+  };
+  return colors[hexColor?.toLowerCase()] || null;
+}
+
+// ===== Attachment IPC Handlers =====
+
+ipcMain.handle('attach-files', async (event, paperId, bibcode) => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library path configured' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Attach Files',
+    properties: ['openFile', 'multiSelections']
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { success: false, canceled: true };
+  }
+
+  const papersDir = path.join(libraryPath, 'papers');
+  if (!fs.existsSync(papersDir)) {
+    fs.mkdirSync(papersDir, { recursive: true });
+  }
+
+  const attachments = [];
+  const sanitizedBibcode = (bibcode || `paper_${paperId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  for (const filePath of result.filePaths) {
+    try {
+      const originalName = path.basename(filePath);
+      const ext = path.extname(originalName).toLowerCase();
+      const fileType = ext.slice(1) || 'unknown'; // Remove the dot
+
+      // Generate unique filename
+      let destFilename = `${sanitizedBibcode}_ATTACHMENT_${originalName}`;
+      let destPath = path.join(papersDir, destFilename);
+
+      // Handle conflicts by adding timestamp
+      if (fs.existsSync(destPath)) {
+        const timestamp = Date.now();
+        const baseName = path.basename(originalName, ext);
+        destFilename = `${sanitizedBibcode}_ATTACHMENT_${baseName}_${timestamp}${ext}`;
+        destPath = path.join(papersDir, destFilename);
+      }
+
+      // Copy file
+      fs.copyFileSync(filePath, destPath);
+
+      // Add to database
+      const attachment = database.addAttachment(paperId, destFilename, originalName, fileType);
+      attachments.push(attachment);
+
+      sendConsoleLog(`Attached: ${originalName}`, 'success');
+    } catch (error) {
+      console.error(`Failed to attach ${filePath}:`, error);
+      sendConsoleLog(`Failed to attach: ${path.basename(filePath)}`, 'error');
+    }
+  }
+
+  return { success: true, attachments };
+});
+
+ipcMain.handle('get-attachments', (event, paperId) => {
+  if (!dbInitialized) return [];
+  return database.getAttachments(paperId);
+});
+
+ipcMain.handle('open-attachment', async (event, filename) => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library path configured' };
+
+  const fullPath = path.join(libraryPath, 'papers', filename);
+
+  if (!fs.existsSync(fullPath)) {
+    return { success: false, error: 'File not found' };
+  }
+
+  try {
+    await shell.openPath(fullPath);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('delete-attachment', (event, attachmentId) => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library path configured' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    // Get attachment info first
+    const attachment = database.getAttachment(attachmentId);
+    if (!attachment) {
+      return { success: false, error: 'Attachment not found' };
+    }
+
+    // Delete the file
+    const filePath = path.join(libraryPath, 'papers', attachment.filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    // Delete from database
+    database.deleteAttachment(attachmentId);
+
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };

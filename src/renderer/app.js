@@ -16,6 +16,8 @@ class ADSReader {
     this.collections = [];
     this.hasAdsToken = false;
     this.isIOS = false; // Platform detection
+    this.isMobileView = window.matchMedia('(max-width: 768px)').matches;
+    this.currentMobileView = 'papers';
 
     // PDF state
     this.pdfDoc = null;
@@ -58,15 +60,21 @@ class ADSReader {
   }
 
   async init() {
-    // Wait for platform initialization (sets up window.electronAPI on iOS)
+    console.log('[ADSReader] init() starting...');
+
+    // Wait for platform initialization FIRST (sets up window.electronAPI on iOS)
+    // Add timeout to prevent hanging
     if (window._platformReady) {
       try {
-        await window._platformReady;
+        const timeout = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Platform init timeout after 15s')), 15000)
+        );
+        await Promise.race([window._platformReady, timeout]);
         console.log('[ADSReader] Platform ready');
       } catch (error) {
         console.error('[ADSReader] Platform initialization failed:', error);
-        alert('Failed to initialize app. Please restart.');
-        return;
+        // Don't return - try to continue anyway
+        console.warn('[ADSReader] Continuing despite platform init failure...');
       }
     }
 
@@ -81,12 +89,26 @@ class ADSReader {
       console.log('[ADSReader] Running on iOS');
     }
 
+    // Listen for mobile view changes
+    window.matchMedia('(max-width: 768px)').addEventListener('change', (e) => {
+      this.isMobileView = e.matches;
+      if (this.isMobileView) {
+        this.initMobileNavigation();
+      } else {
+        document.body.classList.remove('mobile-view-active');
+      }
+    });
+
     // Ensure electronAPI is available
     if (!window.electronAPI) {
       console.error('[ADSReader] No electronAPI available');
       alert('App initialization failed. No API available.');
       return;
     }
+
+    // Set up event listeners AFTER platform is ready (so window.electronAPI exists)
+    this.setupEventListeners();
+    console.log('[ADSReader] Event listeners set up');
 
     this.libraryPath = await window.electronAPI.getLibraryPath();
 
@@ -98,6 +120,9 @@ class ADSReader {
 
     // Load saved PDF page positions
     this.pdfPagePositions = await window.electronAPI.getPdfPositions() || {};
+
+    // Load last viewed PDF sources per paper
+    this.lastPdfSources = await window.electronAPI.getLastPdfSources() || {};
 
     // Check if migration is needed for existing users
     await this.checkMigration();
@@ -130,9 +155,428 @@ class ADSReader {
       this.showSetupScreen();
     }
 
-    this.setupEventListeners();
+    // setupEventListeners is now called early in init()
     this.setupLibraryPicker();
+    this.restoreShortcutsState();
     document.title = 'ADS Reader';
+
+    // Initialize mobile navigation if in mobile view
+    if (this.isMobileView) {
+      this.initMobileNavigation();
+      this.initMobilePdfGestures();
+      this.initMobilePdfControls();
+      this.setupMobileTextSelection();
+    }
+  }
+
+  restoreShortcutsState() {
+    const isExpanded = localStorage.getItem('shortcutsExpanded') === 'true';
+    if (isExpanded) {
+      document.getElementById('shortcuts-summary')?.classList.add('expanded');
+      document.getElementById('shortcuts-grid')?.classList.remove('hidden');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MOBILE NAVIGATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  initMobileNavigation() {
+    // Add mobile-view-active class to body
+    document.body.classList.add('mobile-view-active');
+
+    // Tab bar click handlers
+    document.querySelectorAll('.mobile-tab-bar .tab-item').forEach(tab => {
+      tab.addEventListener('click', () => {
+        this.switchMobileView(tab.dataset.view);
+      });
+    });
+
+    // Hamburger button
+    document.getElementById('hamburger-btn')?.addEventListener('click', () => {
+      this.openMobileDrawer();
+    });
+
+    // Drawer overlay click to close
+    document.getElementById('mobile-drawer-overlay')?.addEventListener('click', () => {
+      this.closeMobileDrawer();
+    });
+
+    // Drawer close button
+    document.getElementById('drawer-close-btn')?.addEventListener('click', () => {
+      this.closeMobileDrawer();
+    });
+
+    // Drawer filter buttons
+    document.querySelectorAll('.drawer-nav-item[data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.setFilter(btn.dataset.filter);
+        this.closeMobileDrawer();
+      });
+    });
+
+    // Drawer settings button
+    document.getElementById('drawer-settings-btn')?.addEventListener('click', () => {
+      this.closeMobileDrawer();
+      this.showSettingsModal();
+    });
+
+    // Initialize with Papers view
+    this.switchMobileView('papers');
+  }
+
+  switchMobileView(view) {
+    if (!this.isMobileView) return;
+
+    // Special case: Libraries shows an overlay, not a view
+    if (view === 'libraries') {
+      this.showMobileLibraryPicker();
+      return;
+    }
+
+    this.currentMobileView = view;
+
+    // Update tab bar active state
+    document.querySelectorAll('.mobile-tab-bar .tab-item').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.view === view);
+    });
+
+    // Hide all mobile views
+    document.querySelectorAll('[data-mobile-view]').forEach(el => {
+      el.classList.remove('active');
+    });
+
+    // Show selected view
+    const viewElement = document.querySelector(`[data-mobile-view="${view}"]`);
+    if (viewElement) {
+      viewElement.classList.add('active');
+    }
+
+    // Update top bar title
+    const titles = { papers: 'Papers', pdf: 'PDF', notes: 'Notes', ai: 'AI' };
+    const titleEl = document.getElementById('mobile-title');
+    if (titleEl) {
+      titleEl.textContent = titles[view] || 'Papers';
+    }
+
+    // Manage viewing-pdf class for mobile PDF view
+    if (view === 'pdf' && this.pdfDoc) {
+      document.body.classList.add('viewing-pdf');
+    } else {
+      document.body.classList.remove('viewing-pdf');
+    }
+  }
+
+  openMobileDrawer() {
+    document.getElementById('mobile-drawer')?.classList.add('open');
+    document.getElementById('mobile-drawer-overlay')?.classList.add('visible');
+    document.body.style.overflow = 'hidden';
+  }
+
+  closeMobileDrawer() {
+    document.getElementById('mobile-drawer')?.classList.remove('open');
+    document.getElementById('mobile-drawer-overlay')?.classList.remove('visible');
+    document.body.style.overflow = '';
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MOBILE LIBRARY PICKER
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async showMobileLibraryPicker() {
+    const overlay = document.getElementById('mobile-library-overlay');
+    const listContainer = document.getElementById('mobile-library-list');
+    if (!overlay || !listContainer) return;
+
+    // Get current library ID
+    const currentLibraryId = await window.electronAPI.getCurrentLibraryId?.() || null;
+
+    // Get all libraries
+    try {
+      const libraries = await window.electronAPI.getAllLibraries();
+
+      // Build list HTML with inline onclick handlers for iOS compatibility
+      let html = '';
+      for (const lib of libraries) {
+        const isActive = lib.id === currentLibraryId;
+        const icon = lib.location === 'icloud' ? '☁️' : '💻';
+        const paperCount = lib.paperCount || 0;
+        const paperLabel = paperCount === 1 ? '1 paper' : `${paperCount} papers`;
+        const checkmark = isActive ? '<span class="library-checkmark">✓</span>' : '';
+        const escapedName = this.escapeHtml(lib.name).replace(/'/g, "\\'");
+
+        html += `
+          <button class="mobile-library-item ${isActive ? 'active' : ''}" data-id="${lib.id}" onclick="window.app.handleMobileLibrarySelect('${lib.id}', '${escapedName}')">
+            <span class="library-icon">${icon}</span>
+            <div class="library-info">
+              <div class="library-name">${this.escapeHtml(lib.name)}</div>
+              <div class="library-meta">${paperLabel}</div>
+            </div>
+            ${checkmark}
+            <span class="library-delete-btn" onclick="event.stopPropagation(); window.app.handleMobileLibraryDeleteBtn('${lib.id}', '${escapedName}')">🗑</span>
+          </button>
+        `;
+      }
+
+      if (libraries.length === 0) {
+        html = '<div class="mobile-library-empty">No libraries yet</div>';
+      }
+
+      listContainer.innerHTML = html;
+      console.log('[MobileLibraryPicker] Using inline onclick handlers for', listContainer.querySelectorAll('.mobile-library-item').length, 'items');
+
+    } catch (error) {
+      console.error('Failed to load libraries:', error);
+      listContainer.innerHTML = '<div class="mobile-library-empty">Failed to load libraries</div>';
+    }
+
+    // Set up close button
+    document.getElementById('mobile-library-close')?.addEventListener('click', () => {
+      this.hideMobileLibraryPicker();
+    });
+
+    // Set up new library button
+    document.getElementById('mobile-library-new-btn')?.addEventListener('click', async () => {
+      await this.createIOSLibrary();
+      this.showMobileLibraryPicker(); // Refresh list
+    });
+
+    // Show overlay
+    overlay.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+
+  hideMobileLibraryPicker() {
+    const overlay = document.getElementById('mobile-library-overlay');
+    if (overlay) {
+      overlay.classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+  }
+
+  // Handler methods for mobile library picker inline onclick (iOS compatibility)
+  async handleMobileLibrarySelect(libId, libName) {
+    console.log('[handleMobileLibrarySelect] Called with:', libId, libName);
+    try {
+      await this.switchToLibrary(libId);
+      this.hideMobileLibraryPicker();
+      console.log('[handleMobileLibrarySelect] Switch completed successfully');
+    } catch (error) {
+      console.error('[handleMobileLibrarySelect] Error:', error);
+      alert('Failed to switch library: ' + error.message);
+    }
+  }
+
+  async handleMobileLibraryDeleteBtn(libId, libName) {
+    console.log('[handleMobileLibraryDeleteBtn] Called with:', libId, libName);
+    await this.confirmDeleteIOSLibrary(libId, libName);
+    // Refresh the list after deletion
+    this.showMobileLibraryPicker();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MOBILE PDF VIEWER
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  initMobilePdfGestures() {
+    const container = document.getElementById('pdf-container');
+    if (!container) return;
+
+    let initialDistance = 0;
+    let initialScale = 1;
+    let isPinching = false;
+    let currentVisualScale = 1;
+    let pinchCenter = { x: 0, y: 0 };
+
+    const getPinchCenter = (touches) => {
+      return {
+        x: (touches[0].clientX + touches[1].clientX) / 2,
+        y: (touches[0].clientY + touches[1].clientY) / 2
+      };
+    };
+
+    container.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        isPinching = true;
+        initialDistance = this.getTouchDistance(e.touches);
+        initialScale = this.pdfScale || 1;
+        currentVisualScale = 1;
+        pinchCenter = getPinchCenter(e.touches);
+      }
+    }, { passive: true });
+
+    container.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2 && isPinching) {
+        e.preventDefault();
+        const currentDistance = this.getTouchDistance(e.touches);
+        const scaleChange = currentDistance / initialDistance;
+        currentVisualScale = scaleChange;
+        const center = getPinchCenter(e.touches);
+
+        // Use CSS transform for instant visual feedback (no re-render)
+        // Transform from the pinch center point
+        const pdfPages = container.querySelectorAll('.pdf-page-wrapper');
+        pdfPages.forEach(page => {
+          const rect = page.getBoundingClientRect();
+          const originX = ((center.x - rect.left) / rect.width) * 100;
+          const originY = ((center.y - rect.top) / rect.height) * 100;
+          page.style.transformOrigin = `${originX}% ${originY}%`;
+          page.style.transform = `scale(${scaleChange})`;
+        });
+      }
+    }, { passive: false });
+
+    container.addEventListener('touchend', () => {
+      if (isPinching) {
+        isPinching = false;
+
+        // Calculate final scale
+        const newScale = Math.max(0.5, Math.min(3, initialScale * currentVisualScale));
+
+        // Reset CSS transforms
+        const pdfPages = container.querySelectorAll('.pdf-page-wrapper');
+        pdfPages.forEach(page => {
+          page.style.transform = '';
+          page.style.transformOrigin = '';
+        });
+
+        // Only re-render if scale actually changed significantly
+        if (Math.abs(newScale - (this.pdfScale || 1)) > 0.05) {
+          this.setPdfScale(newScale);
+        }
+      }
+    }, { passive: true });
+  }
+
+  getTouchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  setPdfScale(scale) {
+    this.pdfScale = Math.max(0.5, Math.min(3, scale));
+    this.renderAllPages();
+    this.updateMobilePdfControls();
+  }
+
+  initMobilePdfControls() {
+    document.getElementById('pdf-prev-page')?.addEventListener('click', () => {
+      this.goToPdfPage(this.getCurrentVisiblePage() - 1);
+    });
+
+    document.getElementById('pdf-next-page')?.addEventListener('click', () => {
+      this.goToPdfPage(this.getCurrentVisiblePage() + 1);
+    });
+
+    document.getElementById('pdf-page-input')?.addEventListener('change', (e) => {
+      this.goToPdfPage(parseInt(e.target.value));
+    });
+
+    document.getElementById('pdf-zoom-in')?.addEventListener('click', () => {
+      this.setPdfScale((this.pdfScale || 1) + 0.25);
+    });
+
+    document.getElementById('pdf-zoom-out')?.addEventListener('click', () => {
+      this.setPdfScale((this.pdfScale || 1) - 0.25);
+    });
+
+    document.getElementById('pdf-fit-width')?.addEventListener('click', () => {
+      this.fitPdfToWidth();
+    });
+
+    // Update controls when scrolling through pages
+    document.getElementById('pdf-container')?.addEventListener('scroll', () => {
+      this.updateMobilePdfControls();
+    });
+  }
+
+  goToPdfPage(pageNum) {
+    if (!this.pdfDoc) return;
+    const page = Math.max(1, Math.min(pageNum, this.pdfDoc.numPages));
+    const wrapper = document.querySelector(`.pdf-page-wrapper[data-page="${page}"]`);
+    if (wrapper) {
+      wrapper.scrollIntoView({ behavior: 'smooth' });
+    }
+    this.updateMobilePdfControls();
+  }
+
+  getCurrentVisiblePage() {
+    const container = document.getElementById('pdf-container');
+    if (!container) return 1;
+
+    const wrappers = container.querySelectorAll('.pdf-page-wrapper');
+    const containerRect = container.getBoundingClientRect();
+    const containerCenter = containerRect.top + containerRect.height / 2;
+
+    for (const wrapper of wrappers) {
+      const rect = wrapper.getBoundingClientRect();
+      if (rect.top <= containerCenter && rect.bottom >= containerCenter) {
+        return parseInt(wrapper.dataset.page) || 1;
+      }
+    }
+    return 1;
+  }
+
+  fitPdfToWidth() {
+    const container = document.getElementById('pdf-container');
+    const page = document.querySelector('.pdf-page canvas');
+    if (!page || !container) return;
+
+    const containerWidth = container.clientWidth - 24;
+    const pageWidth = page.width / (this.pdfScale || 1);
+    this.setPdfScale(containerWidth / pageWidth);
+  }
+
+  updateMobilePdfControls() {
+    const currentPage = this.getCurrentVisiblePage();
+    const pageInput = document.getElementById('pdf-page-input');
+    const totalPages = document.getElementById('pdf-total-pages');
+    const zoomDisplay = document.getElementById('pdf-zoom-display');
+
+    if (pageInput) pageInput.value = currentPage;
+    if (totalPages) totalPages.textContent = this.pdfDoc?.numPages || 1;
+    if (zoomDisplay) zoomDisplay.textContent = `${Math.round((this.pdfScale || 1) * 100)}%`;
+  }
+
+  setupMobileTextSelection() {
+    document.addEventListener('selectionchange', () => {
+      if (!this.isMobileView) return;
+      this.handleMobileTextSelection();
+    });
+  }
+
+  handleMobileTextSelection() {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim();
+
+    // Hide button if no selection
+    const existingBtn = document.getElementById('mobile-highlight-btn');
+    if (!text || text.length < 5) {
+      if (existingBtn) existingBtn.style.display = 'none';
+      return;
+    }
+
+    // Show floating highlight button
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+
+    let btn = existingBtn;
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'mobile-highlight-btn';
+      btn.className = 'mobile-highlight-btn';
+      btn.textContent = 'Highlight';
+      btn.addEventListener('click', () => {
+        this.createHighlightFromSelection();
+        btn.style.display = 'none';
+      });
+      document.body.appendChild(btn);
+    }
+
+    btn.style.display = 'block';
+    btn.style.top = `${rect.top + window.scrollY - 50}px`;
+    btn.style.left = `${rect.left + rect.width / 2 - 40}px`;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -221,10 +665,12 @@ class ADSReader {
         html += '<div class="library-section-label">iCloud</div>';
         for (const lib of iCloudLibs) {
           const isActive = lib.id === currentId;
+          const paperCount = lib.paperCount || 0;
+          const paperLabel = paperCount === 1 ? '1 paper' : `${paperCount} papers`;
           html += `
             <div class="library-item ${isActive ? 'active' : ''}" data-id="${lib.id}">
               <span class="lib-icon">☁️</span>
-              <span class="lib-name">${this.escapeHtml(lib.name)}</span>
+              <span class="lib-name">${this.escapeHtml(lib.name)} (${paperLabel})</span>
               <button class="lib-delete-btn" data-id="${lib.id}" title="Delete library">✕</button>
             </div>
           `;
@@ -235,10 +681,12 @@ class ADSReader {
         html += '<div class="library-section-label">Local</div>';
         for (const lib of localLibs) {
           const isActive = lib.id === currentId;
+          const paperCount = lib.paperCount || 0;
+          const paperLabel = paperCount === 1 ? '1 paper' : `${paperCount} papers`;
           html += `
             <div class="library-item ${isActive ? 'active' : ''}" data-id="${lib.id}">
               <span class="lib-icon">💻</span>
-              <span class="lib-name">${this.escapeHtml(lib.name)}</span>
+              <span class="lib-name">${this.escapeHtml(lib.name)} (${paperLabel})</span>
               <button class="lib-delete-btn" data-id="${lib.id}" title="Delete library">✕</button>
             </div>
           `;
@@ -311,8 +759,17 @@ class ADSReader {
     document.getElementById('library-dropdown')?.classList.add('hidden');
 
     // Use custom prompt since Electron doesn't support native prompt()
-    const name = await this.showPrompt(`Enter name for new ${location} library:`, 'My Library');
-    console.log('[createNewLibrary] User entered name:', name);
+    let name;
+    try {
+      console.log('[createNewLibrary] Showing prompt...');
+      name = await this.showPrompt(`Enter name for new ${location} library:`, 'My Library');
+      console.log('[createNewLibrary] User entered name:', name);
+    } catch (promptError) {
+      console.error('[createNewLibrary] Prompt error:', promptError);
+      alert('Error showing prompt: ' + promptError.message);
+      return;
+    }
+
     if (!name) {
       console.log('[createNewLibrary] No name entered, returning');
       return;
@@ -344,26 +801,43 @@ class ADSReader {
   }
 
   async switchToLibrary(libraryId) {
+    console.log('[switchToLibrary] Starting for library:', libraryId);
     try {
+      console.log('[switchToLibrary] Calling API.switchLibrary...');
       const result = await window.electronAPI.switchLibrary(libraryId);
+      console.log('[switchToLibrary] API result:', result);
+
       if (result.success) {
         this.libraryPath = result.path;
         this.consoleLog(`Switched to library at ${result.path}`, 'success');
 
+        // Show main screen if we were on setup screen
+        const setupScreen = document.getElementById('setup-screen');
+        if (setupScreen && !setupScreen.classList.contains('hidden')) {
+          console.log('[switchToLibrary] Showing main screen...');
+          this.showMainScreen({ path: result.path });
+        }
+
         // Reload papers and collections
+        console.log('[switchToLibrary] Loading papers...');
         await this.loadPapers();
+        console.log('[switchToLibrary] Loading collections...');
         await this.loadCollections();
+        console.log('[switchToLibrary] Updating library picker...');
         await this.updateLibraryPickerDisplay();
 
         // Clear selection
         this.clearPaperDisplay();
+        console.log('[switchToLibrary] Complete');
       } else {
+        console.error('[switchToLibrary] Failed:', result.error);
         this.consoleLog(`Failed to switch library: ${result.error}`, 'error');
         alert(`Failed to switch library: ${result.error}`);
       }
     } catch (error) {
-      console.error('Failed to switch library:', error);
+      console.error('[switchToLibrary] Exception:', error);
       this.consoleLog(`Error switching library: ${error.message}`, 'error');
+      throw error; // Re-throw so caller can handle
     }
 
     // Close dropdown
@@ -535,6 +1009,37 @@ class ADSReader {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  // Sanitize abstract text - allow safe HTML tags (sub, sup) and decode entities
+  sanitizeAbstract(str) {
+    if (!str) return '';
+
+    // First, escape everything for safety
+    let safe = this.escapeHtml(str);
+
+    // Now selectively restore safe tags (case-insensitive)
+    // Restore <sub> and </sub>
+    safe = safe.replace(/&lt;sub&gt;/gi, '<sub>');
+    safe = safe.replace(/&lt;\/sub&gt;/gi, '</sub>');
+
+    // Restore <sup> and </sup>
+    safe = safe.replace(/&lt;sup&gt;/gi, '<sup>');
+    safe = safe.replace(/&lt;\/sup&gt;/gi, '</sup>');
+
+    // Restore <em> and </em> for emphasis
+    safe = safe.replace(/&lt;em&gt;/gi, '<em>');
+    safe = safe.replace(/&lt;\/em&gt;/gi, '</em>');
+
+    // Restore <i> and </i> for italics
+    safe = safe.replace(/&lt;i&gt;/gi, '<i>');
+    safe = safe.replace(/&lt;\/i&gt;/gi, '</i>');
+
+    // Restore <b> and </b> for bold
+    safe = safe.replace(/&lt;b&gt;/gi, '<b>');
+    safe = safe.replace(/&lt;\/b&gt;/gi, '</b>');
+
+    return safe;
   }
 
   // Custom prompt dialog since Electron doesn't support native prompt()
@@ -770,12 +1275,181 @@ class ADSReader {
   }
 
   setupEventListeners() {
-    // Setup screen
-    document.getElementById('select-folder-btn')?.addEventListener('click', () => this.selectLibraryFolder());
-    document.getElementById('create-icloud-library-btn')?.addEventListener('click', () => this.createNewLibrary('icloud'));
+    // Use event delegation for iOS compatibility (elements may not exist at init time)
+    document.addEventListener('click', (e) => {
+      const target = e.target;
 
-    // Console panel toggle
-    document.getElementById('console-header')?.addEventListener('click', () => this.toggleConsole());
+      // Handle nav-items via delegation
+      const navItem = target.closest('.nav-item[data-view]');
+      if (navItem) {
+        this.setView(navItem.dataset.view);
+        return;
+      }
+
+      // Handle collection nav-items
+      const collectionItem = target.closest('.nav-item[data-collection]');
+      if (collectionItem) {
+        this.selectCollection(parseInt(collectionItem.dataset.collection));
+        return;
+      }
+
+      // Handle buttons and nav-items by ID via delegation
+      const clickableEl = target.closest('button, .nav-item[id]');
+      const elementId = clickableEl?.id || target.id;
+      if (elementId) {
+        switch (elementId) {
+          case 'import-btn':
+          case 'add-paper-btn':
+            this.importPDFs();
+            break;
+          case 'import-bib-btn':
+            this.importBibFile();
+            break;
+          case 'remove-paper-btn':
+            this.removeSelectedPapers();
+            break;
+          case 'change-library-btn':
+          case 'select-folder-btn':
+            this.selectLibraryFolder();
+            break;
+          case 'preferences-btn':
+            this.showPreferences();
+            break;
+          case 'sync-btn':
+            this.syncAllPapers();
+            break;
+          case 'create-icloud-library-btn':
+            this.createNewLibrary('icloud');
+            break;
+          case 'console-header':
+            this.toggleConsole();
+            break;
+          // Settings nav-items (iOS compatibility)
+          case 'ads-settings-btn':
+            console.log('[Debug] ads-settings-btn clicked via delegation');
+            this.showAdsTokenModal();
+            break;
+          case 'library-proxy-btn':
+            this.showLibraryProxyModal();
+            break;
+          case 'llm-settings-btn':
+            this.showLlmModal();
+            break;
+          // Modal buttons (iOS compatibility)
+          case 'ads-save-btn':
+            this.saveAdsToken();
+            break;
+          case 'ads-cancel-btn':
+            this.hideAdsTokenModal();
+            break;
+          case 'proxy-save-btn':
+            this.saveLibraryProxy();
+            break;
+          case 'proxy-cancel-btn':
+            this.hideLibraryProxyModal();
+            break;
+          case 'llm-save-btn':
+            this.saveLlmConfig();
+            break;
+          case 'llm-cancel-btn':
+            this.hideLlmModal();
+            break;
+          case 'llm-test-btn':
+            this.testLlmConnection();
+            break;
+          // Cloud provider test buttons (iOS compatibility)
+          case 'anthropic-test-btn':
+            this.testProvider('anthropic');
+            break;
+          case 'gemini-test-btn':
+            this.testProvider('gemini');
+            break;
+          case 'perplexity-test-btn':
+            this.testProvider('perplexity');
+            break;
+          case 'ollama-test-btn':
+            this.testProvider('ollama');
+            break;
+          case 'reset-summary-prompt-btn':
+            this.resetSummaryPrompt();
+            break;
+          // ADS Import modal buttons (iOS compatibility)
+          case 'ads-search-btn':
+            this.showAdsSearchModal();
+            break;
+          case 'ads-search-execute-btn':
+            this.executeAdsSearch();
+            break;
+          case 'ads-import-btn':
+            this.importAdsSelected();
+            break;
+          case 'ads-close-btn':
+          case 'ads-modal-close-btn':
+            this.hideAdsSearchModal();
+            break;
+          case 'ads-select-all-btn':
+            this.selectAllAdsResults();
+            break;
+          case 'ads-deselect-all-btn':
+            this.deselectAllAdsResults();
+            break;
+          // ADS Lookup modal buttons (iOS compatibility)
+          case 'ads-lookup-search-btn':
+            this.searchAdsLookup();
+            break;
+          case 'ads-lookup-close-btn':
+          case 'ads-lookup-cancel-btn':
+            this.hideAdsLookupModal();
+            break;
+          case 'ads-lookup-apply-btn':
+            this.applyAdsLookupMetadata();
+            break;
+        }
+      }
+
+      // Handle toggle-password buttons (iOS compatibility)
+      const togglePwdBtn = target.closest('.toggle-password');
+      if (togglePwdBtn && togglePwdBtn.dataset.target) {
+        this.togglePasswordVisibility(togglePwdBtn.dataset.target);
+      }
+
+      // Handle tab buttons
+      const tabBtn = target.closest('.tab-btn');
+      if (tabBtn && tabBtn.dataset.tab) {
+        this.switchTab(tabBtn.dataset.tab);
+      }
+
+      // Handle provider tabs in AI settings modal (iOS compatibility)
+      const providerTab = target.closest('.provider-tab');
+      if (providerTab && providerTab.dataset.provider) {
+        this.switchProviderTab(providerTab.dataset.provider);
+      }
+
+      // Handle ADS shortcut buttons (iOS compatibility)
+      const shortcutBtn = target.closest('.ads-shortcut-btn');
+      if (shortcutBtn && shortcutBtn.dataset.insert) {
+        const insertText = shortcutBtn.dataset.insert;
+        // Determine which input to use based on which modal is open
+        const adsModal = document.getElementById('ads-search-modal');
+        const lookupModal = document.getElementById('ads-lookup-modal');
+
+        let input;
+        if (adsModal && !adsModal.classList.contains('hidden')) {
+          input = document.getElementById('ads-query-input');
+        } else if (lookupModal && !lookupModal.classList.contains('hidden')) {
+          input = document.getElementById('ads-lookup-query');
+        }
+
+        if (input) {
+          const start = input.selectionStart || input.value.length;
+          const end = input.selectionEnd || input.value.length;
+          input.value = input.value.substring(0, start) + insertText + input.value.substring(end);
+          input.focus();
+          input.selectionStart = input.selectionEnd = start + insertText.length;
+        }
+      }
+    });
+
     // Console starts expanded by default
 
     // Console panel resize
@@ -786,36 +1460,15 @@ class ADSReader {
       this.consoleLog(data.message, data.type || 'info');
     });
 
-    // Main screen
-    document.getElementById('change-library-btn')?.addEventListener('click', () => this.selectLibraryFolder());
-    document.getElementById('import-btn')?.addEventListener('click', () => this.importPDFs());
-    document.getElementById('import-bib-btn')?.addEventListener('click', () => this.importBibFile());
-    document.getElementById('add-paper-btn')?.addEventListener('click', () => this.importPDFs());
-    document.getElementById('remove-paper-btn')?.addEventListener('click', () => this.removeSelectedPapers());
-
-    // Navigation
-    document.querySelectorAll('.nav-item[data-view]').forEach(item => {
-      item.addEventListener('click', () => this.setView(item.dataset.view));
-    });
-
-    // Search
+    // Search input (needs direct listener for 'input' event, not handled by click delegation)
     const searchInput = document.getElementById('search-input');
     let searchTimeout;
     if (searchInput) {
-      console.log('Search input found, adding listener');
       searchInput.addEventListener('input', (e) => {
-        console.log('Search input event:', e.target.value);
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => this.searchPapers(e.target.value), 300);
       });
-    } else {
-      console.log('Search input NOT found!');
     }
-
-    // Tabs
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
-    });
 
     // Paper actions
     document.getElementById('read-status-select')?.addEventListener('change', (e) => {
@@ -833,24 +1486,78 @@ class ADSReader {
     document.getElementById('fetch-metadata-btn')?.addEventListener('click', () => this.fetchMetadata());
     document.getElementById('copy-cite-btn')?.addEventListener('click', () => this.copyCite());
     document.getElementById('open-ads-btn')?.addEventListener('click', () => this.openInADS());
+    document.getElementById('attach-file-btn')?.addEventListener('click', () => this.attachFiles());
     document.getElementById('copy-bibtex-btn')?.addEventListener('click', () => this.copyBibtex());
     document.getElementById('export-bibtex-btn')?.addEventListener('click', () => this.exportBibtexToFile());
+    document.getElementById('edit-bibtex-btn')?.addEventListener('click', () => this.enterBibtexEditMode());
+    document.getElementById('save-bibtex-btn')?.addEventListener('click', () => this.saveBibtex());
+    document.getElementById('cancel-bibtex-btn')?.addEventListener('click', () => this.exitBibtexEditMode(true));
+
+    // Shortcuts toggle
+    document.getElementById('shortcuts-toggle')?.addEventListener('click', () => this.toggleShortcuts());
 
     // PDF controls
     document.getElementById('zoom-in-btn')?.addEventListener('click', () => this.zoomPDF(0.1));
     document.getElementById('zoom-out-btn')?.addEventListener('click', () => this.zoomPDF(-0.1));
     document.getElementById('rotate-btn')?.addEventListener('click', () => this.rotatePage());
 
-    // Pinch-to-zoom support for trackpads
+    // Pinch-to-zoom support for trackpads - optimized with CSS transforms
     const pdfContainer = document.getElementById('pdf-container');
     if (pdfContainer) {
+      let trackpadPinchScale = 1;
+      let trackpadPinchTimer = null;
+      let initialPdfScale = this.pdfScale || 1;
+
       pdfContainer.addEventListener('wheel', (e) => {
         // Detect pinch gesture (ctrlKey is set for trackpad pinch)
         if (e.ctrlKey) {
           e.preventDefault();
-          // deltaY is negative for pinch-out (zoom in), positive for pinch-in (zoom out)
-          const delta = e.deltaY > 0 ? -0.05 : 0.05;
-          this.zoomPDF(delta);
+
+          // Calculate zoom center relative to container
+          const containerRect = pdfContainer.getBoundingClientRect();
+          const zoomX = e.clientX - containerRect.left;
+          const zoomY = e.clientY - containerRect.top + pdfContainer.scrollTop;
+
+          // If starting a new pinch gesture, capture initial scale
+          if (!trackpadPinchTimer) {
+            initialPdfScale = this.pdfScale || 1;
+            trackpadPinchScale = 1;
+          }
+
+          // Update visual scale (reduced sensitivity for smoother zooming)
+          const delta = e.deltaY > 0 ? -0.015 : 0.015;
+          trackpadPinchScale = Math.max(0.5 / initialPdfScale, Math.min(3 / initialPdfScale, trackpadPinchScale + delta));
+
+          // Apply CSS transform for immediate visual feedback
+          const pdfPages = pdfContainer.querySelectorAll('.pdf-page-wrapper');
+          pdfPages.forEach(page => {
+            page.style.transformOrigin = `${zoomX}px ${zoomY}px`;
+            page.style.transform = `scale(${trackpadPinchScale})`;
+          });
+
+          // Debounce the actual re-render
+          if (trackpadPinchTimer) {
+            clearTimeout(trackpadPinchTimer);
+          }
+          trackpadPinchTimer = setTimeout(() => {
+            // Reset CSS transforms
+            pdfPages.forEach(page => {
+              page.style.transform = '';
+              page.style.transformOrigin = '';
+            });
+
+            // Apply actual zoom if changed significantly
+            const newScale = Math.max(0.5, Math.min(3, initialPdfScale * trackpadPinchScale));
+            if (Math.abs(newScale - (this.pdfScale || 1)) > 0.02) {
+              this.pdfScale = newScale;
+              this.renderAllPages();
+              window.electronAPI.setPdfZoom(this.pdfScale);
+              document.getElementById('zoom-level').textContent = `${Math.round(this.pdfScale * 100)}%`;
+            }
+
+            trackpadPinchTimer = null;
+            trackpadPinchScale = 1;
+          }, 150); // Wait 150ms after last wheel event
         }
       }, { passive: false });
     }
@@ -859,7 +1566,12 @@ class ADSReader {
     document.getElementById('settings-header')?.addEventListener('click', () => this.toggleSettings());
 
     // ADS settings
-    document.getElementById('ads-settings-btn')?.addEventListener('click', () => this.showAdsTokenModal());
+    const adsBtn = document.getElementById('ads-settings-btn');
+    console.log('[Debug] ads-settings-btn element:', adsBtn);
+    adsBtn?.addEventListener('click', (e) => {
+      console.log('[Debug] ADS settings btn clicked', e);
+      this.showAdsTokenModal();
+    });
     document.getElementById('ads-cancel-btn')?.addEventListener('click', () => this.hideAdsTokenModal());
     document.getElementById('ads-save-btn')?.addEventListener('click', () => this.saveAdsToken());
 
@@ -881,6 +1593,18 @@ class ADSReader {
     document.getElementById('add-collection-btn')?.addEventListener('click', () => this.showCollectionModal());
     document.getElementById('collection-cancel-btn')?.addEventListener('click', () => this.hideCollectionModal());
     document.getElementById('collection-save-btn')?.addEventListener('click', () => this.createCollection());
+
+    // Smart collection type toggle
+    document.querySelectorAll('input[name="collection-type"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        const smartOptions = document.getElementById('smart-collection-options');
+        if (e.target.value === 'smart') {
+          smartOptions?.classList.remove('hidden');
+        } else {
+          smartOptions?.classList.add('hidden');
+        }
+      });
+    });
 
     // Reload button
     document.getElementById('reload-btn')?.addEventListener('click', () => location.reload());
@@ -936,29 +1660,8 @@ class ADSReader {
     document.getElementById('ads-sync-close-btn')?.addEventListener('click', () => this.hideAdsSyncModal());
     document.getElementById('sync-cancel-btn')?.addEventListener('click', () => this.cancelAdsSync());
 
-    // ADS lookup shortcut buttons
-    document.querySelectorAll('#ads-lookup-modal .ads-shortcut-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const input = document.getElementById('ads-lookup-query');
-        const insert = btn.dataset.insert;
-        input.value += insert;
-        input.focus();
-      });
-    });
-
-    // ADS shortcut buttons
-    document.querySelectorAll('.ads-shortcut-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const input = document.getElementById('ads-query-input');
-        const insertText = btn.dataset.insert;
-        const start = input.selectionStart;
-        const end = input.selectionEnd;
-        const value = input.value;
-        input.value = value.substring(0, start) + insertText + value.substring(end);
-        input.focus();
-        input.selectionStart = input.selectionEnd = start + insertText.length;
-      });
-    });
+    // ADS shortcut buttons are handled by the delegated click handler (lines ~1270-1292)
+    // for iOS compatibility - no duplicate listeners needed here
 
     // ADS import progress listeners
     window.electronAPI.onImportProgress((data) => this.updateImportProgress(data));
@@ -971,6 +1674,12 @@ class ADSReader {
     document.getElementById('cites-select-all')?.addEventListener('click', () => this.selectAllCites());
     document.getElementById('cites-select-none')?.addEventListener('click', () => this.selectNoneCites());
     document.getElementById('cites-import-btn')?.addEventListener('click', () => this.importSelectedCites());
+
+    // Refs/Cites limit controls
+    document.getElementById('refs-load-more')?.addEventListener('click', () => this.fetchRefsFromADS());
+    document.getElementById('refs-load-all')?.addEventListener('click', () => this.fetchRefsFromADS(2000));
+    document.getElementById('cites-load-more')?.addEventListener('click', () => this.fetchCitesFromADS());
+    document.getElementById('cites-load-all')?.addEventListener('click', () => this.fetchCitesFromADS(2000));
 
     // Context menu
     document.getElementById('paper-list')?.addEventListener('contextmenu', (e) => this.showContextMenu(e));
@@ -988,6 +1697,7 @@ class ADSReader {
     document.getElementById('ctx-open-ads')?.addEventListener('click', () => this.openSelectedPaperInADS());
     document.getElementById('ctx-open-publisher')?.addEventListener('click', () => this.openPublisherPDF());
     document.getElementById('ctx-sync-paper')?.addEventListener('click', () => this.syncSelectedPapers());
+    document.getElementById('ctx-download-pdfs')?.addEventListener('click', () => this.batchDownloadPdfs());
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => this.handleKeydown(e));
@@ -1031,6 +1741,41 @@ class ADSReader {
     document.getElementById('llm-save-btn')?.addEventListener('click', () => this.saveLlmConfig());
     document.getElementById('llm-test-btn')?.addEventListener('click', () => this.testLlmConnection());
 
+    // Provider tabs in AI settings modal
+    document.querySelectorAll('.provider-tab').forEach(tab => {
+      tab.addEventListener('click', () => this.switchProviderTab(tab.dataset.provider));
+    });
+
+    // Provider test buttons
+    document.getElementById('ollama-test-btn')?.addEventListener('click', () => this.testProvider('ollama'));
+    document.getElementById('anthropic-test-btn')?.addEventListener('click', () => this.testProvider('anthropic'));
+    document.getElementById('gemini-test-btn')?.addEventListener('click', () => this.testProvider('gemini'));
+    document.getElementById('perplexity-test-btn')?.addEventListener('click', () => this.testProvider('perplexity'));
+
+    // Toggle password visibility
+    document.querySelectorAll('.toggle-password').forEach(btn => {
+      btn.addEventListener('click', () => this.togglePasswordVisibility(btn.dataset.target));
+    });
+
+    // Reset summary prompt button
+    document.getElementById('reset-summary-prompt-btn')?.addEventListener('click', () => this.resetSummaryPrompt());
+
+    // External links in settings
+    document.querySelectorAll('.external-link').forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.electronAPI.openExternal(link.dataset.url);
+      });
+    });
+
+    // Copy buttons
+    document.getElementById('ai-copy-summary-btn')?.addEventListener('click', () => this.copySummaryToClipboard());
+    document.getElementById('ai-copy-qa-btn')?.addEventListener('click', () => this.copyLastAnswerToClipboard());
+
+    // Semantic Search info popup
+    document.getElementById('semantic-search-info-btn')?.addEventListener('click', () => this.showSemanticSearchInfo());
+    document.getElementById('semantic-search-info-close')?.addEventListener('click', () => this.hideSemanticSearchInfo());
+
     // LLM stream listener
     window.electronAPI.onLlmStream((data) => this.handleLlmStream(data));
 
@@ -1040,6 +1785,14 @@ class ADSReader {
     document.getElementById('ctx-explain-text')?.addEventListener('click', () => this.explainSelectedText());
     document.getElementById('ctx-copy-text')?.addEventListener('click', () => this.copySelectedText());
     document.getElementById('ai-explanation-close')?.addEventListener('click', () => this.hideExplanationPopup());
+    document.getElementById('ai-explanation-add-note')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.addExplanationAsNote();
+    });
+
+    // Make AI explanation popup draggable
+    this.setupExplanationPopupDrag();
 
     // Semantic search
     document.getElementById('ai-index-paper-btn')?.addEventListener('click', () => this.indexCurrentPaper());
@@ -1051,9 +1804,48 @@ class ADSReader {
     // Annotations
     document.getElementById('add-note-btn')?.addEventListener('click', () => this.createGeneralNote());
     document.getElementById('ctx-add-note')?.addEventListener('click', () => this.createNoteFromSelection());
+    document.getElementById('export-annotations-btn')?.addEventListener('click', () => this.exportAnnotations());
+
+    // Panel collapse toggles
+    document.getElementById('sidebar-collapse-btn')?.addEventListener('click', () => this.toggleSidebar());
+    document.getElementById('sidebar-collapsed-toggle')?.addEventListener('click', () => this.toggleSidebar());
+    document.getElementById('notes-collapse-btn')?.addEventListener('click', () => this.toggleNotesPanel());
+    document.getElementById('notes-collapsed-toggle')?.addEventListener('click', () => this.toggleNotesPanel());
 
     // Resize handles
     this.setupResizeHandlers();
+
+    // Window-wide BibTeX file drop handler
+    document.body.addEventListener('dragover', (e) => {
+      if (e.dataTransfer?.types.includes('Files')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    });
+
+    document.body.addEventListener('drop', async (e) => {
+      const files = Array.from(e.dataTransfer?.files || []);
+      const bibFile = files.find(f => f.name.endsWith('.bib'));
+      if (bibFile) {
+        e.preventDefault();
+        e.stopPropagation();
+        const filePath = window.electronAPI.getPathForFile(bibFile);
+        if (filePath) {
+          this.showNotification(`Importing ${bibFile.name}...`, 'info');
+          try {
+            const result = await window.electronAPI.importBibtexFromPath(filePath);
+            if (result.success) {
+              this.showNotification(`Imported ${result.imported} papers, ${result.skipped} skipped`, 'success');
+              await this.loadPapers();
+            } else {
+              this.showNotification(`Import failed: ${result.error}`, 'error');
+            }
+          } catch (error) {
+            this.showNotification(`Import failed: ${error.message}`, 'error');
+          }
+        }
+      }
+    });
   }
 
   setupResizeHandlers() {
@@ -1238,8 +2030,42 @@ class ADSReader {
           valB = (b.title || '').toLowerCase();
           break;
         case 'author':
-          valA = (a.authors?.[0] || '').toLowerCase();
-          valB = (b.authors?.[0] || '').toLowerCase();
+          // Parse first author to get lastname, firstname
+          const parseAuthor = (authors) => {
+            const author = authors?.[0] || '';
+            // ADS format is usually "Lastname, Firstname"
+            if (author.includes(',')) {
+              const parts = author.split(',');
+              return {
+                lastname: (parts[0] || '').trim().toLowerCase(),
+                firstname: (parts[1] || '').trim().toLowerCase()
+              };
+            }
+            // Fallback: "Firstname Lastname" - last word is lastname
+            const words = author.trim().split(/\s+/);
+            if (words.length > 1) {
+              return {
+                lastname: words[words.length - 1].toLowerCase(),
+                firstname: words.slice(0, -1).join(' ').toLowerCase()
+              };
+            }
+            return { lastname: author.toLowerCase(), firstname: '' };
+          };
+          const authorA = parseAuthor(a.authors);
+          const authorB = parseAuthor(b.authors);
+          // Compare lastname first
+          if (authorA.lastname !== authorB.lastname) {
+            valA = authorA.lastname;
+            valB = authorB.lastname;
+          } else if (authorA.firstname !== authorB.firstname) {
+            // Same lastname, compare firstname
+            valA = authorA.firstname;
+            valB = authorB.firstname;
+          } else {
+            // Same author, sort by year
+            valA = parseInt(a.year) || 0;
+            valB = parseInt(b.year) || 0;
+          }
           break;
         case 'year':
           valA = parseInt(a.year) || 0;
@@ -1343,6 +2169,15 @@ class ADSReader {
       return;
     }
 
+    // Handle Cmd+Option shortcuts first
+    if ((e.metaKey || e.ctrlKey) && e.altKey) {
+      switch (e.key.toLowerCase()) {
+        case 'i':
+          // Cmd+Option+I opens DevTools (handled by Electron, just for documentation)
+          return;
+      }
+    }
+
     switch (e.key) {
       case '/':
         e.preventDefault();
@@ -1392,7 +2227,12 @@ class ADSReader {
         }
         break;
       case 'c':
-        if (this.selectedPaper) this.copyCite();
+        e.preventDefault();
+        this.toggleSidebar();
+        break;
+      case 'n':
+        e.preventDefault();
+        this.toggleNotesPanel();
         break;
       case 'a':
         if (e.metaKey || e.ctrlKey) {
@@ -1416,6 +2256,21 @@ class ADSReader {
       case 'r':
         this.rotatePage();
         break;
+      case 's':
+        if (this.selectedPapers.size > 0) {
+          this.syncSelectedPapers();
+        }
+        break;
+      case 'p':
+        // Switch to PDF tab
+        if (this.selectedPaper?.pdf_path) {
+          this.switchTab('pdf');
+        }
+        break;
+      case 'P':
+        // Open PDF with system viewer (Shift+P)
+        this.openPdfWithSystemViewer();
+        break;
       case 'Backspace':
       case 'Delete':
         e.preventDefault();
@@ -1435,13 +2290,103 @@ class ADSReader {
 
     console.log('[ADSReader] showSetupScreen called, isIOS:', this.isIOS);
 
-    // On iOS, immediately trigger the library selection/creation flow
-    if (this.isIOS) {
-      console.log('[ADSReader] Scheduling iOS library flow...');
-      setTimeout(() => {
-        console.log('[ADSReader] iOS library flow triggered');
-        this.selectOrCreateIOSLibrary();
-      }, 100);
+    // Check for existing libraries and show picker if any exist
+    setTimeout(async () => {
+      try {
+        const libraries = await window.electronAPI.getAllLibraries();
+        console.log('[ADSReader] Found libraries:', libraries.length);
+
+        if (libraries.length > 0) {
+          // Show library picker with existing libraries
+          if (this.isIOS) {
+            this.selectOrCreateIOSLibrary();
+          } else {
+            this.showDesktopLibraryPicker(libraries);
+          }
+        } else if (this.isIOS) {
+          // No libraries - show create screen for iOS
+          this.selectOrCreateIOSLibrary();
+        }
+        // For desktop with no libraries, the default setup screen buttons are fine
+      } catch (e) {
+        console.log('[ADSReader] Error checking libraries:', e);
+        if (this.isIOS) {
+          this.selectOrCreateIOSLibrary();
+        }
+      }
+    }, 100);
+  }
+
+  showDesktopLibraryPicker(libraries) {
+    const setupContainer = document.querySelector('.setup-container');
+    if (!setupContainer) return;
+
+    let html = `
+      <div class="setup-icon">📚</div>
+      <h1>Choose Library</h1>
+      <p class="setup-subtitle">Select an existing library or create a new one</p>
+
+      <div class="ios-library-list" style="margin-top: 24px;">
+    `;
+
+    for (const lib of libraries) {
+      const icon = lib.location === 'icloud' ? '☁️' : '💻';
+      const locationLabel = lib.location === 'icloud' ? 'iCloud' : 'Local';
+      const paperCount = lib.paperCount || 0;
+      const paperLabel = paperCount === 1 ? '1 paper' : `${paperCount} papers`;
+      html += `
+        <div class="ios-library-item" data-id="${lib.id}" style="display: flex; align-items: center; padding: 12px; margin: 8px 0; background: var(--bg-secondary); border-radius: 8px; cursor: pointer;">
+          <span style="font-size: 24px; margin-right: 12px;">${icon}</span>
+          <div style="flex: 1;">
+            <div style="font-weight: 500;">${this.escapeHtml(lib.name)} <span style="font-weight: normal; color: var(--text-secondary);">(${paperLabel})</span></div>
+            <div style="font-size: 12px; color: var(--text-secondary);">${locationLabel}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    html += `
+      </div>
+      <div style="margin-top: 24px; display: flex; gap: 12px; justify-content: center;">
+        <button id="desktop-create-icloud-btn" class="primary-button">
+          Create iCloud Library
+        </button>
+        <button id="desktop-create-local-btn" class="secondary-button">
+          Create Local Library
+        </button>
+      </div>
+    `;
+
+    setupContainer.innerHTML = html;
+
+    // Add click handlers for existing libraries
+    setupContainer.querySelectorAll('.ios-library-item').forEach(item => {
+      item.addEventListener('click', () => this.switchToLibrary(item.dataset.id));
+    });
+
+    // Add click handlers for create buttons
+    document.getElementById('desktop-create-icloud-btn')?.addEventListener('click', () => {
+      this.createDesktopLibrary('icloud');
+    });
+    document.getElementById('desktop-create-local-btn')?.addEventListener('click', () => {
+      this.createDesktopLibrary('local');
+    });
+  }
+
+  async createDesktopLibrary(location) {
+    const name = prompt('Enter library name:', 'My Library');
+    if (!name) return;
+
+    try {
+      const result = await window.electronAPI.createLibrary({ name, location });
+      if (result.success) {
+        await this.switchToLibrary(result.id);
+        this.showMainScreen({ path: result.path, name });
+      } else {
+        alert(`Failed to create library: ${result.error}`);
+      }
+    } catch (error) {
+      alert(`Error creating library: ${error.message}`);
     }
   }
 
@@ -1592,6 +2537,8 @@ class ADSReader {
       if (result.success) {
         console.log('[iOS] Library created:', result.id);
         await this.switchToLibrary(result.id);
+        // Show main screen after library creation
+        this.showMainScreen({ path: result.path, name });
       } else {
         alert(`Failed to create library: ${result.error}`);
         this.showIOSCreateLibrary();
@@ -1604,9 +2551,13 @@ class ADSReader {
   }
 
   showIOSLibraryPicker(libraries) {
+    console.log('[showIOSLibraryPicker] Called with', libraries.length, 'libraries');
     // Update setup screen to show library selection
     const setupContainer = document.querySelector('.setup-container');
-    if (!setupContainer) return;
+    if (!setupContainer) {
+      console.error('[showIOSLibraryPicker] No setup container found');
+      return;
+    }
 
     let html = `
       <div class="setup-icon">📚</div>
@@ -1619,13 +2570,16 @@ class ADSReader {
     for (const lib of libraries) {
       const icon = lib.location === 'icloud' ? '☁️' : '💻';
       html += `
-        <div class="ios-library-item" data-id="${lib.id}">
+        <button class="ios-library-item" data-id="${lib.id}" onclick="window.app.handleLibraryClick('${lib.id}', '${this.escapeHtml(lib.name).replace(/'/g, "\\'")}')">
           <span class="lib-icon">${icon}</span>
           <div class="lib-info">
             <span class="lib-name">${this.escapeHtml(lib.name)}</span>
             <span class="lib-location">${lib.location === 'icloud' ? 'iCloud' : 'Local'}</span>
           </div>
-        </div>
+          <span class="ios-library-delete-btn" data-id="${lib.id}" data-name="${this.escapeHtml(lib.name)}" onclick="event.stopPropagation(); window.app.handleLibraryDelete('${lib.id}', '${this.escapeHtml(lib.name).replace(/'/g, "\\'")}')">
+            🗑️
+          </span>
+        </button>
       `;
     }
 
@@ -1640,14 +2594,73 @@ class ADSReader {
 
     setupContainer.innerHTML = html;
 
-    // Add click handlers
-    setupContainer.querySelectorAll('.ios-library-item').forEach(item => {
-      item.addEventListener('click', () => this.switchToLibrary(item.dataset.id));
-    });
-
+    // Note: Library items use inline onclick handlers for iOS compatibility
+    // Only set up the Create button handler
     document.getElementById('ios-new-library-btn')?.addEventListener('click', () => {
+      console.log('[showIOSLibraryPicker] Create new library clicked');
       this.createIOSLibrary();
     });
+
+    console.log('[showIOSLibraryPicker] Setup complete, using inline onclick handlers');
+  }
+
+  // Handler methods for inline onclick (iOS compatibility)
+  async handleLibraryClick(libId, libName) {
+    console.log('[handleLibraryClick] Called with:', libId, libName);
+    try {
+      await this.switchToLibrary(libId);
+      console.log('[handleLibraryClick] switchToLibrary completed successfully');
+    } catch (error) {
+      console.error('[handleLibraryClick] Error:', error);
+      alert('Failed to switch library: ' + error.message);
+    }
+  }
+
+  async handleLibraryDelete(libId, libName) {
+    console.log('[handleLibraryDelete] Called with:', libId, libName);
+    await this.confirmDeleteIOSLibrary(libId, libName);
+  }
+
+  async confirmDeleteIOSLibrary(libraryId, libraryName) {
+    // Show confirmation dialog
+    const confirmed = confirm(
+      `Delete library "${libraryName}"?\n\n` +
+      `This will permanently delete the library and all its papers, PDFs, and annotations.\n\n` +
+      `This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    // Double-confirm for safety
+    const doubleConfirm = confirm(
+      `Are you sure? Type "delete" in the next prompt to confirm deletion of "${libraryName}".`
+    );
+
+    if (!doubleConfirm) return;
+
+    const typed = prompt('Type "delete" to confirm:');
+    if (typed?.toLowerCase() !== 'delete') {
+      alert('Deletion cancelled.');
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.deleteLibrary({
+        libraryId,
+        deleteFiles: true
+      });
+
+      if (result.success) {
+        alert(`Library "${libraryName}" has been deleted.`);
+        // Refresh the library picker
+        await this.selectOrCreateIOSLibrary();
+      } else {
+        alert(`Failed to delete library: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Failed to delete library:', error);
+      alert(`Error deleting library: ${error.message}`);
+    }
   }
 
   async createIOSLibrary() {
@@ -1739,7 +2752,7 @@ class ADSReader {
           <span>${paper.year || ''}</span>
           ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
           ${this.getRatingEmoji(paper.rating)}
-          ${paper.bibcode ? `<button class="pdf-source-btn" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode}" title="PDF">📄${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>` : ''}
+          ${paper.pdf_path ? `<button class="pdf-source-btn" data-paper-id="${paper.id}" data-bibcode="${paper.bibcode || ''}" title="PDF">📄${paper.annotation_count > 0 ? `<span class="note-badge">${paper.annotation_count}</span>` : ''}</button>` : ''}
           ${paper.is_indexed ? '<span class="indexed-indicator" title="Indexed for AI search">⚡</span>' : ''}
         </div>
       </div>
@@ -1772,6 +2785,33 @@ class ADSReader {
 
       item.addEventListener('dragend', () => {
         item.classList.remove('dragging');
+      });
+
+      // Drop support for attaching PDFs
+      item.addEventListener('dragover', (e) => {
+        // Only accept files
+        if (e.dataTransfer.types.includes('Files')) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          item.classList.add('drop-target');
+        }
+      });
+
+      item.addEventListener('dragleave', () => {
+        item.classList.remove('drop-target');
+      });
+
+      item.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        item.classList.remove('drop-target');
+        const files = Array.from(e.dataTransfer.files);
+        const pdfFiles = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+        if (pdfFiles.length > 0) {
+          const paperId = parseInt(item.dataset.id);
+          // Use webUtils.getPathForFile exposed through preload for context-isolated apps
+          const pdfPath = window.electronAPI.getPathForFile(pdfFiles[0]);
+          await this.attachDroppedPdf(paperId, pdfPath);
+        }
       });
     });
 
@@ -1846,6 +2886,13 @@ class ADSReader {
     removeBtn.disabled = count === 0;
     removeBtn.textContent = count > 1 ? `−` : '−';
     removeBtn.title = count > 1 ? `Remove ${count} Papers (Backspace)` : 'Remove Paper (Backspace)';
+
+    // Update attach button - disabled when multiple papers selected
+    const attachBtn = document.getElementById('attach-file-btn');
+    if (attachBtn) {
+      attachBtn.disabled = count !== 1;
+      attachBtn.classList.toggle('disabled', count !== 1);
+    }
   }
 
   selectAllPapers() {
@@ -2003,9 +3050,9 @@ class ADSReader {
     }
 
     listEl.innerHTML = this.collections.map(col => `
-      <div class="nav-item${this.currentCollection === col.id ? ' active' : ''}" data-collection="${col.id}">
+      <div class="nav-item${this.currentCollection === col.id ? ' active' : ''}${col.is_smart ? ' smart' : ''}" data-collection="${col.id}">
         <button class="collection-delete-btn" data-delete-collection="${col.id}" title="Delete collection">−</button>
-        <span class="nav-icon">📁</span>
+        <span class="nav-icon">${col.is_smart ? '🔍' : '📁'}</span>
         <span class="collection-name">${this.escapeHtml(col.name)}</span>
         <span class="nav-count">${col.paper_count || 0}</span>
       </div>
@@ -2059,11 +3106,18 @@ class ADSReader {
     }
 
     await this.displayPaper(id);
+
+    // Auto-switch to PDF tab on mobile
+    if (this.isMobileView) {
+      this.switchMobileView('pdf');
+    }
   }
 
   async displayPaper(id) {
     // Save current scroll position before switching papers
-    if (this.selectedPaper && this.pdfDoc) {
+    // Only save if we're on the PDF tab - otherwise the container may have stale wrappers
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+    if (this.selectedPaper && this.pdfDoc && activeTab === 'pdf') {
       const container = document.getElementById('pdf-container');
       const currentPage = this.getCurrentVisiblePage();
       const currentWrapper = container.querySelector(`.pdf-page-wrapper[data-page="${currentPage}"]`);
@@ -2122,7 +3176,7 @@ class ADSReader {
     // Update abstract
     const abstractEl = document.getElementById('abstract-content');
     if (paper.abstract) {
-      abstractEl.innerHTML = `<p>${this.escapeHtml(paper.abstract)}</p>`;
+      abstractEl.innerHTML = `<p>${this.sanitizeAbstract(paper.abstract)}</p>`;
     } else {
       abstractEl.innerHTML = '<p class="no-content">No abstract available. Click "Sync" to retrieve metadata from ADS.</p>';
     }
@@ -2139,6 +3193,15 @@ class ADSReader {
     // Update BibTeX
     document.getElementById('bibtex-content').value = paper.bibtex || '';
 
+    // Show BibTeX source if available
+    const sourceInfo = document.getElementById('bibtex-source-info');
+    if (paper.import_source) {
+      sourceInfo.textContent = `Imported from: ${paper.import_source}`;
+      sourceInfo.classList.remove('hidden');
+    } else {
+      sourceInfo.classList.add('hidden');
+    }
+
     // Load references and citations
     await this.loadReferences(paper.id);
     await this.loadCitations(paper.id);
@@ -2150,13 +3213,56 @@ class ADSReader {
     const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     const infoTabs = ['abstract', 'refs', 'cites', 'bibtex'];
 
+    // Check if paper has any PDF available (downloaded sources + attachments + pdf_path)
+    const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
+    const attachments = await window.electronAPI.getAttachments(paper.id);
+    const pdfAttachments = attachments.filter(a => a.file_type === 'pdf');
+    const hasAnyPdf = downloadedSources.length > 0 || pdfAttachments.length > 0 || !!paper.pdf_path;
+
+    // If paper has PDFs, determine which one to load based on last viewed
+    if (hasAnyPdf) {
+      const lastSource = this.lastPdfSources[paper.id];
+
+      if (lastSource) {
+        // Check if last source is an attachment
+        if (lastSource.startsWith('ATTACHMENT:')) {
+          const filename = lastSource.substring('ATTACHMENT:'.length);
+          const attachment = pdfAttachments.find(a => a.filename === filename);
+          if (attachment) {
+            paper.pdf_path = `papers/${filename}`;
+          }
+        } else {
+          // It's a source type (EPRINT_PDF, PUB_PDF, ADS_PDF)
+          if (downloadedSources.includes(lastSource) && paper.bibcode) {
+            const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+            paper.pdf_path = `papers/${baseFilename}_${lastSource}.pdf`;
+          }
+        }
+      }
+
+      // If no last source or last source not available, use first available
+      if (!paper.pdf_path) {
+        if (downloadedSources.length > 0 && paper.bibcode) {
+          const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+          paper.pdf_path = `papers/${baseFilename}_${downloadedSources[0]}.pdf`;
+        } else if (pdfAttachments.length > 0) {
+          paper.pdf_path = `papers/${pdfAttachments[0].filename}`;
+        }
+      }
+    }
+
     if (infoTabs.includes(currentTab)) {
       // Stay on current tab and refresh if multi-select
       if (this.selectedPapers.size > 1) {
         this.switchTab(currentTab); // This will trigger multi-display
       }
       // Still load PDF in background for when user switches
-      await this.loadPDF(paper);
+      if (hasAnyPdf) {
+        await this.loadPDF(paper);
+      }
+    } else if (!hasAnyPdf) {
+      // No PDF available, switch to BibTeX tab instead
+      this.switchTab('bibtex');
     } else {
       // Switch to PDF tab
       this.switchTab('pdf');
@@ -2164,8 +3270,60 @@ class ADSReader {
     }
   }
 
+  async openPdfWithSystemViewer() {
+    if (!this.selectedPaper?.pdf_path) {
+      this.showNotification('No PDF available', 'error');
+      return;
+    }
+
+    // Extract filename from pdf_path (e.g., "papers/filename.pdf" -> "filename.pdf")
+    const pdfPath = this.selectedPaper.pdf_path;
+    const filename = pdfPath.replace(/^papers\//, '');
+
+    try {
+      const result = await window.electronAPI.openAttachment(filename);
+      if (!result.success) {
+        this.showNotification(result.error || 'Failed to open PDF', 'error');
+      }
+    } catch (error) {
+      this.showNotification(`Error opening PDF: ${error.message}`, 'error');
+    }
+  }
+
   async loadPDF(paper) {
     const container = document.getElementById('pdf-container');
+
+    // On iOS with native viewer preference, use native PDF viewer instead of PDF.js
+    if (this.isIOS && !this.isMobileView && paper.pdf_path) {
+      // Show a button to open in native viewer
+      container.innerHTML = `
+        <div class="pdf-loading ios-pdf-prompt">
+          <button class="btn btn-primary open-pdf-native-btn">Open PDF</button>
+          <p class="ios-pdf-hint">Tap to open in PDF viewer</p>
+        </div>
+      `;
+
+      // Add click handler for the button
+      const btn = container.querySelector('.open-pdf-native-btn');
+      btn.addEventListener('click', async () => {
+        btn.textContent = 'Opening...';
+        btn.disabled = true;
+        try {
+          const result = await window.electronAPI.openPdfNative(paper.pdf_path);
+          if (!result.success) {
+            this.showNotification(result.error || 'Failed to open PDF', 'error');
+          }
+        } catch (error) {
+          this.showNotification(`Error: ${error.message}`, 'error');
+        }
+        btn.textContent = 'Open PDF';
+        btn.disabled = false;
+      });
+
+      document.getElementById('total-pages').textContent = '-';
+      document.getElementById('current-page').textContent = '-';
+      return;
+    }
 
     // Cleanup previous PDF document
     if (this.pdfDoc) {
@@ -2180,12 +3338,9 @@ class ADSReader {
       container.innerHTML = '<div class="pdf-loading">No PDF available</div>';
       document.getElementById('total-pages').textContent = '0';
       document.getElementById('current-page').textContent = '0';
-      return;
-    }
-
-    const pdfPath = await window.electronAPI.getPdfPath(paper.pdf_path);
-    if (!pdfPath) {
-      container.innerHTML = '<div class="pdf-loading">PDF path not found</div>';
+      if (this.isMobileView) {
+        document.body.classList.remove('viewing-pdf');
+      }
       return;
     }
 
@@ -2193,28 +3348,81 @@ class ADSReader {
     container.innerHTML = '<div class="pdf-loading">Loading PDF...</div>';
 
     try {
-      // Load new PDF with cache busting to ensure fresh load
-      const loadingTask = pdfjsLib.getDocument({
-        url: `file://${pdfPath}`,
-        cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
-        cMapPacked: true
-      });
+      let loadingTask;
 
-      this.pdfDoc = await loadingTask.promise;
+      // On mobile/iOS, use data loading (file:// and blob URLs don't work in WKWebView)
+      if (this.isMobileView) {
+        const pdfData = await window.electronAPI.getPdfAsBlob(paper.pdf_path);
+        if (!pdfData) {
+          // Check if iCloud download was triggered
+          container.innerHTML = `
+            <div class="pdf-loading">
+              <p>PDF file not available locally</p>
+              <p style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
+                The PDF may still be syncing from iCloud. Please wait a moment and try again.
+              </p>
+              <button onclick="window.app.loadPDF(window.app.selectedPaper)"
+                      class="primary-button" style="margin-top: 16px;">
+                Retry Loading PDF
+              </button>
+            </div>`;
+          return;
+        }
+        document.body.classList.add('viewing-pdf');
+        // Pass binary data directly to PDF.js (blob URLs don't work in WKWebView)
+        loadingTask = pdfjsLib.getDocument({
+          data: pdfData,
+          cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+          cMapPacked: true
+        });
+        this.pdfDoc = await loadingTask.promise;
+      } else {
+        // Desktop: use file:// URL
+        const pdfPath = await window.electronAPI.getPdfPath(paper.pdf_path);
+        if (!pdfPath) {
+          container.innerHTML = '<div class="pdf-loading">PDF path not found</div>';
+          return;
+        }
+
+        // Load new PDF with cache busting to ensure fresh load
+        loadingTask = pdfjsLib.getDocument({
+          url: `file://${pdfPath}`,
+          cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+          cMapPacked: true
+        });
+        this.pdfDoc = await loadingTask.promise;
+      }
+
       document.getElementById('total-pages').textContent = this.pdfDoc.numPages;
 
-      // Get saved position if available
+      // Get saved position if available, but validate it
       const savedPos = this.pdfPagePositions[paper.id];
-      const targetPage = savedPos?.page || 1;
-      const pageOffset = savedPos?.offset || 0;
+      let targetPage = savedPos?.page || 1;
+      let pageOffset = savedPos?.offset || 0;
+
+      // Validate saved position - if page is out of range, start at page 1
+      if (targetPage < 1 || targetPage > this.pdfDoc.numPages) {
+        targetPage = 1;
+        pageOffset = 0;
+        // Clear invalid saved position
+        delete this.pdfPagePositions[paper.id];
+      }
 
       document.getElementById('current-page').textContent = targetPage;
 
       // Render with priority on the saved page
       await this.renderAllPages(targetPage, pageOffset);
+
+      // Update mobile PDF controls after loading
+      if (this.isMobileView) {
+        this.updateMobilePdfControls();
+      }
     } catch (error) {
       console.error('PDF load error:', error);
       container.innerHTML = `<div class="pdf-loading">Failed to load PDF: ${error.message}</div>`;
+      if (this.isMobileView) {
+        document.body.classList.remove('viewing-pdf');
+      }
     }
   }
 
@@ -2590,6 +3798,96 @@ class ADSReader {
     this.updateCitesImportButton();
   }
 
+  /**
+   * Fetch references from ADS with custom limit
+   * @param {number} [limit] - Number of refs to fetch (uses input value if not provided)
+   */
+  async fetchRefsFromADS(limit = null) {
+    if (!this.selectedPaper?.bibcode) {
+      this.showNotification('Paper has no bibcode - cannot fetch from ADS', 'error');
+      return;
+    }
+
+    const limitInput = document.getElementById('refs-limit-input');
+    const actualLimit = limit || parseInt(limitInput.value) || 50;
+    const loadBtn = document.getElementById('refs-load-more');
+    const loadAllBtn = document.getElementById('refs-load-all');
+
+    // Disable buttons during fetch
+    loadBtn.disabled = true;
+    loadAllBtn.disabled = true;
+    loadBtn.textContent = 'Loading...';
+
+    try {
+      const result = await window.electronAPI.adsGetReferences(this.selectedPaper.bibcode, { limit: actualLimit });
+      if (result.success && result.data) {
+        // Store refs in database
+        await window.electronAPI.addReferences(this.selectedPaper.id, result.data.map(r => ({
+          bibcode: r.bibcode,
+          title: r.title?.[0] || r.title,
+          authors: Array.isArray(r.author) ? r.author.join(', ') : r.author,
+          year: r.year
+        })));
+        // Reload from database
+        await this.loadReferences(this.selectedPaper.id);
+        this.showNotification(`Loaded ${result.data.length} references`, 'success');
+      } else {
+        this.showNotification(result.error || 'Failed to fetch references', 'error');
+      }
+    } catch (err) {
+      this.showNotification(`Error fetching references: ${err.message}`, 'error');
+    } finally {
+      loadBtn.disabled = false;
+      loadAllBtn.disabled = false;
+      loadBtn.textContent = 'Load';
+    }
+  }
+
+  /**
+   * Fetch citations from ADS with custom limit
+   * @param {number} [limit] - Number of cites to fetch (uses input value if not provided)
+   */
+  async fetchCitesFromADS(limit = null) {
+    if (!this.selectedPaper?.bibcode) {
+      this.showNotification('Paper has no bibcode - cannot fetch from ADS', 'error');
+      return;
+    }
+
+    const limitInput = document.getElementById('cites-limit-input');
+    const actualLimit = limit || parseInt(limitInput.value) || 50;
+    const loadBtn = document.getElementById('cites-load-more');
+    const loadAllBtn = document.getElementById('cites-load-all');
+
+    // Disable buttons during fetch
+    loadBtn.disabled = true;
+    loadAllBtn.disabled = true;
+    loadBtn.textContent = 'Loading...';
+
+    try {
+      const result = await window.electronAPI.adsGetCitations(this.selectedPaper.bibcode, { limit: actualLimit });
+      if (result.success && result.data) {
+        // Store cites in database
+        await window.electronAPI.addCitations(this.selectedPaper.id, result.data.map(c => ({
+          bibcode: c.bibcode,
+          title: c.title?.[0] || c.title,
+          authors: Array.isArray(c.author) ? c.author.join(', ') : c.author,
+          year: c.year
+        })));
+        // Reload from database
+        await this.loadCitations(this.selectedPaper.id);
+        this.showNotification(`Loaded ${result.data.length} citations`, 'success');
+      } else {
+        this.showNotification(result.error || 'Failed to fetch citations', 'error');
+      }
+    } catch (err) {
+      this.showNotification(`Error fetching citations: ${err.message}`, 'error');
+    } finally {
+      loadBtn.disabled = false;
+      loadAllBtn.disabled = false;
+      loadBtn.textContent = 'Load';
+    }
+  }
+
   // Refs selection methods
   toggleRefSelection(index, selected) {
     if (selected) {
@@ -2720,6 +4018,47 @@ class ADSReader {
     await this.importPapersFromBibcodes(papers, 'cites');
   }
 
+  /**
+   * Attach a dropped PDF file to a paper
+   * @param {number} paperId - The paper ID to attach the PDF to
+   * @param {string} pdfPath - Path to the PDF file
+   */
+  async attachDroppedPdf(paperId, pdfPath) {
+    try {
+      const paper = this.papers.find(p => p.id === paperId);
+      if (!paper) {
+        this.showNotification('Paper not found', 'error');
+        return;
+      }
+
+      // Call IPC to copy PDF to library and update database
+      const result = await window.electronAPI.attachPdfToPaper(paperId, pdfPath);
+      if (result.success) {
+        // Update local paper object
+        paper.pdf_path = result.pdfPath;
+        paper.pdf_source = 'ATTACHED';
+
+        // Set as last viewed source so it shows by default
+        this.lastPdfSources[paperId] = 'ATTACHED';
+        window.electronAPI.setLastPdfSource(paperId, 'ATTACHED');
+
+        // Re-render to show PDF button
+        this.renderPaperList();
+        // If this paper is selected, refresh detail view and switch to PDF tab
+        if (this.selectedPaper?.id === paperId) {
+          this.selectedPaper = paper;
+          this.switchTab('pdf');
+          await this.displayPaper(paperId);
+        }
+        this.showNotification(`PDF attached to "${paper.title?.substring(0, 30)}..."`, 'success');
+      } else {
+        this.showNotification(result.error || 'Failed to attach PDF', 'error');
+      }
+    } catch (err) {
+      this.showNotification(`Error attaching PDF: ${err.message}`, 'error');
+    }
+  }
+
   // Shared import method for refs/cites
   async importPapersFromBibcodes(papers, source) {
     // Show the ADS search modal for progress
@@ -2755,6 +4094,11 @@ class ADSReader {
     // Load AI panel data when switching to AI tab
     if (tabName === 'ai' && this.selectedPaper) {
       this.loadAIPanelData();
+    }
+
+    // When switching to PDF tab, ensure we load the correct paper's PDF
+    if (tabName === 'pdf' && this.selectedPaper) {
+      this.loadPDF(this.selectedPaper);
     }
 
     // Handle multi-selection for info tabs
@@ -2836,7 +4180,7 @@ class ADSReader {
           <h4>${this.escapeHtml(paper.title || 'Untitled')}</h4>
           <p class="paper-authors">${this.escapeHtml(authors)}</p>
           <p class="paper-meta">${this.escapeHtml(metaLine)}</p>
-          <p class="paper-abstract">${paper.abstract ? this.escapeHtml(paper.abstract) : '<em>No abstract available</em>'}</p>
+          <p class="paper-abstract">${paper.abstract ? this.sanitizeAbstract(paper.abstract) : '<em>No abstract available</em>'}</p>
         </div>
       `;
     }).join('<hr style="margin: 16px 0; border-color: var(--border-color);">');
@@ -3513,6 +4857,20 @@ class ADSReader {
                 if (index >= 0) this.papers[index] = paper;
                 // Force re-select to update all panes
                 await this.selectPaper(paper.id);
+
+                // After sync, check if PDF is now available and switch to PDF tab
+                const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
+                const attachments = await window.electronAPI.getAttachments(paper.id);
+                const pdfAttachments = attachments.filter(a => a.file_type === 'pdf');
+                const hasAnyPdf = downloadedSources.length > 0 || pdfAttachments.length > 0 || !!paper.pdf_path;
+
+                if (hasAnyPdf) {
+                  const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+                  if (currentTab !== 'pdf') {
+                    this.switchTab('pdf');
+                    await this.loadPDF(paper);
+                  }
+                }
               }
             }
           } catch (err) {
@@ -3720,13 +5078,164 @@ class ADSReader {
     }
   }
 
+  enterBibtexEditMode() {
+    const textarea = document.getElementById('bibtex-content');
+    const editBtn = document.getElementById('edit-bibtex-btn');
+    const saveBtn = document.getElementById('save-bibtex-btn');
+    const cancelBtn = document.getElementById('cancel-bibtex-btn');
+
+    // Store original value for cancel
+    this.originalBibtex = textarea.value;
+
+    // Enable editing
+    textarea.removeAttribute('readonly');
+    textarea.classList.add('editing');
+
+    // Toggle buttons
+    editBtn.classList.add('hidden');
+    saveBtn.classList.remove('hidden');
+    cancelBtn.classList.remove('hidden');
+
+    // Focus textarea
+    textarea.focus();
+  }
+
+  exitBibtexEditMode(restoreOriginal = false) {
+    const textarea = document.getElementById('bibtex-content');
+    const editBtn = document.getElementById('edit-bibtex-btn');
+    const saveBtn = document.getElementById('save-bibtex-btn');
+    const cancelBtn = document.getElementById('cancel-bibtex-btn');
+
+    // Restore original value if canceling
+    if (restoreOriginal && this.originalBibtex !== undefined) {
+      textarea.value = this.originalBibtex;
+    }
+
+    // Disable editing
+    textarea.setAttribute('readonly', '');
+    textarea.classList.remove('editing');
+
+    // Toggle buttons
+    editBtn.classList.remove('hidden');
+    saveBtn.classList.add('hidden');
+    cancelBtn.classList.add('hidden');
+
+    // Clear stored original
+    this.originalBibtex = undefined;
+  }
+
+  toggleShortcuts() {
+    const summary = document.getElementById('shortcuts-summary');
+    const grid = document.getElementById('shortcuts-grid');
+
+    const isExpanded = summary.classList.toggle('expanded');
+    grid.classList.toggle('hidden', !isExpanded);
+
+    // Persist state
+    localStorage.setItem('shortcutsExpanded', isExpanded);
+  }
+
+  async saveBibtex() {
+    if (!this.selectedPaper) return;
+
+    const textarea = document.getElementById('bibtex-content');
+    const bibtex = textarea.value.trim();
+
+    if (!bibtex) return;
+
+    const btn = document.getElementById('save-bibtex-btn');
+    const originalText = btn.textContent;
+    btn.textContent = 'Saving...';
+    btn.disabled = true;
+
+    try {
+      const result = await window.electronAPI.saveBibtex(this.selectedPaper.id, bibtex);
+
+      if (result.success) {
+        // Update local paper object with new metadata
+        Object.assign(this.selectedPaper, result.paper);
+
+        // Update the papers array
+        const index = this.papers.findIndex(p => p.id === this.selectedPaper.id);
+        if (index !== -1) {
+          this.papers[index] = result.paper;
+        }
+
+        // Refresh paper list to show updated title/authors
+        this.renderPaperList();
+
+        // Update the detail view
+        document.getElementById('paper-title').textContent = result.paper.title || 'Untitled';
+        document.getElementById('paper-authors').textContent = result.paper.authors?.slice(0, 3).join(', ') || '';
+        document.getElementById('paper-year').textContent = result.paper.year || '';
+        document.getElementById('paper-journal').textContent = result.paper.journal || '';
+
+        // Update abstract if present
+        const abstractEl = document.getElementById('abstract-content');
+        if (result.paper.abstract) {
+          abstractEl.innerHTML = `<p>${this.sanitizeAbstract(result.paper.abstract)}</p>`;
+        }
+
+        btn.textContent = '✓ Saved!';
+        btn.disabled = false;
+
+        // Exit edit mode after brief success message
+        setTimeout(() => {
+          this.exitBibtexEditMode();
+        }, 800);
+      } else {
+        btn.textContent = 'Error';
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.disabled = false;
+        }, 1500);
+        console.error('Failed to save BibTeX:', result.error);
+      }
+    } catch (error) {
+      console.error('Error saving BibTeX:', error);
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  }
+
   openInADS() {
     if (!this.selectedPaper?.bibcode) return;
     window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${this.selectedPaper.bibcode}`);
   }
 
+  async attachFiles() {
+    // Only allow attaching to single paper selection
+    if (this.selectedPapers.size > 1) {
+      this.addConsoleMessage('Cannot attach files to multiple papers at once', 'warn');
+      return;
+    }
+
+    if (!this.selectedPaper) {
+      this.addConsoleMessage('No paper selected', 'warn');
+      return;
+    }
+
+    const result = await window.electronAPI.attachFiles(
+      this.selectedPaper.id,
+      this.selectedPaper.bibcode
+    );
+
+    if (result.success && result.attachments?.length > 0) {
+      this.addConsoleMessage(`Attached ${result.attachments.length} file(s)`, 'success');
+    }
+  }
+
+  updateAttachButtonState() {
+    const btn = document.getElementById('attach-file-btn');
+    if (!btn) return;
+
+    const disabled = this.selectedPapers.size !== 1;
+    btn.disabled = disabled;
+    btn.classList.toggle('disabled', disabled);
+  }
+
   openSelectedPaperInADS() {
-    this.hidePaperContextMenu();
+    this.hideContextMenu();
     // If multiple selected, open the first one; otherwise use rightClickedPaper or selectedPaper
     const paper = this.rightClickedPaper || this.selectedPaper;
     if (!paper?.bibcode) return;
@@ -3734,7 +5243,7 @@ class ADSReader {
   }
 
   async openPublisherPDF() {
-    this.hidePaperContextMenu();
+    this.hideContextMenu();
     const paper = this.rightClickedPaper || this.selectedPaper;
     if (!paper?.bibcode) {
       alert('No paper selected or paper has no bibcode');
@@ -3777,16 +5286,17 @@ class ADSReader {
     btn.textContent = '⏳';
 
     try {
-      // Fetch available sources
-      const result = await window.electronAPI.adsGetEsources(bibcode);
+      // Fetch attachments first (always available even without bibcode)
+      const attachments = await window.electronAPI.getAttachments(paperId);
 
-      if (!result.success) {
-        btn.textContent = '📄';
-        alert(`Failed to get PDF sources: ${result.error}`);
-        return;
+      // Try to fetch ADS sources (only if we have a bibcode)
+      let sources = { arxiv: false, publisher: false, ads: false };
+      if (bibcode) {
+        const result = await window.electronAPI.adsGetEsources(bibcode);
+        if (result.success) {
+          sources = result.data;
+        }
       }
-
-      const sources = result.data;
 
       // Fetch annotation counts by source for this paper
       const annotationCounts = await window.electronAPI.getAnnotationCountsBySource(paperId);
@@ -3807,25 +5317,52 @@ class ADSReader {
       };
 
       // Collect available sources in priority order
+      // Include sources that are either available from ADS OR already downloaded
       const availableSources = [];
       for (const sourceType of priority) {
         const info = sourceInfo[sourceType];
-        if (info && info.available) {
+        if (!info) continue;
+
+        const downloaded = downloadedPdfs.includes(sourceType);
+        const available = info.available || downloaded; // Show if available OR already downloaded
+
+        if (available) {
           const count = annotationCounts[sourceType] || 0;
-          const downloaded = downloadedPdfs.includes(sourceType);
           availableSources.push({ type: info.type, label: info.label, noteCount: count, downloaded });
         }
       }
 
-      // If no sources available
-      if (availableSources.length === 0) {
+      // Add ATTACHED PDF if it exists (drag-drop attached PDFs)
+      if (downloadedPdfs.includes('ATTACHED')) {
+        const count = annotationCounts['ATTACHED'] || 0;
+        availableSources.push({ type: 'ATTACHED', label: '📎 Attached', noteCount: count, downloaded: true });
+      }
+
+      // If no sources available AND no attachments
+      if (availableSources.length === 0 && attachments.length === 0) {
         alert('No PDF sources available for this paper');
         return;
       }
 
-      // If only one source, download/show it directly
-      if (availableSources.length === 1) {
+      // If only one source and no attachments, download/show it directly
+      if (availableSources.length === 1 && attachments.length === 0) {
         await this.downloadFromSource(paperId, availableSources[0].type, null);
+        return;
+      }
+
+      // If no ADS sources but has exactly one PDF attachment, open it directly
+      if (availableSources.length === 0 && attachments.length === 1 && attachments[0].file_type === 'pdf') {
+        const paper = this.papers.find(p => p.id === paperId);
+        if (paper) {
+          const filename = attachments[0].filename;
+          paper.pdf_path = `papers/${filename}`;
+          this.selectedPaper = paper;
+          this.switchTab('pdf');
+          await this.loadPDF(paper);
+          // Save as last viewed
+          this.lastPdfSources[paperId] = `ATTACHMENT:${filename}`;
+          window.electronAPI.setLastPdfSource(paperId, `ATTACHMENT:${filename}`);
+        }
         return;
       }
 
@@ -3841,6 +5378,18 @@ class ADSReader {
         return `<div class="pdf-source-item${s.downloaded ? ' downloaded' : ''}" data-source="${s.type}">${downloadedIcon}${s.label}${notesBadge}${deleteBtn}</div>`;
       }).join('');
 
+      // Add attachments section (already fetched earlier)
+      if (attachments.length > 0) {
+        // Only show separator if there are also ADS sources
+        if (availableSources.length > 0) {
+          dropdown.innerHTML += '<div class="pdf-source-separator"></div>';
+        }
+        dropdown.innerHTML += attachments.map(att => {
+          const icon = att.file_type === 'pdf' ? '📄' : '📎';
+          return `<div class="pdf-source-item attachment-item" data-attachment-id="${att.id}" data-filename="${att.filename}" data-is-pdf="${att.file_type === 'pdf'}">${icon} ${att.original_name}<span class="attachment-delete-btn" data-attachment-id="${att.id}" title="Delete attachment">×</span></div>`;
+        }).join('');
+      }
+
       // Position dropdown below button
       const btnRect = btn.getBoundingClientRect();
       dropdown.style.position = 'fixed';
@@ -3849,8 +5398,8 @@ class ADSReader {
 
       document.body.appendChild(dropdown);
 
-      // Add click handlers for source items
-      dropdown.querySelectorAll('.pdf-source-item').forEach(item => {
+      // Add click handlers for PDF source items (not attachments)
+      dropdown.querySelectorAll('.pdf-source-item:not(.attachment-item)').forEach(item => {
         item.addEventListener('click', async (e) => {
           // Don't trigger if clicking delete button
           if (e.target.classList.contains('pdf-delete-btn')) return;
@@ -3860,7 +5409,37 @@ class ADSReader {
         });
       });
 
-      // Add click handlers for delete buttons
+      // Add click handlers for attachment items
+      dropdown.querySelectorAll('.attachment-item').forEach(item => {
+        item.addEventListener('click', async (e) => {
+          // Don't trigger if clicking delete button
+          if (e.target.classList.contains('attachment-delete-btn')) return;
+          e.stopPropagation();
+
+          const filename = item.dataset.filename;
+          const isPdf = item.dataset.isPdf === 'true';
+
+          if (isPdf) {
+            // Load PDF in viewer - update paper's pdf_path and load
+            const paper = this.papers.find(p => p.id === paperId);
+            if (paper) {
+              paper.pdf_path = `papers/${filename}`;
+              this.selectedPaper = paper;
+              this.switchTab('pdf');
+              await this.loadPDF(paper);
+              // Save as last viewed (use filename as identifier for attachments)
+              this.lastPdfSources[paperId] = `ATTACHMENT:${filename}`;
+              window.electronAPI.setLastPdfSource(paperId, `ATTACHMENT:${filename}`);
+            }
+          } else {
+            // Open with system default app
+            await window.electronAPI.openAttachment(filename);
+          }
+          this.hidePdfSourceDropdown();
+        });
+      });
+
+      // Add click handlers for PDF delete buttons
       dropdown.querySelectorAll('.pdf-delete-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
           e.stopPropagation();
@@ -3879,6 +5458,28 @@ class ADSReader {
               item.classList.remove('downloaded');
               item.innerHTML = item.innerHTML.replace('✓ ', '').replace(/<span class="pdf-delete-btn"[^>]*>×<\/span>/, '');
               this.addConsoleMessage(`Deleted ${sourceType} PDF`, 'info');
+            }
+          }
+        });
+      });
+
+      // Add click handlers for attachment delete buttons
+      dropdown.querySelectorAll('.attachment-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const attachmentId = parseInt(btn.dataset.attachmentId);
+          const item = btn.closest('.attachment-item');
+          const filename = item.dataset.filename;
+
+          const result = await window.electronAPI.deleteAttachment(attachmentId);
+          if (result.success) {
+            item.remove();
+            this.addConsoleMessage(`Deleted attachment: ${filename}`, 'info');
+            // Remove separator if no more attachments
+            const remainingAttachments = dropdown.querySelectorAll('.attachment-item');
+            if (remainingAttachments.length === 0) {
+              const separator = dropdown.querySelector('.pdf-source-separator');
+              if (separator) separator.remove();
             }
           }
         });
@@ -3919,6 +5520,24 @@ class ADSReader {
       return;
     }
 
+    // Handle ATTACHED type (drag-drop attached PDFs) - these already exist
+    if (sourceType === 'ATTACHED' && paper.bibcode) {
+      const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const expectedPath = `papers/${baseFilename}_ATTACHED.pdf`;
+      console.log(`[downloadFromSource] Loading attached PDF: ${expectedPath}`);
+
+      paper.pdf_path = expectedPath;
+      if (this.selectedPaper && this.selectedPaper.id === paperId) {
+        this.selectedPaper.pdf_path = expectedPath;
+        this.currentPdfSource = 'ATTACHED';
+        await this.loadPDF(this.selectedPaper);
+      }
+      // Save as last viewed source
+      this.lastPdfSources[paperId] = 'ATTACHED';
+      window.electronAPI.setLastPdfSource(paperId, 'ATTACHED');
+      return;
+    }
+
     // Map source types to PDF source identifiers
     const sourceToType = {
       publisher: 'PUB_PDF',
@@ -3947,6 +5566,9 @@ class ADSReader {
           await this.loadPDF(this.selectedPaper);
         }
         await window.electronAPI.updatePaper(paperId, { pdf_path: expectedPath });
+        // Save as last viewed source
+        this.lastPdfSources[paperId] = requestedSourceType;
+        window.electronAPI.setLastPdfSource(paperId, requestedSourceType);
         return;
       }
 
@@ -3999,6 +5621,10 @@ class ADSReader {
             await this.loadPDF(this.selectedPaper);
           }
 
+          // Save as last viewed source
+          this.lastPdfSources[paperId] = 'PUB_PDF';
+          window.electronAPI.setLastPdfSource(paperId, 'PUB_PDF');
+
           if (btn) {
             btn.textContent = '✓';
             setTimeout(() => {
@@ -4049,6 +5675,11 @@ class ADSReader {
           await this.loadPDF(this.selectedPaper);
         }
 
+        // Save as last viewed source
+        const savedSourceType = sourceMap[sourceType] || sourceType;
+        this.lastPdfSources[paperId] = savedSourceType;
+        window.electronAPI.setLastPdfSource(paperId, savedSourceType);
+
         // Show success
         if (btn) {
           btn.textContent = '✓';
@@ -4075,7 +5706,7 @@ class ADSReader {
   }
 
   async syncSelectedPapers() {
-    this.hidePaperContextMenu();
+    this.hideContextMenu();
     // Get the papers to sync from right-click context or selection
     let paperIds = [];
     if (this.selectedPapers.size > 0) {
@@ -4093,6 +5724,77 @@ class ADSReader {
 
     // Use the existing startAdsSync method
     this.startAdsSync(paperIds);
+  }
+
+  async batchDownloadPdfs() {
+    this.hideContextMenu();
+
+    // Get papers from selection
+    let paperIds = [];
+    if (this.selectedPapers.size > 0) {
+      paperIds = Array.from(this.selectedPapers);
+    } else if (this.rightClickedPaper) {
+      paperIds = [this.rightClickedPaper.id];
+    } else if (this.selectedPaper) {
+      paperIds = [this.selectedPaper.id];
+    }
+
+    if (paperIds.length === 0) {
+      this.showNotification('No papers selected', 'error');
+      return;
+    }
+
+    // Filter to papers without PDFs
+    const papersWithoutPdfs = paperIds.filter(id => {
+      const paper = this.papers.find(p => p.id === id);
+      return paper && !paper.pdf_path;
+    });
+
+    if (papersWithoutPdfs.length === 0) {
+      this.showNotification('All selected papers already have PDFs', 'info');
+      return;
+    }
+
+    this.addConsoleMessage(`Starting batch PDF download for ${papersWithoutPdfs.length} papers...`, 'info');
+
+    // Set up progress listener
+    window.electronAPI.onBatchDownloadProgress((data) => {
+      this.addConsoleMessage(
+        `[${data.current}/${data.total}] ${data.bibcode || 'Unknown'}: ${data.status}`,
+        data.status === 'success' ? 'success' : data.status === 'skipped' ? 'info' : 'warn'
+      );
+    });
+
+    try {
+      const result = await window.electronAPI.batchDownloadPdfs(papersWithoutPdfs);
+
+      if (result.success) {
+        const { success, failed, skipped } = result.results;
+        this.showNotification(
+          `Downloaded ${success.length} PDFs, ${skipped.length} skipped, ${failed.length} failed`,
+          failed.length > 0 ? 'warn' : 'success'
+        );
+
+        // Refresh paper list to show PDF icons
+        await this.loadPapers();
+        this.renderPaperList();
+
+        // Refresh current paper display if it got a PDF
+        if (this.selectedPaper && success.some(s => s.paperId === this.selectedPaper.id)) {
+          const updatedPaper = await window.electronAPI.getPaper(this.selectedPaper.id);
+          if (updatedPaper) {
+            this.selectedPaper = updatedPaper;
+            this.displayPaper(this.selectedPaper.id);
+          }
+        }
+      } else {
+        this.showNotification(result.error || 'Batch download failed', 'error');
+      }
+    } catch (error) {
+      this.showNotification(`Batch download error: ${error.message}`, 'error');
+    } finally {
+      window.electronAPI.removeBatchDownloadListeners();
+    }
   }
 
   selectNextPaper() {
@@ -4125,6 +5827,28 @@ class ADSReader {
     items.classList.toggle('collapsed');
   }
 
+  // Sidebar toggle
+  toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const sidebarResize = document.getElementById('sidebar-resize');
+    const collapsedToggle = document.getElementById('sidebar-collapsed-toggle');
+
+    const isHidden = sidebar.classList.toggle('hidden');
+    sidebarResize.classList.toggle('hidden', isHidden);
+    collapsedToggle.classList.toggle('hidden', !isHidden);
+  }
+
+  // Notes panel toggle
+  toggleNotesPanel() {
+    const notesPanel = document.getElementById('annotations-panel');
+    const notesResize = document.getElementById('annotations-resize');
+    const collapsedToggle = document.getElementById('notes-collapsed-toggle');
+
+    const isHidden = notesPanel.classList.toggle('hidden');
+    notesResize.classList.toggle('hidden', isHidden);
+    collapsedToggle.classList.toggle('hidden', !isHidden);
+  }
+
   // ADS Token Modal
   async checkAdsToken() {
     const token = await window.electronAPI.getAdsToken();
@@ -4141,12 +5865,22 @@ class ADSReader {
   }
 
   async showAdsTokenModal() {
-    document.getElementById('ads-token-modal').classList.remove('hidden');
-    document.getElementById('ads-token-input').focus();
+    console.log('[Debug] showAdsTokenModal called');
+    const modal = document.getElementById('ads-token-modal');
+    console.log('[Debug] ads-token-modal element:', modal);
+    console.log('[Debug] modal classes before:', modal?.className);
+    modal?.classList.remove('hidden');
+    console.log('[Debug] modal classes after:', modal?.className);
+    document.getElementById('ads-token-input')?.focus();
 
     // Load current ADS token
-    const token = await window.electronAPI.getAdsToken();
-    document.getElementById('ads-token-input').value = token || '';
+    try {
+      const token = await window.electronAPI.getAdsToken();
+      console.log('[Debug] Got ADS token:', token ? 'yes' : 'no');
+      document.getElementById('ads-token-input').value = token || '';
+    } catch (e) {
+      console.error('[Debug] Error getting ADS token:', e);
+    }
   }
 
   hideAdsTokenModal() {
@@ -4309,13 +6043,28 @@ class ADSReader {
   hideCollectionModal() {
     document.getElementById('collection-modal').classList.add('hidden');
     document.getElementById('collection-name-input').value = '';
+    // Reset smart collection options
+    document.querySelector('input[name="collection-type"][value="regular"]').checked = true;
+    document.getElementById('smart-collection-options')?.classList.add('hidden');
+    document.getElementById('collection-query-input').value = '';
   }
 
   async createCollection() {
     const name = document.getElementById('collection-name-input').value.trim();
     if (!name) return;
 
-    await window.electronAPI.createCollection(name);
+    // Check if this is a smart collection
+    const isSmartRadio = document.querySelector('input[name="collection-type"][value="smart"]');
+    const isSmart = isSmartRadio?.checked || false;
+    const query = isSmart ? document.getElementById('collection-query-input')?.value.trim() : null;
+
+    // Smart collections require a query
+    if (isSmart && !query) {
+      this.showNotification('Smart collections require a search query', 'error');
+      return;
+    }
+
+    await window.electronAPI.createCollection(name, null, isSmart, query);
     await this.loadCollections();
     this.hideCollectionModal();
   }
@@ -4367,8 +6116,11 @@ class ADSReader {
     searchBtn.textContent = 'Searching...';
     searchBtn.disabled = true;
 
+    console.log('[ADS Search] Executing search with query:', query);
+
     try {
       const result = await window.electronAPI.adsImportSearch(query, { rows: 1000 });
+      console.log('[ADS Search] Got result:', result.success, 'papers:', result.data?.papers?.length);
 
       if (result.success) {
         this.adsResults = result.data.papers;
@@ -4542,20 +6294,47 @@ class ADSReader {
   // ===== LLM/AI Methods =====
 
   async checkLlmConnection() {
-    this.updateLlmStatus('loading', 'Checking Ollama...');
+    this.updateLlmStatus('loading', 'Checking AI providers...');
 
     try {
       this.llmConfig = await window.electronAPI.getLlmConfig();
-      const result = await window.electronAPI.checkLlmConnection();
+      const activeProvider = this.llmConfig.activeProvider || 'ollama';
 
-      if (result.connected) {
+      // Check Ollama connection
+      const ollamaResult = await window.electronAPI.testProviderConnection('ollama');
+      const ollamaConnected = ollamaResult.connected || false;
+
+      // Check cloud providers (at least one configured counts as connected)
+      let cloudConnected = false;
+      let connectedProvider = null;
+
+      for (const provider of ['anthropic', 'gemini', 'perplexity']) {
+        const hasKey = await window.electronAPI.getApiKey(provider);
+        if (hasKey) {
+          cloudConnected = true;
+          if (!connectedProvider) connectedProvider = provider;
+        }
+      }
+
+      // Determine overall connection status
+      if (ollamaConnected || cloudConnected) {
         this.llmConnected = true;
-        this.updateLlmStatus('connected', `Connected to Ollama (${this.llmConfig.model})`);
-        // Start auto-indexing in background
-        this.autoIndexPapers();
+
+        // Build status message based on active provider
+        const providerConfig = this.llmConfig[activeProvider] || {};
+        const model = providerConfig.model || 'Unknown';
+        const providerName = activeProvider.charAt(0).toUpperCase() + activeProvider.slice(1);
+        const statusMsg = `${providerName}: ${model}`;
+
+        this.updateLlmStatus('connected', statusMsg);
+
+        // Start auto-indexing in background (only works with Ollama for embeddings)
+        if (ollamaConnected) {
+          this.autoIndexPapers();
+        }
       } else {
         this.llmConnected = false;
-        this.updateLlmStatus('disconnected', result.error || 'Ollama not connected');
+        this.updateLlmStatus('disconnected', 'No AI providers configured');
       }
     } catch (error) {
       this.llmConnected = false;
@@ -4644,19 +6423,185 @@ class ADSReader {
     const modal = document.getElementById('llm-modal');
     modal.classList.remove('hidden');
 
-    // Load current config
+    // Load current config first
     this.llmConfig = await window.electronAPI.getLlmConfig();
-    document.getElementById('llm-endpoint-input').value = this.llmConfig.endpoint || 'http://localhost:11434';
 
-    // Load available models
+    // Determine which provider tab to show
+    let activeProvider = this.llmConfig.activeProvider;
+    if (!activeProvider) {
+      // Default to anthropic on iOS, ollama on desktop
+      activeProvider = this.isIOS ? 'anthropic' : 'ollama';
+    }
+    this.switchProviderTab(activeProvider);
+
+    // Update active provider indicator
+    this.updateActiveProviderDisplay();
+
+    // Get config with backward compatibility
+    const ollamaConfig = this.llmConfig.ollama || {
+      endpoint: this.llmConfig.endpoint || 'http://127.0.0.1:11434',
+      model: this.llmConfig.model || 'qwen3:30b',
+      embeddingModel: this.llmConfig.embeddingModel || 'nomic-embed-text'
+    };
+
+    // Populate Ollama fields
+    document.getElementById('llm-endpoint-input').value = ollamaConfig.endpoint || 'http://127.0.0.1:11434';
+
+    // Populate cloud provider model selects
+    if (this.llmConfig.anthropic?.model) {
+      document.getElementById('anthropic-model-select').value = this.llmConfig.anthropic.model;
+    }
+    if (this.llmConfig.gemini?.model) {
+      document.getElementById('gemini-model-select').value = this.llmConfig.gemini.model;
+    }
+    if (this.llmConfig.perplexity?.model) {
+      document.getElementById('perplexity-model-select').value = this.llmConfig.perplexity.model;
+    }
+
+    // Load summary prompt
+    const summaryPrompt = await window.electronAPI.getSummaryPrompt();
+    document.getElementById('summary-prompt-textarea').value = summaryPrompt;
+
+    // Show API key status for cloud providers
+    for (const provider of ['anthropic', 'gemini', 'perplexity']) {
+      const hasKey = await window.electronAPI.getApiKey(provider);
+      const keyInput = document.getElementById(`${provider}-api-key`);
+      if (keyInput) {
+        keyInput.value = hasKey ? '***configured***' : '';
+        keyInput.placeholder = hasKey ? 'Key configured (enter new to replace)' : 'Enter API key';
+      }
+    }
+
+    // Load available models for Ollama
     await this.loadLlmModels();
 
-    // Test connection
-    await this.testLlmConnection();
+    // Test all provider connections and update status
+    await this.testAllProviders();
   }
 
   hideLlmModal() {
     document.getElementById('llm-modal').classList.add('hidden');
+  }
+
+  // Update the active provider indicator display
+  updateActiveProviderDisplay() {
+    const display = document.getElementById('active-provider-display');
+    if (!display || !this.llmConfig) return;
+
+    const provider = this.llmConfig.activeProvider || 'ollama';
+    const providerConfig = this.llmConfig[provider] || {};
+    const model = providerConfig.model || 'Unknown';
+
+    const providerNames = {
+      ollama: 'Ollama',
+      anthropic: 'Claude',
+      gemini: 'Gemini',
+      perplexity: 'Perplexity'
+    };
+
+    display.textContent = `${providerNames[provider] || provider} - ${model}`;
+  }
+
+  // Switch between provider tabs
+  switchProviderTab(provider) {
+    // Update tab states
+    document.querySelectorAll('.provider-tab').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.provider === provider);
+    });
+
+    // Update panel visibility
+    document.querySelectorAll('.provider-panel').forEach(panel => {
+      panel.classList.toggle('active', panel.id === `panel-${provider}`);
+    });
+
+    // Update internal state (will be saved when user clicks Save)
+    if (this.llmConfig) {
+      this.llmConfig.activeProvider = provider;
+      // Update indicator to show pending selection
+      this.updateActiveProviderDisplay();
+    }
+  }
+
+  // Toggle password visibility
+  togglePasswordVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    const btn = document.querySelector(`[data-target="${inputId}"]`);
+    if (input.type === 'password') {
+      input.type = 'text';
+      btn.textContent = 'Hide';
+    } else {
+      input.type = 'password';
+      btn.textContent = 'Show';
+    }
+  }
+
+  // Test all providers and update status indicators
+  async testAllProviders() {
+    // Test Ollama
+    this.testProvider('ollama');
+
+    // Check API key status for cloud providers
+    const providers = ['anthropic', 'gemini', 'perplexity'];
+    for (const provider of providers) {
+      const hasKey = await window.electronAPI.getApiKey(provider);
+      const tabStatus = document.getElementById(`${provider}-tab-status`);
+      const statusDot = document.getElementById(`${provider}-status-dot`);
+      const statusText = document.getElementById(`${provider}-status-text`);
+
+      if (hasKey) {
+        tabStatus.className = 'provider-status configured';
+        statusDot.className = 'llm-status-dot connected';
+        statusText.textContent = 'API key configured';
+      } else {
+        tabStatus.className = 'provider-status disconnected';
+        statusDot.className = 'llm-status-dot disconnected';
+        statusText.textContent = 'Not configured';
+      }
+    }
+  }
+
+  // Test a specific provider connection
+  async testProvider(provider) {
+    const statusDot = document.getElementById(`${provider}-status-dot`);
+    const statusText = document.getElementById(`${provider}-status-text`);
+    const tabStatus = document.getElementById(`${provider}-tab-status`);
+
+    statusDot.className = 'llm-status-dot checking';
+    statusText.textContent = 'Testing connection...';
+
+    try {
+      if (provider === 'ollama') {
+        // Update endpoint temporarily for test
+        const endpoint = document.getElementById('llm-endpoint-input').value.trim();
+        const currentConfig = await window.electronAPI.getLlmConfig();
+        const updatedConfig = {
+          ...currentConfig,
+          ollama: { ...currentConfig.ollama, endpoint }
+        };
+        await window.electronAPI.setLlmConfig(updatedConfig);
+      }
+
+      const result = await window.electronAPI.testProviderConnection(provider);
+
+      if (result.connected || result.success) {
+        statusDot.className = 'llm-status-dot connected';
+        tabStatus.className = 'provider-status connected';
+        if (provider === 'ollama') {
+          statusText.textContent = `Connected! ${result.models?.length || 'Models'} available`;
+          await this.loadLlmModels();
+        } else {
+          statusText.textContent = 'Connected';
+        }
+      } else {
+        statusDot.className = 'llm-status-dot disconnected';
+        tabStatus.className = 'provider-status error';
+        statusText.textContent = result.error || 'Connection failed';
+      }
+    } catch (error) {
+      statusDot.className = 'llm-status-dot disconnected';
+      tabStatus.className = 'provider-status error';
+      statusText.textContent = error.message;
+    }
   }
 
   async loadLlmModels() {
@@ -4675,14 +6620,19 @@ class ADSReader {
         return;
       }
 
+      // Get current selection from config
+      const ollamaConfig = this.llmConfig.ollama || {};
+      const selectedModel = ollamaConfig.model || this.llmConfig.model;
+      const selectedEmbedding = ollamaConfig.embeddingModel || this.llmConfig.embeddingModel;
+
       // Populate model dropdown
       modelSelect.innerHTML = models.map(m =>
-        `<option value="${m.name}" ${m.name === this.llmConfig.model ? 'selected' : ''}>${m.name}</option>`
+        `<option value="${m.name}" ${m.name === selectedModel ? 'selected' : ''}>${m.name}</option>`
       ).join('');
 
       // Populate embedding model dropdown
       embeddingSelect.innerHTML = models.map(m =>
-        `<option value="${m.name}" ${m.name === this.llmConfig.embeddingModel ? 'selected' : ''}>${m.name}</option>`
+        `<option value="${m.name}" ${m.name === selectedEmbedding ? 'selected' : ''}>${m.name}</option>`
       ).join('');
     } catch (error) {
       modelSelect.innerHTML = `<option value="">Error: ${error.message}</option>`;
@@ -4691,45 +6641,115 @@ class ADSReader {
   }
 
   async saveLlmConfig() {
-    const config = {
-      endpoint: document.getElementById('llm-endpoint-input').value.trim(),
-      model: document.getElementById('llm-model-select').value,
-      embeddingModel: document.getElementById('llm-embedding-select').value
+    // Get active provider from the currently selected tab
+    const activeTab = document.querySelector('.provider-tab.active');
+    const activeProvider = activeTab?.dataset.provider || 'ollama';
+
+    // Build new config - activeProvider is the single source of truth
+    const newConfig = {
+      activeProvider,
+      ollama: {
+        endpoint: document.getElementById('llm-endpoint-input').value.trim(),
+        model: document.getElementById('llm-model-select').value,
+        embeddingModel: document.getElementById('llm-embedding-select').value
+      },
+      anthropic: {
+        model: document.getElementById('anthropic-model-select').value
+      },
+      gemini: {
+        model: document.getElementById('gemini-model-select').value
+      },
+      perplexity: {
+        model: document.getElementById('perplexity-model-select').value
+      },
+      summaryPrompt: this.llmConfig?.summaryPrompt || null
     };
 
-    await window.electronAPI.setLlmConfig(config);
-    this.llmConfig = config;
+    // Save API keys for cloud providers
+    const anthropicKey = document.getElementById('anthropic-api-key').value.trim();
+    const geminiKey = document.getElementById('gemini-api-key').value.trim();
+    const perplexityKey = document.getElementById('perplexity-api-key').value.trim();
+
+    if (anthropicKey && anthropicKey !== '***configured***') {
+      await window.electronAPI.setApiKey('anthropic', anthropicKey);
+    }
+    if (geminiKey && geminiKey !== '***configured***') {
+      await window.electronAPI.setApiKey('gemini', geminiKey);
+    }
+    if (perplexityKey && perplexityKey !== '***configured***') {
+      await window.electronAPI.setApiKey('perplexity', perplexityKey);
+    }
+
+    // Save summary prompt if changed
+    const summaryPrompt = document.getElementById('summary-prompt-textarea').value.trim();
+    if (summaryPrompt) {
+      await window.electronAPI.setSummaryPrompt(summaryPrompt);
+    }
+
+    await window.electronAPI.setLlmConfig(newConfig);
+    this.llmConfig = newConfig;
+
     await this.checkLlmConnection();
     this.hideLlmModal();
   }
 
-  async testLlmConnection() {
-    const statusDot = document.getElementById('llm-modal-status-dot');
-    const statusText = document.getElementById('llm-modal-status-text');
-
-    statusDot.className = 'llm-status-dot checking';
-    statusText.textContent = 'Testing connection...';
-
-    // Temporarily update endpoint for test
-    const endpoint = document.getElementById('llm-endpoint-input').value.trim();
-
-    try {
-      // Save temporarily to test
-      await window.electronAPI.setLlmConfig({ ...this.llmConfig, endpoint });
-      const result = await window.electronAPI.checkLlmConnection();
-
-      if (result.connected) {
-        statusDot.className = 'llm-status-dot connected';
-        statusText.textContent = `Connected! ${result.models?.length || 0} models available`;
-        await this.loadLlmModels();
-      } else {
-        statusDot.className = 'llm-status-dot disconnected';
-        statusText.textContent = result.error || 'Connection failed';
-      }
-    } catch (error) {
-      statusDot.className = 'llm-status-dot disconnected';
-      statusText.textContent = error.message;
+  async resetSummaryPrompt() {
+    const result = await window.electronAPI.resetSummaryPrompt();
+    if (result.defaultPrompt) {
+      document.getElementById('summary-prompt-textarea').value = result.defaultPrompt;
     }
+  }
+
+  async testLlmConnection() {
+    // Legacy method - now calls testProvider for Ollama
+    await this.testProvider('ollama');
+  }
+
+  // Copy buttons
+  async copySummaryToClipboard() {
+    const summaryText = document.querySelector('#ai-summary-content .ai-summary-text');
+    const keyPoints = document.getElementById('ai-key-points-list');
+
+    let textToCopy = '';
+    if (summaryText) {
+      textToCopy = summaryText.textContent;
+    }
+
+    if (keyPoints && !keyPoints.parentElement.classList.contains('hidden')) {
+      const points = Array.from(keyPoints.querySelectorAll('li')).map(li => `- ${li.textContent}`).join('\n');
+      if (points) {
+        textToCopy += '\n\nKey Points:\n' + points;
+      }
+    }
+
+    if (textToCopy) {
+      await navigator.clipboard.writeText(textToCopy);
+      this.showCopyFeedback('ai-copy-summary-btn');
+    }
+  }
+
+  async copyLastAnswerToClipboard() {
+    const answers = document.querySelectorAll('#ai-qa-history .ai-qa-answer .ai-text');
+    if (answers.length > 0) {
+      const lastAnswer = answers[answers.length - 1];
+      await navigator.clipboard.writeText(lastAnswer.textContent);
+      this.showCopyFeedback('ai-copy-qa-btn');
+    }
+  }
+
+  showCopyFeedback(btnId) {
+    const btn = document.getElementById(btnId);
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1500);
+  }
+
+  // Semantic Search Info Popup
+  showSemanticSearchInfo() {
+    document.getElementById('semantic-search-info-popup').classList.remove('hidden');
+  }
+
+  hideSemanticSearchInfo() {
+    document.getElementById('semantic-search-info-popup').classList.add('hidden');
   }
 
   async generateSummary() {
@@ -4781,7 +6801,11 @@ class ADSReader {
     const keyPointsEl = document.getElementById('ai-key-points');
     const keyPointsList = document.getElementById('ai-key-points-list');
 
-    contentEl.innerHTML = `<div class="ai-summary-text">${this.escapeHtml(data.summary || '')}</div>`;
+    // Show model name if available
+    const modelName = data.model || this.getCurrentModelName();
+    const modelNote = modelName ? `<div class="ai-model-note">Generated by ${modelName}</div>` : '';
+
+    contentEl.innerHTML = `<div class="ai-summary-text">${this.escapeHtml(data.summary || '')}</div>${modelNote}`;
 
     if (data.key_points?.length || data.keyPoints?.length) {
       const points = data.key_points || data.keyPoints;
@@ -5086,8 +7110,8 @@ class ADSReader {
   }
 
   showAnchorMarker(pageWrapper, relX, relY) {
-    // Remove any existing anchor marker
-    this.removeAnchorMarker();
+    // Remove any existing anchor marker element (but don't clear position - we just set it)
+    document.querySelectorAll('.pdf-anchor-marker').forEach(m => m.remove());
 
     // Create anchor marker element with Add Note button
     const marker = document.createElement('div');
@@ -5129,8 +7153,7 @@ class ADSReader {
   async createNoteAtAnchor() {
     if (!this.selectedPaper || !this.pdfAnchorPosition) return;
 
-    this.hideAnchorContextMenu();
-
+    // Store position before removing marker (which clears it)
     const { page, x, y } = this.pdfAnchorPosition;
 
     try {
@@ -5143,12 +7166,20 @@ class ADSReader {
         pdf_source: this.currentPdfSource
       });
 
-      if (result.success) {
+      if (result.success && result.annotation) {
         await this.loadAnnotations(this.selectedPaper.id);
         this.renderHighlightsOnPdf();
 
-        // Switch to Notes tab and start editing
-        this.switchTab('notes');
+        // Ensure we're on PDF tab (annotations panel is part of PDF view)
+        this.switchTab('pdf');
+
+        // Make sure annotations panel is visible
+        const annotationsPanel = document.getElementById('annotations-panel');
+        const annotationsResize = document.getElementById('annotations-resize');
+        annotationsPanel.classList.remove('hidden');
+        annotationsResize.classList.remove('hidden');
+
+        // Start editing the new note after DOM updates
         requestAnimationFrame(() => {
           this.editAnnotation(result.annotation.id);
         });
@@ -5228,12 +7259,143 @@ class ADSReader {
     popup.style.top = `${Math.min(y + 20, window.innerHeight - 320)}px`;
     popup.classList.remove('hidden');
 
+    // Update header with model name
+    const modelName = this.getCurrentModelName();
+    const headerSpan = popup.querySelector('.ai-explanation-header span');
+    if (headerSpan) {
+      headerSpan.textContent = modelName ? `AI Explanation (${modelName})` : 'AI Explanation';
+    }
+
     document.getElementById('ai-explanation-content').innerHTML =
       '<div class="ai-loading">Generating explanation...</div>';
   }
 
+  getCurrentModelName() {
+    const modelId = localStorage.getItem('selectedAiModel') || this.llmConfig?.selectedModel;
+    if (!modelId) return null;
+
+    // Model IDs are formatted as "provider:modelName" (e.g., "anthropic:claude-3-sonnet")
+    const parts = modelId.split(':');
+    if (parts.length >= 2) {
+      return parts.slice(1).join(':'); // Return model name part
+    }
+    return modelId;
+  }
+
   hideExplanationPopup() {
     document.getElementById('ai-explanation-popup').classList.add('hidden');
+  }
+
+  setupExplanationPopupDrag() {
+    const popup = document.getElementById('ai-explanation-popup');
+    const header = popup?.querySelector('.ai-explanation-header');
+    if (!header) return;
+
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    header.addEventListener('mousedown', (e) => {
+      // Don't start drag if clicking the close button
+      if (e.target.classList.contains('popup-close-btn')) return;
+
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = popup.offsetLeft;
+      startTop = popup.offsetTop;
+
+      // Prevent text selection while dragging
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+
+      // Calculate new position with bounds checking
+      let newLeft = startLeft + deltaX;
+      let newTop = startTop + deltaY;
+
+      // Keep popup within viewport
+      const maxLeft = window.innerWidth - popup.offsetWidth;
+      const maxTop = window.innerHeight - popup.offsetHeight;
+
+      newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+      newTop = Math.max(0, Math.min(newTop, maxTop));
+
+      popup.style.left = `${newLeft}px`;
+      popup.style.top = `${newTop}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+  }
+
+  async addExplanationAsNote() {
+    if (!this.selectedPaper) {
+      this.showNotification('No paper selected', 'error');
+      return;
+    }
+
+    // Get the explanation content
+    const contentEl = document.getElementById('ai-explanation-content');
+    const renderedEl = contentEl.querySelector('.ai-explanation-rendered');
+
+    if (!renderedEl) {
+      this.showNotification('No explanation to add', 'error');
+      return;
+    }
+
+    // Get the raw text from the accumulated explanation
+    // We'll use the text content but preserve some formatting
+    const explanationText = renderedEl.innerText || renderedEl.textContent;
+
+    // Build the note content with the selected text as context
+    let noteContent = '';
+    if (this.selectedText) {
+      noteContent = `**Selected text:**\n> ${this.selectedText}\n\n**AI Explanation:**\n${explanationText}`;
+    } else {
+      noteContent = `**AI Explanation:**\n${explanationText}`;
+    }
+
+    // Create the annotation
+    const result = await window.electronAPI.createAnnotation(this.selectedPaper.id, {
+      page_number: this.getCurrentVisiblePage(),
+      selection_text: this.selectedText || null,
+      selection_rects: [],
+      note_content: noteContent,
+      color: '#e1bee7', // Light purple for AI-generated notes
+      pdf_source: this.currentPdfSource
+    });
+
+    if (result.success && result.annotation) {
+      // Hide the explanation popup
+      this.hideExplanationPopup();
+
+      // Reload annotations
+      await this.loadAnnotations(this.selectedPaper.id);
+      this.renderHighlightsOnPdf();
+
+      // Ensure annotations panel is visible
+      const annotationsPanel = document.getElementById('annotations-panel');
+      const annotationsResize = document.getElementById('annotations-resize');
+      const notesCollapsedToggle = document.getElementById('notes-collapsed-toggle');
+      annotationsPanel.classList.remove('hidden');
+      annotationsResize.classList.remove('hidden');
+      notesCollapsedToggle.classList.add('hidden');
+
+      // Start editing the new note
+      requestAnimationFrame(() => {
+        this.editAnnotation(result.annotation.id);
+      });
+
+      this.showNotification('Added as note', 'success');
+    } else {
+      this.showNotification('Failed to create note', 'error');
+    }
   }
 
   async loadAIPanelData() {
@@ -5411,6 +7573,32 @@ class ADSReader {
     this.renderAnnotationsList();
   }
 
+  // Build a map of annotation ID -> sequential number (sorted by page, then y position)
+  buildAnnotationNumberMap() {
+    const sorted = [...this.annotations].sort((a, b) => {
+      // First by page
+      const pageA = a.page_number || 1;
+      const pageB = b.page_number || 1;
+      if (pageA !== pageB) return pageA - pageB;
+
+      // Then by y position (top of first rect)
+      const yA = a.selection_rects?.[0]?.y || 0;
+      const yB = b.selection_rects?.[0]?.y || 0;
+      if (yA !== yB) return yA - yB;
+
+      // Then by x position
+      const xA = a.selection_rects?.[0]?.x || 0;
+      const xB = b.selection_rects?.[0]?.x || 0;
+      return xA - xB;
+    });
+
+    const map = new Map();
+    sorted.forEach((a, index) => {
+      map.set(a.id, index + 1);
+    });
+    return map;
+  }
+
   renderAnnotationsList() {
     const listEl = document.getElementById('annotations-list');
 
@@ -5422,6 +7610,9 @@ class ADSReader {
       `;
       return;
     }
+
+    // Build annotation number map (sorted by page, then position)
+    this.annotationNumbers = this.buildAnnotationNumberMap();
 
     // Group annotations by page
     const byPage = {};
@@ -5439,21 +7630,26 @@ class ADSReader {
         const timestamp = a.updated_at || a.created_at;
         const timeStr = timestamp ? this.formatTimestamp(timestamp) : '';
         const hasNote = a.note_content && a.note_content.trim();
+        const noteNum = this.annotationNumbers.get(a.id) || '?';
+
+        // Render markdown for note content
+        const renderedNote = hasNote ? this.renderMarkdown(a.note_content) : 'Click to add a note...';
 
         html += `
           <div class="annotation-item" data-id="${a.id}" data-page="${pageNum}">
-            <span class="annotation-page-badge">Page ${pageNum}</span>
+            <div class="annotation-header">
+              <span class="annotation-number">${noteNum}</span>
+              <span class="annotation-page-badge">p.${pageNum}</span>
+              <span class="annotation-timestamp">${timeStr}</span>
+              <div class="annotation-actions">
+                <button class="annotation-btn edit" data-id="${a.id}" title="Edit">✎</button>
+                <button class="annotation-btn delete" data-id="${a.id}" title="Delete">×</button>
+              </div>
+            </div>
             ${a.selection_text ? `<div class="annotation-quote" style="border-color: ${a.color}">${this.escapeHtml(a.selection_text)}</div>` : ''}
             <div class="annotation-content">
               <div class="annotation-text ${hasNote ? '' : 'empty'}" data-id="${a.id}">
-                ${hasNote ? this.escapeHtml(a.note_content) : 'Click to add a note...'}
-              </div>
-            </div>
-            <div class="annotation-footer">
-              <span class="annotation-timestamp">${timeStr}</span>
-              <div class="annotation-actions">
-                <button class="annotation-btn edit" data-id="${a.id}">Edit</button>
-                <button class="annotation-btn delete" data-id="${a.id}">Delete</button>
+                ${renderedNote}
               </div>
             </div>
           </div>
@@ -5528,6 +7724,20 @@ class ADSReader {
     }
   }
 
+  async exportAnnotations() {
+    if (!this.selectedPaper) {
+      this.showNotification('No paper selected', 'error');
+      return;
+    }
+
+    const result = await window.electronAPI.exportAnnotations(this.selectedPaper.id);
+    if (result.success) {
+      this.showNotification(`Exported ${result.count} annotations to Markdown`, 'success');
+    } else if (!result.canceled) {
+      this.showNotification(result.error || 'Export failed', 'error');
+    }
+  }
+
   async createGeneralNote() {
     if (!this.selectedPaper) return;
 
@@ -5541,8 +7751,16 @@ class ADSReader {
       pdf_source: this.currentPdfSource
     });
 
-    if (result.success) {
+    if (result.success && result.annotation) {
       await this.loadAnnotations(this.selectedPaper.id);
+      this.renderHighlightsOnPdf();
+
+      // Ensure annotations panel is visible
+      const annotationsPanel = document.getElementById('annotations-panel');
+      const annotationsResize = document.getElementById('annotations-resize');
+      annotationsPanel.classList.remove('hidden');
+      annotationsResize.classList.remove('hidden');
+
       // Start editing the new note after DOM updates
       requestAnimationFrame(() => {
         this.editAnnotation(result.annotation.id);
@@ -5586,12 +7804,15 @@ class ADSReader {
       });
       console.log('Create annotation result:', result);
 
-      if (result.success) {
+      if (result.success && result.annotation) {
         await this.loadAnnotations(this.selectedPaper.id);
         this.renderHighlightsOnPdf();
 
-        // Switch to Notes tab so the annotation is visible
-        this.switchTab('notes');
+        // Ensure annotations panel is visible (it's part of PDF view)
+        const annotationsPanel = document.getElementById('annotations-panel');
+        const annotationsResize = document.getElementById('annotations-resize');
+        annotationsPanel.classList.remove('hidden');
+        annotationsResize.classList.remove('hidden');
 
         // Start editing the new note after DOM updates
         requestAnimationFrame(() => {
@@ -5653,59 +7874,75 @@ class ADSReader {
     if (!textEl) return;
 
     const contentDiv = textEl.closest('.annotation-content');
+    const originalText = annotation.note_content || '';
 
-    // Replace with textarea
-    const currentText = annotation.note_content || '';
+    // Get saved textarea height for this annotation (or use default)
+    const savedHeight = this.annotationHeights?.[id] || 80;
+
+    // Replace with textarea (no buttons - auto-save on blur)
     contentDiv.innerHTML = `
-      <textarea class="annotation-input" data-id="${id}" placeholder="Write your note here... (supports LaTeX: $formula$)">${this.escapeHtml(currentText)}</textarea>
-      <div class="annotation-edit-actions" style="margin-top: 6px; display: flex; gap: 4px;">
-        <button class="annotation-btn save" data-id="${id}">Save</button>
-        <button class="annotation-btn cancel" data-id="${id}">Cancel</button>
-      </div>
+      <textarea class="annotation-input" data-id="${id}" style="height: ${savedHeight}px" placeholder="Write your note here... (supports *markdown* and LaTeX: $formula$)">${this.escapeHtml(originalText)}</textarea>
     `;
 
     const textarea = contentDiv.querySelector('.annotation-input');
 
-    // Scroll the annotation into view first
+    // Save height when user resizes
+    if (!this.annotationHeights) this.annotationHeights = {};
+    textarea.addEventListener('mouseup', () => {
+      this.annotationHeights[id] = textarea.offsetHeight;
+    });
+
+    // Scroll the annotation into view in the sidebar only (preserve PDF scroll position)
     const annotationItem = contentDiv.closest('.annotation-item');
+    const pdfContainer = document.getElementById('pdf-container');
+    const pdfScrollTop = pdfContainer?.scrollTop;
+
     if (annotationItem) {
-      annotationItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Scroll only within the annotations list, not affecting PDF
+      const annotationsList = document.getElementById('annotations-list');
+      if (annotationsList) {
+        const itemTop = annotationItem.offsetTop;
+        const listHeight = annotationsList.clientHeight;
+        const itemHeight = annotationItem.offsetHeight;
+        annotationsList.scrollTop = itemTop - (listHeight / 2) + (itemHeight / 2);
+      }
     }
 
-    // Focus with a slight delay to ensure scroll completes
+    // Restore PDF scroll position if it changed
+    if (pdfContainer && pdfScrollTop !== undefined) {
+      pdfContainer.scrollTop = pdfScrollTop;
+    }
+
+    // Focus with a slight delay
     setTimeout(() => {
       textarea.focus();
       textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
-    }, 100);
+    }, 50);
 
-    // Save handler
-    contentDiv.querySelector('.annotation-btn.save').addEventListener('click', async () => {
+    // Auto-save on blur
+    textarea.addEventListener('blur', async () => {
       const newText = textarea.value.trim();
-      await window.electronAPI.updateAnnotation(id, { note_content: newText });
+      if (newText !== originalText) {
+        await window.electronAPI.updateAnnotation(id, { note_content: newText });
+      }
       await this.loadAnnotations(this.selectedPaper.id);
+      this.renderHighlightsOnPdf();
     });
 
-    // Cancel handler
-    contentDiv.querySelector('.annotation-btn.cancel').addEventListener('click', () => {
-      this.renderAnnotationsList();
-    });
-
-    // Save on Enter (with Shift for newlines)
+    // Save on Enter, cancel on Escape
     textarea.addEventListener('keydown', async (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        const newText = textarea.value.trim();
-        await window.electronAPI.updateAnnotation(id, { note_content: newText });
-        await this.loadAnnotations(this.selectedPaper.id);
+        textarea.blur(); // Trigger save via blur handler
       } else if (e.key === 'Escape') {
-        this.renderAnnotationsList();
+        // Restore original and re-render without saving
+        textarea.value = originalText;
+        await this.loadAnnotations(this.selectedPaper.id);
       }
     });
   }
 
   async deleteAnnotation(id) {
-    if (!confirm('Delete this annotation?')) return;
-
     await window.electronAPI.deleteAnnotation(id);
     await this.loadAnnotations(this.selectedPaper.id);
     this.renderHighlightsOnPdf();
@@ -5735,6 +7972,11 @@ class ADSReader {
     document.querySelectorAll('.pdf-highlight-layer').forEach(el => el.remove());
     document.querySelectorAll('.pdf-anchor-note').forEach(el => el.remove());
 
+    // Ensure we have annotation numbers
+    if (!this.annotationNumbers) {
+      this.annotationNumbers = this.buildAnnotationNumberMap();
+    }
+
     // Group annotations by page
     const byPage = {};
     this.annotations.forEach(a => {
@@ -5753,6 +7995,7 @@ class ADSReader {
 
       byPage[pageNum].forEach(annotation => {
         const colorClass = this.getColorClass(annotation.color);
+        const noteNum = this.annotationNumbers.get(annotation.id) || '?';
 
         // Check if this is an anchor note (no selection text, single rect with isAnchor or zero dimensions)
         const isAnchorNote = !annotation.selection_text &&
@@ -5761,14 +8004,15 @@ class ADSReader {
            (annotation.selection_rects[0].width === 0 && annotation.selection_rects[0].height === 0));
 
         if (isAnchorNote && annotation.selection_rects?.length) {
-          // Render as anchor marker (circular dot)
+          // Render as numbered anchor marker
           const rect = annotation.selection_rects[0];
           const anchor = document.createElement('div');
           anchor.className = 'pdf-anchor-note';
           anchor.dataset.annotation = annotation.id;
           anchor.style.left = `${rect.x * 100}%`;
           anchor.style.top = `${rect.y * 100}%`;
-          anchor.title = annotation.note_content?.substring(0, 50) || 'Note';
+          anchor.textContent = noteNum;
+          anchor.title = `Note ${noteNum}: ${annotation.note_content?.substring(0, 50) || 'Empty'}`;
 
           anchor.addEventListener('click', () => {
             this.scrollToAnnotationInSidebar(annotation.id);
@@ -5776,8 +8020,8 @@ class ADSReader {
 
           pageWrapper.appendChild(anchor);
         } else if (annotation.selection_rects?.length) {
-          // Render as highlight rectangles
-          annotation.selection_rects.forEach(rect => {
+          // Render as highlight rectangles with number badge on first rect
+          annotation.selection_rects.forEach((rect, index) => {
             const highlight = document.createElement('div');
             highlight.className = `pdf-highlight ${colorClass}`;
             highlight.dataset.annotation = annotation.id;
@@ -5785,6 +8029,14 @@ class ADSReader {
             highlight.style.top = `${rect.y * 100}%`;
             highlight.style.width = `${rect.width * 100}%`;
             highlight.style.height = `${rect.height * 100}%`;
+
+            // Add number badge to the first rect
+            if (index === 0) {
+              const badge = document.createElement('span');
+              badge.className = 'pdf-highlight-number';
+              badge.textContent = noteNum;
+              highlight.appendChild(badge);
+            }
 
             highlight.addEventListener('click', () => {
               this.scrollToAnnotationInSidebar(annotation.id);
@@ -5800,12 +8052,28 @@ class ADSReader {
   }
 
   scrollToAnnotationInSidebar(id) {
+    // Preserve PDF scroll position
+    const pdfContainer = document.getElementById('pdf-container');
+    const pdfScrollTop = pdfContainer?.scrollTop;
+
     // Highlight in sidebar
     document.querySelectorAll('.annotation-item').forEach(el => el.classList.remove('active'));
     const item = document.querySelector(`.annotation-item[data-id="${id}"]`);
     if (item) {
       item.classList.add('active');
-      item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Scroll only within the annotations list
+      const annotationsList = document.getElementById('annotations-list');
+      if (annotationsList) {
+        const itemTop = item.offsetTop;
+        const listHeight = annotationsList.clientHeight;
+        const itemHeight = item.offsetHeight;
+        annotationsList.scrollTop = itemTop - (listHeight / 2) + (itemHeight / 2);
+      }
+    }
+
+    // Restore PDF scroll position if it changed
+    if (pdfContainer && pdfScrollTop !== undefined) {
+      pdfContainer.scrollTop = pdfScrollTop;
     }
 
     // Highlight on PDF
@@ -5927,6 +8195,52 @@ class ADSReader {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  // Render markdown text (supports basic markdown + LaTeX)
+  renderMarkdown(text) {
+    if (!text) return '';
+
+    // Configure marked for safe rendering
+    if (typeof marked !== 'undefined') {
+      marked.setOptions({
+        breaks: true,      // Convert \n to <br>
+        gfm: true,         // GitHub Flavored Markdown
+        headerIds: false,  // Don't add IDs to headers
+        mangle: false      // Don't mangle emails
+      });
+
+      try {
+        // Render markdown
+        let html = marked.parse(text);
+        return html;
+      } catch (e) {
+        console.error('Markdown rendering error:', e);
+        return this.escapeHtml(text);
+      }
+    }
+
+    // Fallback: escape HTML if marked is not available
+    return this.escapeHtml(text);
+  }
+
+  showNotification(message, type = 'info') {
+    const toast = document.getElementById('notification-toast');
+    if (!toast) return;
+
+    // Clear any existing timeout
+    if (this.notificationTimeout) {
+      clearTimeout(this.notificationTimeout);
+    }
+
+    // Set content and type
+    toast.textContent = message;
+    toast.className = 'notification-toast ' + type;
+
+    // Auto-hide after delay
+    this.notificationTimeout = setTimeout(() => {
+      toast.classList.add('hidden');
+    }, 3000);
   }
 }
 

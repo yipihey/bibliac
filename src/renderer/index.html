@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' file:">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://sql.js.org; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://sql.js.org 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' file: https://sql.js.org https://api.adsabs.harvard.edu https://*.adsabs.harvard.edu https://arxiv.org https://*.arxiv.org; worker-src 'self' blob:">
   <title>ADS Reader</title>
   <link rel="stylesheet" href="styles.css">
   <!-- KaTeX for LaTeX rendering -->
@@ -14,6 +14,55 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
+  <!-- Mobile Top Bar -->
+  <div class="mobile-top-bar" id="mobile-top-bar">
+    <button class="hamburger-btn" id="hamburger-btn" aria-label="Open menu">☰</button>
+    <span class="top-bar-title" id="mobile-title">Papers</span>
+    <button class="search-btn" id="mobile-search-btn" aria-label="Search">🔍</button>
+  </div>
+
+  <!-- Mobile Drawer -->
+  <div class="mobile-drawer-overlay" id="mobile-drawer-overlay"></div>
+  <aside class="mobile-drawer" id="mobile-drawer">
+    <div class="drawer-header">
+      <span class="drawer-title">Menu</span>
+      <button class="drawer-close" id="drawer-close-btn">✕</button>
+    </div>
+    <div class="drawer-content">
+      <!-- Library Picker -->
+      <div class="drawer-section">
+        <div class="drawer-section-label">Library</div>
+        <div class="drawer-library-picker" id="drawer-library-picker">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="drawer-section">
+        <div class="drawer-section-label">Filter</div>
+        <div class="drawer-nav-items">
+          <button class="drawer-nav-item active" data-filter="all">All Papers</button>
+          <button class="drawer-nav-item" data-filter="unread">Unread</button>
+          <button class="drawer-nav-item" data-filter="reading">Reading</button>
+          <button class="drawer-nav-item" data-filter="read">Read</button>
+        </div>
+      </div>
+
+      <!-- Collections -->
+      <div class="drawer-section">
+        <div class="drawer-section-label">Collections</div>
+        <div class="drawer-collections" id="drawer-collections">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="drawer-section drawer-section-bottom">
+        <button class="drawer-nav-item" id="drawer-settings-btn">⚙️ Settings</button>
+      </div>
+    </div>
+  </aside>
+
   <!-- Setup Screen -->
   <div id="setup-screen" class="screen">
     <div class="setup-container">
@@ -52,11 +101,19 @@
   <div id="main-screen" class="screen hidden">
     <div class="titlebar-drag-region"></div>
 
+    <!-- Collapsed Sidebar Toggle -->
+    <div class="sidebar-collapsed-toggle hidden" id="sidebar-collapsed-toggle" title="Show Sidebar (⌘⌥S)">
+      <span>📚</span>
+    </div>
+
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <h1>ADS Reader</h1>
-        <button id="reload-btn" class="reload-btn" title="Reload App (Cmd+R)">↻</button>
+        <div class="sidebar-header-actions">
+          <button id="reload-btn" class="reload-btn" title="Reload App (Cmd+R)">↻</button>
+          <button id="sidebar-collapse-btn" class="collapse-btn" title="Hide Sidebar (⌘⌥S)">◀</button>
+        </div>
       </div>
 
       <div class="sidebar-section">
@@ -111,13 +168,37 @@
           </div>
           <div class="nav-item" id="llm-settings-btn">
             <span class="nav-icon">🤖</span>
-            <span>AI / Ollama</span>
+            <span>AI Integration</span>
             <span class="nav-status" id="llm-status">●</span>
           </div>
           <div class="nav-item" id="preferences-btn">
             <span class="nav-icon">⚙️</span>
             <span>Preferences</span>
           </div>
+        </div>
+      </div>
+
+      <!-- Keyboard Shortcuts (collapsible) -->
+      <div class="shortcuts-summary" id="shortcuts-summary">
+        <div class="shortcuts-title" id="shortcuts-toggle">
+          <span class="shortcuts-arrow">▶</span>
+          Shortcuts
+        </div>
+        <div class="shortcuts-grid hidden" id="shortcuts-grid">
+          <span class="shortcut-key">/</span><span>Search</span>
+          <span class="shortcut-key">j/k</span><span>Next/Prev</span>
+          <span class="shortcut-key">s</span><span>Sync</span>
+          <span class="shortcut-key">a</span><span>Open ADS</span>
+          <span class="shortcut-key">p</span><span>PDF tab</span>
+          <span class="shortcut-key">⇧P</span><span>Open in Preview</span>
+          <span class="shortcut-key">c</span><span>Collections</span>
+          <span class="shortcut-key">n</span><span>Notes Panel</span>
+          <span class="shortcut-key">1-3</span><span>Read status</span>
+          <span class="shortcut-key">⇧1-4</span><span>Rating</span>
+          <span class="shortcut-key">+/-</span><span>Zoom</span>
+          <span class="shortcut-key">r</span><span>Rotate</span>
+          <span class="shortcut-key">⌫</span><span>Delete</span>
+          <span class="shortcut-key">⌘⌥I</span><span>Debug Console</span>
         </div>
       </div>
 
@@ -173,7 +254,7 @@
       <!-- Content Split -->
       <div class="content-split">
         <!-- Paper List Panel -->
-        <div class="paper-list-panel">
+        <div class="paper-list-panel" data-mobile-view="papers">
           <div class="list-toolbar">
             <button id="import-btn" class="import-btn" title="Import PDF">+</button>
             <button id="import-bib-btn" class="import-btn" title="Import .bib file">.bib</button>
@@ -252,7 +333,7 @@
               <div class="tab-content" id="tab-content">
               <!-- PDF Tab -->
               <div class="tab-pane active" id="tab-pdf">
-                <div class="pdf-container" id="pdf-container">
+                <div class="pdf-container" id="pdf-container" data-mobile-view="pdf">
                   <div class="pdf-loading" id="pdf-loading">Loading PDF...</div>
                 </div>
               </div>
@@ -272,6 +353,11 @@
               <div class="tab-pane hidden" id="tab-refs">
                 <div class="refs-toolbar hidden" id="refs-toolbar">
                   <span id="refs-count">0 references</span>
+                  <div class="refs-limit-controls">
+                    <input type="number" id="refs-limit-input" value="50" min="1" max="2000" title="Number of references to fetch">
+                    <button class="text-button" id="refs-load-more" title="Fetch references">Load</button>
+                    <button class="text-button" id="refs-load-all" title="Fetch all references">All</button>
+                  </div>
                   <div class="refs-actions">
                     <button class="text-button" id="refs-select-all">Select All</button>
                     <button class="text-button" id="refs-select-none">None</button>
@@ -287,6 +373,11 @@
               <div class="tab-pane hidden" id="tab-cites">
                 <div class="cites-toolbar hidden" id="cites-toolbar">
                   <span id="cites-count">0 citations</span>
+                  <div class="cites-limit-controls">
+                    <input type="number" id="cites-limit-input" value="50" min="1" max="2000" title="Number of citations to fetch">
+                    <button class="text-button" id="cites-load-more" title="Fetch citations">Load</button>
+                    <button class="text-button" id="cites-load-all" title="Fetch all citations">All</button>
+                  </div>
                   <div class="cites-actions">
                     <button class="text-button" id="cites-select-all">Select All</button>
                     <button class="text-button" id="cites-select-none">None</button>
@@ -300,21 +391,26 @@
 
               <!-- BibTeX Tab -->
               <div class="tab-pane hidden" id="tab-bibtex">
+                <div class="bibtex-source-info hidden" id="bibtex-source-info"></div>
                 <textarea class="bibtex-content" id="bibtex-content" readonly placeholder="No BibTeX available. Click 'Sync' to retrieve from ADS."></textarea>
                 <div class="bibtex-buttons">
-                  <button class="copy-btn" id="copy-bibtex-btn">Copy BibTeX</button>
-                  <button class="copy-btn" id="export-bibtex-btn">Export BibTeX</button>
+                  <button class="copy-btn" id="edit-bibtex-btn">Edit</button>
+                  <button class="copy-btn hidden" id="save-bibtex-btn">Save</button>
+                  <button class="copy-btn hidden" id="cancel-bibtex-btn">Cancel</button>
+                  <button class="copy-btn" id="copy-bibtex-btn">Copy</button>
+                  <button class="copy-btn" id="export-bibtex-btn">Export</button>
                 </div>
               </div>
 
               <!-- AI Tab -->
-              <div class="tab-pane hidden" id="tab-ai">
+              <div class="tab-pane hidden" id="tab-ai" data-mobile-view="ai">
                 <div class="ai-panel">
                   <!-- Summary Section -->
                   <div class="ai-section resizable" id="ai-summary-section">
                     <div class="ai-section-header">
                       <h3>Summary</h3>
                       <div class="ai-section-actions">
+                        <button class="icon-button" id="ai-copy-summary-btn" title="Copy summary to clipboard">&#x2398;</button>
                         <button class="text-button" id="ai-regenerate-btn" title="Regenerate summary">Regenerate</button>
                       </div>
                     </div>
@@ -337,7 +433,10 @@
                   <div class="ai-section resizable" id="ai-qa-section">
                     <div class="ai-section-header">
                       <h3>Ask AI</h3>
-                      <button class="text-button" id="ai-clear-history-btn" title="Clear history">Clear</button>
+                      <div class="ai-section-actions">
+                        <button class="icon-button" id="ai-copy-qa-btn" title="Copy last answer to clipboard">&#x2398;</button>
+                        <button class="text-button" id="ai-clear-history-btn" title="Clear history">Clear</button>
+                      </div>
                     </div>
                     <div class="ai-qa-history" id="ai-qa-history">
                       <div class="ai-qa-placeholder">
@@ -363,7 +462,10 @@
                   <!-- Semantic Search Section -->
                   <div class="ai-section resizable" id="ai-search-section">
                     <div class="ai-section-header">
-                      <h3>Semantic Search</h3>
+                      <h3>
+                        Semantic Search
+                        <button class="info-icon-btn" id="semantic-search-info-btn" title="How semantic search works">i</button>
+                      </h3>
                       <button class="text-button" id="ai-index-paper-btn" title="Index current paper for search">Index Paper</button>
                     </div>
                     <div class="ai-search-wrapper">
@@ -379,10 +481,22 @@
 
                   <!-- Connection Status -->
                   <div class="ai-status-bar" id="ai-status-bar">
-                    <span class="ai-status-indicator" id="ai-status-indicator">●</span>
-                    <span id="ai-status-text">Checking Ollama...</span>
+                    <span class="ai-status-indicator" id="ai-status-indicator">&#x25CF;</span>
+                    <span id="ai-status-text">Checking AI connection...</span>
                     <button class="text-button" id="ai-settings-link">Settings</button>
                   </div>
+                </div>
+              </div>
+
+              <!-- Semantic Search Info Popup -->
+              <div class="info-popup hidden" id="semantic-search-info-popup">
+                <div class="info-popup-content">
+                  <button class="info-popup-close" id="semantic-search-info-close">&times;</button>
+                  <h4>How Semantic Search Works</h4>
+                  <p><strong>1. Index your papers:</strong> Click "Index Paper" to generate embeddings for each paper. This converts the paper text into vectors that capture meaning.</p>
+                  <p><strong>2. Search by concept:</strong> Enter natural language queries like "papers about galaxy formation" or "machine learning in astronomy".</p>
+                  <p><strong>3. Get relevant results:</strong> The search finds papers whose content is semantically similar to your query, even if the exact words don't match.</p>
+                  <p class="info-note"><strong>Note:</strong> Semantic search requires Ollama with an embedding model (e.g., nomic-embed-text). Cloud providers do not support semantic search.</p>
                 </div>
               </div>
             </div>
@@ -390,15 +504,25 @@
               <!-- Annotations resize handle -->
               <div class="resize-handle vertical hidden" id="annotations-resize" data-resize="annotations"></div>
 
+              <!-- Collapsed Notes Toggle -->
+              <div class="notes-collapsed-toggle hidden" id="notes-collapsed-toggle" title="Show Notes (⌘⌥N)">
+                <span>📝</span>
+              </div>
+
               <!-- Annotations Panel -->
-              <div class="annotations-panel hidden" id="annotations-panel">
+              <div class="annotations-panel hidden" id="annotations-panel" data-mobile-view="notes">
                 <div class="annotations-header">
+                  <button id="notes-collapse-btn" class="collapse-btn" title="Hide Notes (⌘⌥N)">▶</button>
                   <h3>Notes <span class="annotations-count" id="annotations-count"></span></h3>
-                  <button class="text-button" id="add-note-btn" title="Add general note">+ Add</button>
+                  <div class="annotations-actions">
+                    <button class="text-button" id="export-annotations-btn" title="Export annotations to Markdown">Export</button>
+                    <button class="text-button" id="add-note-btn" title="Add general note">+ Add</button>
+                  </div>
                 </div>
                 <div class="annotations-list" id="annotations-list">
                   <div class="annotations-placeholder">
                     <p>Select text in the PDF and click "Add Note" to create an annotation.</p>
+                    <p class="annotations-hint">Notes support <strong>Markdown</strong> and <strong>LaTeX</strong> equations (<code>$...$</code> or <code>$$...$$</code>).</p>
                   </div>
                 </div>
               </div>
@@ -442,7 +566,7 @@
                   <option value="reading">Reading</option>
                   <option value="read">Read</option>
                 </select>
-                <button class="action-btn" id="fetch-metadata-btn" title="Fetch metadata from ADS">ADS</button>
+                <button class="action-btn" id="attach-file-btn" title="Attach files">Attach</button>
                 <button class="action-btn" id="copy-cite-btn" title="Copy \\cite command">Cite</button>
                 <button class="action-btn" id="open-ads-btn" title="Open in ADS">Link</button>
               </div>
@@ -534,8 +658,22 @@
   <!-- Collection Modal -->
   <div class="modal hidden" id="collection-modal">
     <div class="modal-content">
-      <h2>New Collection</h2>
+      <h2 id="collection-modal-title">New Collection</h2>
       <input type="text" id="collection-name-input" placeholder="Collection name">
+      <div class="collection-type-toggle">
+        <label>
+          <input type="radio" name="collection-type" value="regular" checked>
+          <span>Regular Collection</span>
+        </label>
+        <label>
+          <input type="radio" name="collection-type" value="smart">
+          <span>Smart Collection (saved search)</span>
+        </label>
+      </div>
+      <div class="smart-collection-options hidden" id="smart-collection-options">
+        <textarea id="collection-query-input" placeholder="Enter search query (e.g., author:Smith year:2024)"></textarea>
+        <p class="query-help">Supports: author:, year:, title:, journal:, or plain text search</p>
+      </div>
       <div class="modal-actions">
         <button class="secondary-button" id="collection-cancel-btn">Cancel</button>
         <button class="primary-button" id="collection-save-btn">Create</button>
@@ -662,6 +800,7 @@
     <div class="context-menu-item" id="ctx-open-ads">Open in ADS</div>
     <div class="context-menu-item" id="ctx-open-publisher">Open Publisher PDF</div>
     <div class="context-menu-item" id="ctx-sync-paper">Sync with ADS</div>
+    <div class="context-menu-item" id="ctx-download-pdfs">Download PDFs</div>
     <div class="context-menu-divider"></div>
     <div class="context-menu-item" id="ctx-add-to-collection">
       Add to Collection
@@ -676,33 +815,163 @@
 
   <!-- LLM Settings Modal -->
   <div class="modal hidden" id="llm-modal">
-    <div class="modal-content">
-      <h2>AI Settings (Ollama)</h2>
-      <p>Configure your local Ollama installation for AI-powered features.</p>
+    <div class="modal-content ai-settings-modal">
+      <h2>AI Settings</h2>
 
-      <div class="form-group">
-        <label for="llm-endpoint-input">Ollama Endpoint</label>
-        <input type="text" id="llm-endpoint-input" placeholder="http://localhost:11434">
+      <!-- Active Provider Indicator -->
+      <div class="active-provider-indicator" id="active-provider-indicator">
+        <span class="indicator-label">Currently using:</span>
+        <span class="indicator-value" id="active-provider-display">Loading...</span>
       </div>
 
-      <div class="form-group">
-        <label for="llm-model-select">Model</label>
-        <select id="llm-model-select">
-          <option value="">Loading models...</option>
-        </select>
+      <!-- Provider Tabs -->
+      <div class="provider-tabs" id="provider-tabs">
+        <button class="provider-tab active" data-provider="ollama">
+          <span class="provider-icon">🏠</span> Ollama
+          <span class="provider-status" id="ollama-tab-status">●</span>
+        </button>
+        <button class="provider-tab" data-provider="anthropic">
+          <span class="provider-icon">🤖</span> Claude
+          <span class="provider-status" id="anthropic-tab-status">●</span>
+        </button>
+        <button class="provider-tab" data-provider="gemini">
+          <span class="provider-icon">✨</span> Gemini
+          <span class="provider-status" id="gemini-tab-status">●</span>
+        </button>
+        <button class="provider-tab" data-provider="perplexity">
+          <span class="provider-icon">🔍</span> Perplexity
+          <span class="provider-status" id="perplexity-tab-status">●</span>
+        </button>
       </div>
 
-      <div class="form-group">
-        <label for="llm-embedding-select">Embedding Model</label>
-        <select id="llm-embedding-select">
-          <option value="">Loading models...</option>
-        </select>
+      <!-- Provider Content Panels -->
+      <div class="provider-panels">
+        <!-- Ollama Panel -->
+        <div class="provider-panel active" id="panel-ollama">
+          <div class="form-group">
+            <label for="llm-endpoint-input">Ollama Endpoint</label>
+            <input type="text" id="llm-endpoint-input" placeholder="http://127.0.0.1:11434">
+          </div>
+
+          <div class="form-group">
+            <label for="llm-model-select">Model</label>
+            <select id="llm-model-select">
+              <option value="">Loading models...</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="llm-embedding-select">Embedding Model (for semantic search)</label>
+            <select id="llm-embedding-select">
+              <option value="">Loading models...</option>
+            </select>
+          </div>
+
+          <div class="llm-connection-status">
+            <span class="llm-status-dot" id="ollama-status-dot">●</span>
+            <span id="ollama-status-text">Checking connection...</span>
+            <button class="text-button" id="ollama-test-btn">Test</button>
+          </div>
+        </div>
+
+        <!-- Anthropic (Claude) Panel -->
+        <div class="provider-panel" id="panel-anthropic">
+          <div class="form-group">
+            <label for="anthropic-api-key">API Key</label>
+            <div class="api-key-input-wrapper">
+              <input type="password" id="anthropic-api-key" placeholder="sk-ant-...">
+              <button class="text-button toggle-password" data-target="anthropic-api-key">Show</button>
+            </div>
+            <p class="form-help">Get your key from <a href="#" class="external-link" data-url="https://console.anthropic.com/settings/keys">console.anthropic.com</a></p>
+          </div>
+
+          <div class="form-group">
+            <label for="anthropic-model-select">Model</label>
+            <select id="anthropic-model-select">
+              <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+              <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+              <option value="claude-3-opus-20240229">Claude 3 Opus</option>
+            </select>
+          </div>
+
+          <div class="llm-connection-status">
+            <span class="llm-status-dot" id="anthropic-status-dot">●</span>
+            <span id="anthropic-status-text">Not configured</span>
+            <button class="text-button" id="anthropic-test-btn">Test</button>
+          </div>
+        </div>
+
+        <!-- Google Gemini Panel -->
+        <div class="provider-panel" id="panel-gemini">
+          <div class="form-group">
+            <label for="gemini-api-key">API Key</label>
+            <div class="api-key-input-wrapper">
+              <input type="password" id="gemini-api-key" placeholder="AIza...">
+              <button class="text-button toggle-password" data-target="gemini-api-key">Show</button>
+            </div>
+            <p class="form-help">Get your key from <a href="#" class="external-link" data-url="https://makersuite.google.com/app/apikey">Google AI Studio</a></p>
+          </div>
+
+          <div class="form-group">
+            <label for="gemini-model-select">Model</label>
+            <select id="gemini-model-select">
+              <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+              <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+              <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Experimental)</option>
+            </select>
+          </div>
+
+          <div class="llm-connection-status">
+            <span class="llm-status-dot" id="gemini-status-dot">●</span>
+            <span id="gemini-status-text">Not configured</span>
+            <button class="text-button" id="gemini-test-btn">Test</button>
+          </div>
+        </div>
+
+        <!-- Perplexity Panel -->
+        <div class="provider-panel" id="panel-perplexity">
+          <div class="form-group">
+            <label for="perplexity-api-key">API Key</label>
+            <div class="api-key-input-wrapper">
+              <input type="password" id="perplexity-api-key" placeholder="pplx-...">
+              <button class="text-button toggle-password" data-target="perplexity-api-key">Show</button>
+            </div>
+            <p class="form-help">Get your key from <a href="#" class="external-link" data-url="https://www.perplexity.ai/settings/api">perplexity.ai/settings/api</a></p>
+          </div>
+
+          <div class="form-group">
+            <label for="perplexity-model-select">Model</label>
+            <select id="perplexity-model-select">
+              <option value="llama-3.1-sonar-small-128k-online">Sonar Small (Online)</option>
+              <option value="llama-3.1-sonar-large-128k-online">Sonar Large (Online)</option>
+              <option value="llama-3.1-sonar-huge-128k-online">Sonar Huge (Online)</option>
+            </select>
+          </div>
+
+          <div class="llm-connection-status">
+            <span class="llm-status-dot" id="perplexity-status-dot">●</span>
+            <span id="perplexity-status-text">Not configured</span>
+            <button class="text-button" id="perplexity-test-btn">Test</button>
+          </div>
+        </div>
       </div>
 
-      <div class="llm-connection-status">
+      <!-- Summary Prompt Section -->
+      <div class="summary-prompt-section">
+        <div class="form-group">
+          <label for="summary-prompt-textarea">
+            Summary System Prompt
+            <button class="text-button" id="reset-summary-prompt-btn">Reset to default</button>
+          </label>
+          <textarea id="summary-prompt-textarea" rows="4" placeholder="Enter custom system prompt for summaries..."></textarea>
+        </div>
+      </div>
+
+      <!-- Legacy status indicator for backward compatibility -->
+      <div class="llm-connection-status hidden">
         <span class="llm-status-dot" id="llm-modal-status-dot">●</span>
         <span id="llm-modal-status-text">Checking connection...</span>
-        <button class="text-button" id="llm-test-btn">Test Connection</button>
+        <button class="text-button hidden" id="llm-test-btn">Test Connection</button>
       </div>
 
       <div class="modal-actions">
@@ -841,7 +1110,72 @@
     <div class="ai-explanation-content" id="ai-explanation-content">
       <div class="ai-loading">Generating explanation...</div>
     </div>
+    <div class="ai-explanation-footer">
+      <button class="text-button" id="ai-explanation-add-note">+ Add as Note</button>
+    </div>
+    <div class="ai-explanation-resize" id="ai-explanation-resize"></div>
   </div>
+
+  <!-- Notification Toast -->
+  <div class="notification-toast hidden" id="notification-toast"></div>
+
+  <!-- Mobile PDF Controls -->
+  <div class="mobile-pdf-controls" id="mobile-pdf-controls">
+    <div class="pdf-controls-row">
+      <button class="pdf-ctrl-btn" id="pdf-prev-page">&#9664;</button>
+      <span class="pdf-page-indicator">
+        <input type="number" id="pdf-page-input" min="1" value="1">
+        <span>of <span id="pdf-total-pages">1</span></span>
+      </span>
+      <button class="pdf-ctrl-btn" id="pdf-next-page">&#9654;</button>
+    </div>
+    <div class="pdf-controls-row">
+      <button class="pdf-ctrl-btn" id="pdf-zoom-out">&#8722;</button>
+      <span class="pdf-zoom-level" id="pdf-zoom-display">100%</span>
+      <button class="pdf-ctrl-btn" id="pdf-zoom-in">+</button>
+      <button class="pdf-ctrl-btn" id="pdf-fit-width">&#8596;</button>
+    </div>
+  </div>
+
+  <!-- Mobile Library Picker Overlay -->
+  <div class="mobile-library-overlay hidden" id="mobile-library-overlay">
+    <div class="mobile-library-modal">
+      <div class="mobile-library-header">
+        <h2>Libraries</h2>
+        <button class="mobile-library-close" id="mobile-library-close">&times;</button>
+      </div>
+      <div class="mobile-library-list" id="mobile-library-list">
+        <!-- Libraries will be populated dynamically -->
+      </div>
+      <div class="mobile-library-actions">
+        <button class="mobile-library-new-btn" id="mobile-library-new-btn">+ Create New Library</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile Tab Bar -->
+  <nav class="mobile-tab-bar" id="mobile-tab-bar">
+    <button class="tab-item active" data-view="papers">
+      <span class="tab-icon">📄</span>
+      <span class="tab-label">Papers</span>
+    </button>
+    <button class="tab-item" data-view="pdf">
+      <span class="tab-icon">📖</span>
+      <span class="tab-label">PDF</span>
+    </button>
+    <button class="tab-item" data-view="notes">
+      <span class="tab-icon">📝</span>
+      <span class="tab-label">Notes</span>
+    </button>
+    <button class="tab-item" data-view="ai">
+      <span class="tab-icon">🤖</span>
+      <span class="tab-label">AI</span>
+    </button>
+    <button class="tab-item" data-view="libraries">
+      <span class="tab-icon">📚</span>
+      <span class="tab-label">Libraries</span>
+    </button>
+  </nav>
 
   <!-- Platform initialization (for iOS/Capacitor only) -->
   <script type="module" src="platform-init.js"></script>

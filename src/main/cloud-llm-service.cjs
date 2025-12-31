@@ -207,7 +207,10 @@ class CloudLLMService {
             const parsed = JSON.parse(data);
             if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
               fullText += parsed.delta.text;
-              onChunk({ text: parsed.delta.text, fullText });
+              onChunk({ text: parsed.delta.text, fullText, done: false });
+            }
+            if (parsed.type === 'message_stop') {
+              onChunk({ text: '', fullText, done: true });
             }
           } catch (e) {
             // Ignore parse errors for partial chunks
@@ -216,6 +219,8 @@ class CloudLLMService {
       }
     }
 
+    // Send final done signal if not already sent
+    onChunk({ text: '', fullText, done: true });
     return fullText;
   }
 
@@ -302,7 +307,7 @@ class CloudLLMService {
             const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
             if (text) {
               fullText += text;
-              onChunk({ text, fullText });
+              onChunk({ text, fullText, done: false });
             }
           } catch (e) {
             // Ignore parse errors
@@ -311,6 +316,8 @@ class CloudLLMService {
       }
     }
 
+    // Send final done signal
+    onChunk({ text: '', fullText, done: true });
     return fullText;
   }
 
@@ -388,14 +395,17 @@ class CloudLLMService {
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           const data = line.slice(6);
-          if (data === '[DONE]') continue;
+          if (data === '[DONE]') {
+            onChunk({ text: '', fullText, done: true });
+            continue;
+          }
 
           try {
             const parsed = JSON.parse(data);
             const text = parsed.choices?.[0]?.delta?.content || '';
             if (text) {
               fullText += text;
-              onChunk({ text, fullText });
+              onChunk({ text, fullText, done: false });
             }
           } catch (e) {
             // Ignore parse errors
@@ -404,6 +414,8 @@ class CloudLLMService {
       }
     }
 
+    // Send final done signal if not already sent
+    onChunk({ text: '', fullText, done: true });
     return fullText;
   }
 

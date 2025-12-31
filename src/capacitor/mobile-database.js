@@ -8,41 +8,114 @@
 
 import initSqlJs from 'sql.js';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { registerPlugin } from '@capacitor/core';
 import { applySchema } from '../shared/database-schema.js';
+
+// Register native iCloud plugin
+const ICloud = registerPlugin('ICloud');
 
 let db = null;
 let dbPath = null;
 let libraryPath = null;
+let currentLocation = 'local'; // 'local' or 'icloud'
 let SQL = null;
 
 // sql.js WASM file URL - loaded from CDN
 const SQL_WASM_URL = 'https://sql.js.org/dist/sql-wasm.wasm';
 
 /**
+ * Read file from appropriate storage backend
+ */
+async function readDbFile(path, location) {
+  if (location === 'icloud') {
+    const result = await ICloud.readFile({ path, encoding: null });
+    return result.data;
+  } else {
+    const result = await Filesystem.readFile({
+      path,
+      directory: Directory.Documents
+    });
+    return result.data;
+  }
+}
+
+/**
+ * Write file to appropriate storage backend
+ */
+async function writeDbFile(path, data, location) {
+  console.log(`[MobileDB] writeDbFile: ${path} to ${location}`);
+  try {
+    if (location === 'icloud') {
+      // Ensure parent directory exists
+      const parentDir = path.substring(0, path.lastIndexOf('/'));
+      if (parentDir) {
+        console.log(`[MobileDB] Ensuring iCloud directory exists: ${parentDir}`);
+        try {
+          await ICloud.mkdir({ path: parentDir, recursive: true });
+        } catch (e) {
+          // Directory might already exist
+          console.log(`[MobileDB] mkdir result:`, e.message || 'ok');
+        }
+      }
+      await ICloud.writeFile({ path, data, encoding: null, recursive: true });
+    } else {
+      // Ensure parent directory exists for local
+      const parentDir = path.substring(0, path.lastIndexOf('/'));
+      if (parentDir) {
+        try {
+          await Filesystem.mkdir({
+            path: parentDir,
+            directory: Directory.Documents,
+            recursive: true
+          });
+        } catch (e) {
+          // Directory might already exist
+        }
+      }
+      await Filesystem.writeFile({
+        path,
+        data,
+        directory: Directory.Documents,
+        recursive: true
+      });
+    }
+    console.log(`[MobileDB] writeDbFile: success`);
+  } catch (e) {
+    console.error(`[MobileDB] writeDbFile failed:`, e.message);
+    throw e;
+  }
+}
+
+/**
  * Initialize sql.js and load/create database
- * @param {string} libPath - Library folder path (relative to Documents)
+ * @param {string} libPath - Library folder path (relative to directory)
+ * @param {string} location - Storage location: 'local' or 'icloud'
  * @returns {Promise<boolean>}
  */
-export async function initDatabase(libPath) {
+export async function initDatabase(libPath, location = 'local') {
   libraryPath = libPath;
   dbPath = `${libPath}/library.sqlite`;
+  currentLocation = location;
+
+  console.log(`[MobileDB] Initializing database at ${dbPath} in ${location}`);
 
   if (!SQL) {
+    console.log('[MobileDB] Loading sql.js...');
     // Initialize sql.js with WASM
     SQL = await initSqlJs({
       locateFile: file => SQL_WASM_URL
     });
+    console.log('[MobileDB] sql.js loaded');
   }
 
   // Try to load existing database
   try {
-    const result = await Filesystem.readFile({
-      path: dbPath,
-      directory: Directory.Documents
-    });
+    console.log('[MobileDB] Attempting to read existing database...');
+    const base64Data = await readDbFile(dbPath, location);
+    console.log('[MobileDB] Database file read, size:', base64Data?.length || 0);
 
     // Convert base64 to Uint8Array
-    const binaryString = atob(result.data);
+    const binaryString = atob(base64Data);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
@@ -52,13 +125,23 @@ export async function initDatabase(libPath) {
     console.log('[MobileDB] Loaded existing database');
   } catch (e) {
     // Database doesn't exist, create new one
+    console.log('[MobileDB] No existing database, creating new:', e.message);
     db = new SQL.Database();
     console.log('[MobileDB] Created new database');
   }
 
   // Ensure schema exists
+  console.log('[MobileDB] Creating schema...');
   createSchema();
-  await saveDatabase();
+  console.log('[MobileDB] Schema created, saving database...');
+
+  try {
+    await saveDatabase();
+    console.log('[MobileDB] Database saved successfully');
+  } catch (e) {
+    console.error('[MobileDB] Failed to save database:', e.message);
+    // Don't throw - we can still work with the in-memory database
+  }
 
   return true;
 }
@@ -67,28 +150,32 @@ export async function initDatabase(libPath) {
  * Save database to filesystem
  */
 export async function saveDatabase() {
-  if (!db || !dbPath) return;
+  if (!db || !dbPath) {
+    console.log('[MobileDB] saveDatabase: no db or dbPath');
+    return;
+  }
+
+  console.log(`[MobileDB] Saving database to ${dbPath} (${currentLocation})`);
 
   try {
     const data = db.export();
     const uint8Array = new Uint8Array(data);
+    console.log('[MobileDB] Database exported, size:', uint8Array.length);
 
-    // Convert to base64 for Capacitor Filesystem
+    // Convert to base64 for storage
     let binary = '';
     for (let i = 0; i < uint8Array.length; i++) {
       binary += String.fromCharCode(uint8Array[i]);
     }
     const base64 = btoa(binary);
+    console.log('[MobileDB] Converted to base64, length:', base64.length);
 
-    await Filesystem.writeFile({
-      path: dbPath,
-      directory: Directory.Documents,
-      data: base64
-    });
+    await writeDbFile(dbPath, base64, currentLocation);
 
-    console.log('[MobileDB] Database saved');
+    console.log('[MobileDB] Database saved successfully');
   } catch (e) {
-    console.error('[MobileDB] Failed to save database:', e);
+    console.error('[MobileDB] Failed to save database:', e.message);
+    throw e; // Re-throw so caller knows it failed
   }
 }
 
@@ -100,6 +187,20 @@ export function closeDatabase() {
     db.close();
     db = null;
   }
+}
+
+/**
+ * Get the current storage location ('local' or 'icloud')
+ */
+export function getLocation() {
+  return currentLocation;
+}
+
+/**
+ * Get the current library path
+ */
+export function getLibraryPath() {
+  return libraryPath;
 }
 
 /**
@@ -434,9 +535,344 @@ export function addAnnotation(annotation) {
 /**
  * Delete annotation
  * @param {number} id - Annotation ID
+ * @returns {boolean} - Success
  */
 export function deleteAnnotation(id) {
   db.run('DELETE FROM annotations WHERE id = ?', [id]);
+  return true;
+}
+
+/**
+ * Create annotation (alias for addAnnotation with different parameter format)
+ * @param {number} paperId - Paper ID
+ * @param {Object} data - Annotation data
+ * @returns {number} - New annotation ID
+ */
+export function createAnnotation(paperId, data) {
+  const now = new Date().toISOString();
+  db.run(`
+    INSERT INTO annotations (paper_id, page_number, selection_text, selection_rects,
+                            note_content, color, pdf_source, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    paperId,
+    data.pageNumber || data.page_number,
+    data.content || data.selection_text || data.selectionText,
+    JSON.stringify(data.position || data.selection_rects || data.selectionRects || []),
+    data.note || data.note_content || data.noteContent || '',
+    data.color || '#ffeb3b',
+    data.pdfSource || data.pdf_source || null,
+    now,
+    now
+  ]);
+
+  const result = db.exec('SELECT last_insert_rowid()');
+  return result[0].values[0][0];
+}
+
+/**
+ * Update annotation
+ * @param {number} id - Annotation ID
+ * @param {Object} data - Fields to update
+ * @returns {boolean} - Success
+ */
+export function updateAnnotation(id, data) {
+  const updates = [];
+  const params = [];
+
+  if (data.note !== undefined || data.note_content !== undefined || data.noteContent !== undefined) {
+    updates.push('note_content = ?');
+    params.push(data.note || data.note_content || data.noteContent);
+  }
+  if (data.color !== undefined) {
+    updates.push('color = ?');
+    params.push(data.color);
+  }
+  if (data.content !== undefined || data.selection_text !== undefined || data.selectionText !== undefined) {
+    updates.push('selection_text = ?');
+    params.push(data.content || data.selection_text || data.selectionText);
+  }
+
+  if (updates.length === 0) return false;
+
+  updates.push('updated_at = ?');
+  params.push(new Date().toISOString());
+  params.push(id);
+
+  db.run(`UPDATE annotations SET ${updates.join(', ')} WHERE id = ?`, params);
+  return true;
+}
+
+/**
+ * Get annotation counts grouped by PDF source
+ * @param {number} paperId - Paper ID
+ * @returns {Object} - Counts by source { 'EPRINT_PDF': 3, 'PUB_PDF': 1, ... }
+ */
+export function getAnnotationCountsBySource(paperId) {
+  const sql = `SELECT pdf_source, COUNT(*) as count FROM annotations
+               WHERE paper_id = ? GROUP BY pdf_source`;
+  const stmt = db.prepare(sql);
+  stmt.bind([paperId]);
+
+  const counts = {};
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    const source = row.pdf_source || 'default';
+    counts[source] = row.count;
+  }
+  stmt.free();
+
+  return counts;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUMMARY OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get summary for a paper
+ * @param {number} paperId - Paper ID
+ * @returns {Object|null} - Summary object or null
+ */
+export function getSummary(paperId) {
+  const stmt = db.prepare('SELECT * FROM paper_summaries WHERE paper_id = ?');
+  stmt.bind([paperId]);
+
+  if (stmt.step()) {
+    const row = stmt.getAsObject();
+    stmt.free();
+    return {
+      id: row.id,
+      paper_id: row.paper_id,
+      summary: row.summary,
+      key_points: row.key_points,
+      model: row.model,
+      generated_date: row.generated_date
+    };
+  }
+  stmt.free();
+  return null;
+}
+
+/**
+ * Save summary for a paper
+ * @param {number} paperId - Paper ID
+ * @param {string} summary - Summary text
+ * @param {string} model - Model used to generate summary
+ * @param {string} keyPoints - Key points (optional)
+ * @returns {number} - Summary ID
+ */
+export function saveSummary(paperId, summary, model, keyPoints = null) {
+  const now = new Date().toISOString();
+
+  // Check if summary exists for this paper
+  const existing = getSummary(paperId);
+
+  if (existing) {
+    // Update existing summary
+    db.run(`
+      UPDATE paper_summaries
+      SET summary = ?, key_points = ?, model = ?, generated_date = ?
+      WHERE paper_id = ?
+    `, [summary, keyPoints, model, now, paperId]);
+    return existing.id;
+  } else {
+    // Insert new summary
+    db.run(`
+      INSERT INTO paper_summaries (paper_id, summary, key_points, model, generated_date)
+      VALUES (?, ?, ?, ?, ?)
+    `, [paperId, summary, keyPoints, model, now]);
+    const result = db.exec('SELECT last_insert_rowid()');
+    return result[0].values[0][0];
+  }
+}
+
+/**
+ * Delete summary for a paper
+ * @param {number} paperId - Paper ID
+ */
+export function deleteSummary(paperId) {
+  db.run('DELETE FROM paper_summaries WHERE paper_id = ?', [paperId]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Q&A HISTORY OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get Q&A history for a paper
+ * @param {number} paperId - Paper ID
+ * @returns {Array} - Array of Q&A entries
+ */
+export function getQAHistory(paperId) {
+  const stmt = db.prepare(`
+    SELECT * FROM paper_qa
+    WHERE paper_id = ?
+    ORDER BY created_date DESC
+  `);
+  stmt.bind([paperId]);
+
+  const history = [];
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    history.push({
+      id: row.id,
+      paper_id: row.paper_id,
+      question: row.question,
+      answer: row.answer,
+      context_used: row.context_used,
+      model: row.model,
+      created_at: row.created_date
+    });
+  }
+  stmt.free();
+
+  return history;
+}
+
+/**
+ * Add Q&A entry for a paper
+ * @param {number} paperId - Paper ID
+ * @param {string} question - Question asked
+ * @param {string} answer - Answer generated
+ * @param {string} model - Model used
+ * @param {string} contextUsed - Context snippet used (optional)
+ * @returns {number} - Q&A entry ID
+ */
+export function addQAEntry(paperId, question, answer, model, contextUsed = null) {
+  const now = new Date().toISOString();
+  db.run(`
+    INSERT INTO paper_qa (paper_id, question, answer, context_used, model, created_date)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `, [paperId, question, answer, contextUsed, model, now]);
+  const result = db.exec('SELECT last_insert_rowid()');
+  return result[0].values[0][0];
+}
+
+/**
+ * Clear Q&A history for a paper
+ * @param {number} paperId - Paper ID
+ */
+export function clearQAHistory(paperId) {
+  db.run('DELETE FROM paper_qa WHERE paper_id = ?', [paperId]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFERENCES & CITATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get references for a paper (papers this paper cites)
+ * @param {number} paperId - Paper ID
+ * @returns {Array} - Array of reference objects
+ */
+export function getReferences(paperId) {
+  const stmt = db.prepare('SELECT * FROM refs WHERE paper_id = ? ORDER BY ref_year DESC');
+  stmt.bind([paperId]);
+
+  const refs = [];
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    refs.push({
+      id: row.id,
+      paper_id: row.paper_id,
+      bibcode: row.ref_bibcode,
+      title: row.ref_title,
+      authors: row.ref_authors,
+      year: row.ref_year
+    });
+  }
+  stmt.free();
+
+  return refs;
+}
+
+/**
+ * Get citations for a paper (papers that cite this paper)
+ * @param {number} paperId - Paper ID
+ * @returns {Array} - Array of citation objects
+ */
+export function getCitations(paperId) {
+  const stmt = db.prepare('SELECT * FROM citations WHERE paper_id = ? ORDER BY citing_year DESC');
+  stmt.bind([paperId]);
+
+  const cites = [];
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    cites.push({
+      id: row.id,
+      paper_id: row.paper_id,
+      bibcode: row.citing_bibcode,
+      title: row.citing_title,
+      authors: row.citing_authors,
+      year: row.citing_year
+    });
+  }
+  stmt.free();
+
+  return cites;
+}
+
+/**
+ * Add references for a paper (replaces existing)
+ * @param {number} paperId - Paper ID
+ * @param {Array} refs - Array of reference objects
+ */
+export function addReferences(paperId, refs) {
+  // Clear existing references for this paper
+  db.run('DELETE FROM refs WHERE paper_id = ?', [paperId]);
+
+  // Insert new references
+  for (const ref of refs) {
+    // Handle authors - may be array or string
+    const authorsStr = Array.isArray(ref.author) ? ref.author.join(', ') : (ref.authors || ref.author || '');
+
+    db.run(
+      'INSERT INTO refs (paper_id, ref_bibcode, ref_title, ref_authors, ref_year) VALUES (?, ?, ?, ?, ?)',
+      [paperId, ref.bibcode || null, ref.title || null, authorsStr, ref.year || null]
+    );
+  }
+}
+
+/**
+ * Add citations for a paper (replaces existing)
+ * @param {number} paperId - Paper ID
+ * @param {Array} cites - Array of citation objects
+ */
+export function addCitations(paperId, cites) {
+  // Clear existing citations for this paper
+  db.run('DELETE FROM citations WHERE paper_id = ?', [paperId]);
+
+  // Insert new citations
+  for (const cite of cites) {
+    // Handle authors - may be array or string
+    const authorsStr = Array.isArray(cite.author) ? cite.author.join(', ') : (cite.authors || cite.author || '');
+
+    db.run(
+      'INSERT INTO citations (paper_id, citing_bibcode, citing_title, citing_authors, citing_year) VALUES (?, ?, ?, ?, ?)',
+      [paperId, cite.bibcode || null, cite.title || null, authorsStr, cite.year || null]
+    );
+  }
+}
+
+/**
+ * Get reference count for a paper
+ * @param {number} paperId - Paper ID
+ * @returns {number} - Reference count
+ */
+export function getReferencesCount(paperId) {
+  const result = db.exec('SELECT COUNT(*) FROM refs WHERE paper_id = ?', [paperId]);
+  return result[0]?.values[0][0] || 0;
+}
+
+/**
+ * Get citation count for a paper
+ * @param {number} paperId - Paper ID
+ * @returns {number} - Citation count
+ */
+export function getCitationsCount(paperId) {
+  const result = db.exec('SELECT COUNT(*) FROM citations WHERE paper_id = ?', [paperId]);
+  return result[0]?.values[0][0] || 0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -480,14 +916,6 @@ export function isInitialized() {
 }
 
 /**
- * Get current library path
- * @returns {string|null}
- */
-export function getLibraryPath() {
-  return libraryPath;
-}
-
-/**
  * Get library statistics
  * @returns {Object} Stats with total, unread, reading, read counts
  */
@@ -513,68 +941,8 @@ export function getStats() {
  * @returns {Promise<boolean>}
  */
 export async function initDatabaseFromICloud(libPath) {
-  libraryPath = libPath;
-  dbPath = `${libPath}/library.sqlite`;
-
-  if (!SQL) {
-    // Initialize sql.js with WASM
-    SQL = await initSqlJs({
-      locateFile: file => SQL_WASM_URL
-    });
-  }
-
-  // Try to load existing database from iCloud
-  try {
-    const result = await Filesystem.readFile({
-      path: dbPath,
-      directory: Directory.ICloud
-    });
-
-    // Convert base64 to Uint8Array
-    const binaryString = atob(result.data);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-
-    db = new SQL.Database(bytes);
-    console.log('[MobileDB] Loaded database from iCloud');
-  } catch (e) {
-    // Database doesn't exist, create new one
-    db = new SQL.Database();
-    console.log('[MobileDB] Created new database in iCloud');
-  }
-
-  // Ensure schema exists
-  createSchema();
-  await saveDatabaseToICloud();
-
-  return true;
+  // Just call initDatabase with icloud location
+  return initDatabase(libPath, 'icloud');
 }
 
-/**
- * Save database to iCloud filesystem
- */
-async function saveDatabaseToICloud() {
-  if (!db || !dbPath) return;
-
-  try {
-    const data = db.export();
-    const uint8Array = new Uint8Array(data);
-
-    // Convert to base64 for Capacitor Filesystem
-    let binary = '';
-    for (let i = 0; i < uint8Array.length; i++) {
-      binary += String.fromCharCode(uint8Array[i]);
-    }
-    const base64 = btoa(binary);
-
-    await Filesystem.writeFile({
-      path: dbPath,
-      directory: Directory.ICloud,
-      data: base64
-    });
-  } catch (e) {
-    console.error('[MobileDB] Failed to save database to iCloud:', e);
-  }
-}
+// Note: saveDatabaseToICloud removed - saveDatabase now handles both local and iCloud

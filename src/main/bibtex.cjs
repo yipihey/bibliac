@@ -378,11 +378,63 @@ function importBibtex(bibPath) {
   });
 }
 
+// Parse a single BibTeX entry and extract metadata for paper update
+function parseSingleBibtexEntry(bibtexString) {
+  const entries = parseBibtex(bibtexString);
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const entry = entries[0];
+
+  // Extract metadata in the same format as paper fields
+  const result = {};
+
+  if (entry.title) {
+    result.title = cleanBibtexValue(entry.title);
+  }
+
+  if (entry.author) {
+    result.authors = entry.author.split(' and ').map(a => cleanAuthorName(a.trim()));
+  }
+
+  if (entry.year) {
+    result.year = parseInt(entry.year) || null;
+  }
+
+  if (entry.journal || entry.booktitle) {
+    result.journal = cleanBibtexValue(entry.journal || entry.booktitle);
+  }
+
+  if (entry.doi) {
+    result.doi = entry.doi;
+  }
+
+  if (entry.eprint) {
+    result.arxiv_id = entry.eprint;
+  }
+
+  if (entry.abstract) {
+    result.abstract = cleanBibtexValue(entry.abstract);
+  }
+
+  // Try to extract bibcode from adsurl
+  if (entry.adsurl) {
+    const bibcode = extractBibcodeFromAdsUrl(entry.adsurl);
+    if (bibcode) {
+      result.bibcode = bibcode;
+    }
+  }
+
+  return result;
+}
+
 module.exports = {
   generateBibtexKey,
   paperToBibtex,
   escapeLatex,
   parseBibtex,
+  parseSingleBibtexEntry,
   updateMasterBib,
   exportBibtex,
   getCiteCommand,

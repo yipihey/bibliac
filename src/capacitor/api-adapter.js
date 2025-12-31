@@ -9,7 +9,11 @@ import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Preferences } from '@capacitor/preferences';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { SecureStorage } from '@aparajita/capacitor-secure-storage';
-import { CapacitorHttp } from '@capacitor/core';
+import { CapacitorHttp, registerPlugin } from '@capacitor/core';
+import { FileOpener } from '@capacitor-community/file-opener';
+
+// Register native iCloud plugin
+const ICloud = registerPlugin('ICloud');
 
 // Import SQLite database module
 import * as MobileDB from './mobile-database.js';
@@ -43,24 +47,150 @@ const LEGACY_PAPERS_FILE = 'papers.json';
 
 // Database initialization and migration helpers
 async function ensureLibraryExists() {
+  await ensureLibraryFoldersFor(LIBRARY_FOLDER);
+}
+
+// Helper to ensure library folders exist for a given path
+async function ensureLibraryFoldersFor(libPath) {
   try {
     await Filesystem.mkdir({
-      path: LIBRARY_FOLDER,
+      path: libPath,
       directory: Directory.Documents,
       recursive: true
     });
     await Filesystem.mkdir({
-      path: `${LIBRARY_FOLDER}/papers`,
+      path: `${libPath}/papers`,
       directory: Directory.Documents,
       recursive: true
     });
     await Filesystem.mkdir({
-      path: `${LIBRARY_FOLDER}/text`,
+      path: `${libPath}/text`,
       directory: Directory.Documents,
       recursive: true
     });
   } catch (e) {
     // Directory may already exist
+  }
+}
+
+// Helper to parse esources response from ADS API (various formats)
+function parseEsourcesResponse(result) {
+  if (Array.isArray(result)) return result;
+  if (result?.links?.records && Array.isArray(result.links.records)) return result.links.records;
+  if (Array.isArray(result?.links)) return result.links;
+  if (Array.isArray(result?.records)) return result.records;
+  return [];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILESYSTEM ABSTRACTION (iCloud vs Local)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Helper to read file from either iCloud or local storage
+async function fsReadFile(path, location, encoding = 'utf8') {
+  if (location === 'icloud') {
+    const result = await ICloud.readFile({ path, encoding });
+    return result.data;
+  } else {
+    const result = await Filesystem.readFile({
+      path,
+      directory: Directory.Documents,
+      encoding: encoding ? Encoding.UTF8 : undefined
+    });
+    return result.data;
+  }
+}
+
+// Helper to write file to either iCloud or local storage
+async function fsWriteFile(path, data, location, encoding = 'utf8') {
+  if (location === 'icloud') {
+    await ICloud.writeFile({ path, data, encoding, recursive: true });
+  } else {
+    await Filesystem.writeFile({
+      path,
+      data,
+      directory: Directory.Documents,
+      encoding: encoding ? Encoding.UTF8 : undefined,
+      recursive: true
+    });
+  }
+}
+
+// Helper to delete file from either iCloud or local storage
+async function fsDeleteFile(path, location) {
+  if (location === 'icloud') {
+    await ICloud.deleteFile({ path });
+  } else {
+    await Filesystem.deleteFile({
+      path,
+      directory: Directory.Documents
+    });
+  }
+}
+
+// Helper to create directory in either iCloud or local storage
+async function fsMkdir(path, location) {
+  if (location === 'icloud') {
+    await ICloud.mkdir({ path, recursive: true });
+  } else {
+    await Filesystem.mkdir({
+      path,
+      directory: Directory.Documents,
+      recursive: true
+    });
+  }
+}
+
+// Helper to remove directory from either iCloud or local storage
+async function fsRmdir(path, location, recursive = true) {
+  if (location === 'icloud') {
+    await ICloud.rmdir({ path, recursive });
+  } else {
+    await Filesystem.rmdir({
+      path,
+      directory: Directory.Documents,
+      recursive
+    });
+  }
+}
+
+// Helper to read directory from either iCloud or local storage
+async function fsReaddir(path, location) {
+  if (location === 'icloud') {
+    const result = await ICloud.readdir({ path });
+    return result.files;
+  } else {
+    const result = await Filesystem.readdir({
+      path,
+      directory: Directory.Documents
+    });
+    return result.files;
+  }
+}
+
+// Helper to get file/directory stat from either iCloud or local storage
+async function fsStat(path, location) {
+  if (location === 'icloud') {
+    return await ICloud.stat({ path });
+  } else {
+    return await Filesystem.stat({
+      path,
+      directory: Directory.Documents
+    });
+  }
+}
+
+// Helper to copy file in either iCloud or local storage
+async function fsCopy(from, to, location) {
+  if (location === 'icloud') {
+    await ICloud.copy({ from, to });
+  } else {
+    await Filesystem.copy({
+      from,
+      to,
+      directory: Directory.Documents,
+      toDirectory: Directory.Documents
+    });
   }
 }
 
@@ -130,32 +260,75 @@ async function migrateLegacyData() {
 // extractArxivId imported from shared/paper-utils.js
 
 // Helper to download PDF for a paper (standalone function)
+// Sync cancellation flag
+let syncCancelled = false;
+
 async function downloadPaperPdf(paper, token, pdfPriority) {
   try {
     console.log('[downloadPaperPdf] Starting for', paper.bibcode);
 
+    // Get current library path from database
+    const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+    console.log('[downloadPaperPdf] Using library path:', currentLibraryPath);
+
     // Ensure library folders exist
-    await ensureLibraryExists();
+    await ensureLibraryFoldersFor(currentLibraryPath);
 
     // Get e-sources from ADS
     const esourcesUrl = `${ADS_API_BASE}/resolver/${paper.bibcode}/esources`;
     console.log('[downloadPaperPdf] Fetching e-sources from', esourcesUrl);
 
-    const response = await CapacitorHttp.get({
-      url: esourcesUrl,
-      headers: {
-        'Authorization': `Bearer ${token}`
+    let links = [];
+    try {
+      const response = await CapacitorHttp.get({
+        url: esourcesUrl,
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      console.log('[downloadPaperPdf] E-sources response status:', response.status);
+
+      if (response.status === 200) {
+        links = response.data?.links || [];
       }
-    });
-
-    console.log('[downloadPaperPdf] E-sources response status:', response.status);
-
-    if (response.status !== 200) {
-      return { success: false, error: 'Failed to get e-sources' };
+    } catch (e) {
+      console.log('[downloadPaperPdf] E-sources fetch failed, will try fallback:', e.message);
     }
 
-    const links = response.data?.links || [];
     console.log('[downloadPaperPdf] Available links:', links.map(l => l.type));
+
+    // If no esources but paper has arxiv_id, try direct arXiv download
+    if (links.length === 0 && paper.arxiv_id) {
+      console.log('[downloadPaperPdf] No esources, trying direct arXiv download for', paper.arxiv_id);
+      emit('consoleLog', { message: `[${paper.bibcode}] Trying direct arXiv download...`, level: 'info' });
+
+      const pdfUrl = `https://arxiv.org/pdf/${paper.arxiv_id}.pdf`;
+      const filename = `${paper.bibcode.replace(/\//g, '_')}_EPRINT_PDF.pdf`;
+      const filePath = `${currentLibraryPath}/papers/${filename}`;
+
+      try {
+        const downloadResult = await Filesystem.downloadFile({
+          url: pdfUrl,
+          path: filePath,
+          directory: Directory.Documents,
+          progress: true
+        });
+
+        if (downloadResult.path) {
+          return {
+            success: true,
+            path: `papers/${filename}`,
+            source: 'EPRINT_PDF'
+          };
+        }
+      } catch (e) {
+        console.error('[downloadPaperPdf] Direct arXiv download failed:', e);
+        emit('consoleLog', { message: `[${paper.bibcode}] arXiv download failed: ${e.message}`, level: 'warn' });
+      }
+
+      return { success: false, error: 'arXiv download failed' };
+    }
 
     // Try sources in priority order
     for (const sourceType of pdfPriority) {
@@ -174,7 +347,7 @@ async function downloadPaperPdf(paper, token, pdfPriority) {
 
         // Download the PDF
         const filename = `${paper.bibcode.replace(/\//g, '_')}_${sourceType}.pdf`;
-        const filePath = `${LIBRARY_FOLDER}/papers/${filename}`;
+        const filePath = `${currentLibraryPath}/papers/${filename}`;
 
         console.log('[downloadPaperPdf] Downloading to', filePath);
 
@@ -209,6 +382,162 @@ async function downloadPaperPdf(paper, token, pdfPriority) {
 
 // adsToPaper imported from shared/paper-utils.js
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BIBTEX HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Generate a cite key from paper metadata
+ * Uses bibcode if available, otherwise AuthorYear format
+ */
+function generateCiteKey(paper) {
+  if (paper.bibcode) return paper.bibcode;
+
+  // Extract first author's last name
+  const firstAuthor = paper.authors?.split(',')[0]?.trim()?.split(' ').pop() || 'Unknown';
+  const year = paper.year || 'XXXX';
+  return `${firstAuthor}${year}`;
+}
+
+/**
+ * Generate BibTeX entry from paper metadata
+ * Used for papers without bibcode that can't be fetched from ADS
+ */
+function paperToBibtex(paper) {
+  const key = generateCiteKey(paper);
+  const authors = paper.authors || 'Unknown';
+  const title = paper.title || 'Untitled';
+  const year = paper.year || '';
+  const journal = paper.journal || '';
+
+  // Escape special LaTeX characters
+  const escapeLatex = (str) => {
+    if (!str) return '';
+    return str
+      .replace(/\\/g, '\\textbackslash{}')
+      .replace(/&/g, '\\&')
+      .replace(/%/g, '\\%')
+      .replace(/\$/g, '\\$')
+      .replace(/#/g, '\\#')
+      .replace(/_/g, '\\_')
+      .replace(/\{/g, '\\{')
+      .replace(/\}/g, '\\}')
+      .replace(/~/g, '\\textasciitilde{}')
+      .replace(/\^/g, '\\textasciicircum{}');
+  };
+
+  let bibtex = `@article{${key},\n`;
+  bibtex += `  author = {${escapeLatex(authors)}},\n`;
+  bibtex += `  title = {${escapeLatex(title)}},\n`;
+  bibtex += `  year = {${year}}`;
+
+  if (journal) {
+    bibtex += `,\n  journal = {${escapeLatex(journal)}}`;
+  }
+
+  if (paper.doi) {
+    bibtex += `,\n  doi = {${paper.doi}}`;
+  }
+
+  if (paper.arxiv_id) {
+    bibtex += `,\n  eprint = {${paper.arxiv_id}},\n  archivePrefix = {arXiv}`;
+  }
+
+  bibtex += '\n}';
+
+  return bibtex;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILE PICKER HELPER FUNCTIONS (for PDF and BibTeX import on iOS)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Convert a File object to base64 string
+ * Used for saving imported files to the filesystem
+ */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Remove data URL prefix (e.g., "data:application/pdf;base64,")
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Parse BibTeX content and extract entries
+ * Returns array of entry objects with fields like title, author, year, etc.
+ */
+function parseBibtexContent(content) {
+  const entries = [];
+  // Match BibTeX entries: @type{key, ... }
+  // Use a more robust regex that handles nested braces
+  const entryRegex = /@(\w+)\s*\{([^,]+),/g;
+  let entryMatch;
+
+  while ((entryMatch = entryRegex.exec(content)) !== null) {
+    const type = entryMatch[1].toLowerCase();
+    const key = entryMatch[2].trim();
+    const startIndex = entryMatch.index;
+
+    // Find the matching closing brace
+    let braceCount = 0;
+    let endIndex = startIndex;
+    let foundStart = false;
+
+    for (let i = startIndex; i < content.length; i++) {
+      if (content[i] === '{') {
+        braceCount++;
+        foundStart = true;
+      } else if (content[i] === '}') {
+        braceCount--;
+        if (foundStart && braceCount === 0) {
+          endIndex = i + 1;
+          break;
+        }
+      }
+    }
+
+    const rawEntry = content.substring(startIndex, endIndex);
+    const body = rawEntry.substring(rawEntry.indexOf(',') + 1, rawEntry.length - 1);
+
+    const entry = { type, key, raw: rawEntry };
+
+    // Extract fields - handles {value}, "value", and bare numbers
+    const fieldRegex = /(\w+)\s*=\s*(?:\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}|"([^"]*)"|(\d+))/g;
+    let fieldMatch;
+
+    while ((fieldMatch = fieldRegex.exec(body)) !== null) {
+      const field = fieldMatch[1].toLowerCase();
+      // Value can be in braces, quotes, or bare number
+      const value = (fieldMatch[2] || fieldMatch[3] || fieldMatch[4] || '').trim();
+      entry[field] = value;
+    }
+
+    // Try to extract bibcode from adsurl
+    if (entry.adsurl) {
+      const bibcodeMatch = entry.adsurl.match(/\/abs\/([^\/\s]+)/);
+      if (bibcodeMatch) {
+        entry.bibcode = decodeURIComponent(bibcodeMatch[1]);
+      }
+    }
+
+    // Also check eprint for arXiv ID
+    if (entry.eprint && !entry.arxiv_id) {
+      entry.arxiv_id = entry.eprint;
+    }
+
+    entries.push(entry);
+  }
+
+  return entries;
+}
+
 // Event emitter for iOS (simple implementation)
 const eventListeners = {
   consoleLog: [],
@@ -220,6 +549,7 @@ const eventListeners = {
 
 function emit(event, data) {
   const listeners = eventListeners[event] || [];
+  console.log(`[emit] Event: ${event}, listeners: ${listeners.length}`, data);
   listeners.forEach(cb => {
     try {
       cb(data);
@@ -229,16 +559,7 @@ function emit(event, data) {
   });
 }
 
-// Helper to safely parse JSON
-function safeJsonParse(str) {
-  try {
-    return str ? JSON.parse(str) : null;
-  } catch {
-    return str;
-  }
-}
-
-// Storage helpers
+// Storage helpers (uses safeJsonParse from shared/paper-utils.js)
 const Storage = {
   async get(key) {
     const result = await Preferences.get({ key });
@@ -267,6 +588,10 @@ const Keychain = {
   async setItem(key, value) {
     console.log(`[Keychain] setItem(${key}):`, value ? '(setting value)' : 'null');
     await SecureStorage.set(key, value);
+  },
+  async removeItem(key) {
+    console.log(`[Keychain] removeItem(${key})`);
+    await SecureStorage.remove(key);
   }
 };
 
@@ -397,15 +722,15 @@ const capacitorAPI = {
   },
 
   async isICloudAvailable() {
-    // On iOS, iCloud is available if the container exists
+    // Use native iCloud plugin to check availability
+    console.log('[API] Checking iCloud availability via native plugin...');
+    console.log('[API] ICloud plugin object:', ICloud);
     try {
-      await Filesystem.readdir({
-        path: '',
-        directory: Directory.ICloud
-      });
-      return true;
+      const result = await ICloud.isAvailable();
+      console.log('[API] iCloud isAvailable result:', JSON.stringify(result));
+      return result.available;
     } catch (e) {
-      console.log('[API] iCloud not available:', e.message);
+      console.log('[API] iCloud check failed:', e.message, e);
       return false;
     }
   },
@@ -413,82 +738,87 @@ const capacitorAPI = {
   async getAllLibraries() {
     const libraries = [];
 
-    // On iOS, all libraries are in iCloud
-    try {
-      const isAvailable = await this.isICloudAvailable();
-      if (!isAvailable) {
-        console.log('[API] iCloud not available, returning empty libraries');
-        return libraries;
-      }
-
-      // Read libraries.json from iCloud
+    // First try to read libraries.json from iCloud
+    const isICloudAvailable = await this.isICloudAvailable();
+    if (isICloudAvailable) {
       try {
-        const result = await Filesystem.readFile({
+        const result = await ICloud.readFile({
           path: 'libraries.json',
-          directory: Directory.ICloud,
-          encoding: Encoding.UTF8
+          encoding: 'utf8'
         });
 
         const data = JSON.parse(result.data);
+        console.log('[API] Found iCloud libraries.json with', (data.libraries || []).length, 'libraries');
         for (const lib of data.libraries || []) {
           libraries.push({
             ...lib,
             fullPath: lib.path,
-            location: 'icloud',
-            exists: true // Assume exists, we'll verify on switch
+            location: lib.location || 'icloud',
+            exists: true
           });
         }
       } catch (e) {
-        // No libraries.json yet, that's ok
-        console.log('[API] No libraries.json found, will create on first library creation');
+        console.log('[API] No iCloud libraries.json found:', e.message);
       }
-    } catch (error) {
-      console.error('[API] Error reading iCloud libraries:', error);
+    }
+
+    // Also check local Documents for any local-only libraries
+    try {
+      const result = await Filesystem.readFile({
+        path: 'libraries.json',
+        directory: Directory.Documents,
+        encoding: Encoding.UTF8
+      });
+
+      const data = JSON.parse(result.data);
+      for (const lib of data.libraries || []) {
+        // Only add if not already in the list (avoid duplicates)
+        if (!libraries.find(l => l.id === lib.id)) {
+          libraries.push({
+            ...lib,
+            fullPath: lib.path,
+            location: lib.location || 'local',
+            exists: true
+          });
+        }
+      }
+    } catch (e) {
+      // No local libraries.json, that's ok
+      if (libraries.length === 0) {
+        console.log('[API] No libraries.json found in iCloud or local');
+      }
     }
 
     return libraries;
   },
 
   async createLibrary(options) {
-    const { name } = options;
-    // On iOS, all libraries go to iCloud (no local option)
-    const location = 'icloud';
+    const { name, location: requestedLocation } = options;
 
     try {
       const id = crypto.randomUUID();
       const safeName = name.replace(/[^a-zA-Z0-9 _-]/g, '').trim() || 'Library';
 
       // Check if iCloud is available
-      const isAvailable = await this.isICloudAvailable();
-      if (!isAvailable) {
-        return { success: false, error: 'iCloud is not available. Please sign in to iCloud.' };
-      }
+      const isICloudAvailable = await this.isICloudAvailable();
 
-      // Create library folder in iCloud
-      await Filesystem.mkdir({
-        path: safeName,
-        directory: Directory.ICloud,
-        recursive: true
-      });
+      // Use iCloud if available and requested, otherwise fall back to local
+      const useICloud = isICloudAvailable && requestedLocation !== 'local';
+      const location = useICloud ? 'icloud' : 'local';
 
-      await Filesystem.mkdir({
-        path: `${safeName}/papers`,
-        directory: Directory.ICloud,
-        recursive: true
-      });
+      console.log(`[API] Creating library in ${location} (iCloud available: ${isICloudAvailable})`);
 
-      await Filesystem.mkdir({
-        path: `${safeName}/text`,
-        directory: Directory.ICloud,
-        recursive: true
-      });
+      // Create library folder using appropriate backend
+      await fsMkdir(safeName, location);
+      await fsMkdir(`${safeName}/papers`, location);
+      await fsMkdir(`${safeName}/text`, location);
 
-      // Update libraries.json
+      // Update libraries.json (store in Documents for consistency)
       let data = { version: 1, libraries: [] };
       try {
         const result = await Filesystem.readFile({
           path: 'libraries.json',
-          directory: Directory.ICloud,
+          directory: Directory.Documents,
           encoding: Encoding.UTF8
         });
         data = JSON.parse(result.data);
@@ -500,18 +830,28 @@ const capacitorAPI = {
         id,
         name: safeName,
         path: safeName,
+        location,
         createdAt: new Date().toISOString(),
         createdOn: 'iOS'
       });
 
       await Filesystem.writeFile({
         path: 'libraries.json',
-        directory: Directory.ICloud,
+        directory: Directory.Documents,
         data: JSON.stringify(data, null, 2),
         encoding: Encoding.UTF8
       });
 
-      return { success: true, id, path: safeName };
+      // Store current library info
+      await Preferences.set({ key: 'currentLibraryId', value: id });
+      await Preferences.set({ key: 'currentLibraryLocation', value: location });
+
+      const message = useICloud
+        ? `Created iCloud library: ${safeName}`
+        : `Created local library: ${safeName} (iCloud not available)`;
+      emit('consoleLog', { message, level: 'success' });
+
+      return { success: true, id, path: safeName, location };
     } catch (error) {
       console.error('[API] Failed to create library:', error);
       return { success: false, error: error.message };
@@ -519,34 +859,44 @@ const capacitorAPI = {
   },
 
   async switchLibrary(libraryId) {
+    console.log('[API.switchLibrary] Starting for library:', libraryId);
     try {
       // Find library by ID
+      console.log('[API.switchLibrary] Getting all libraries...');
       const allLibraries = await this.getAllLibraries();
+      console.log('[API.switchLibrary] Found', allLibraries.length, 'libraries');
       const library = allLibraries.find(l => l.id === libraryId);
 
       if (!library) {
+        console.error('[API.switchLibrary] Library not found:', libraryId);
         return { success: false, error: 'Library not found' };
       }
+      console.log('[API.switchLibrary] Found library:', library.name, 'at', library.fullPath);
 
       // Close current database
       if (MobileDB.isInitialized()) {
+        console.log('[API.switchLibrary] Saving and closing current database...');
         await MobileDB.saveDatabase();
         MobileDB.closeDatabase();
       }
       dbInitialized = false;
 
-      // Initialize database from iCloud library
-      // For iCloud, we need to use a different path approach
-      await MobileDB.initDatabase(library.fullPath);
+      // Initialize database with location info
+      console.log('[API.switchLibrary] Initializing database at', library.fullPath);
+      await MobileDB.initDatabase(library.fullPath, library.location || 'local');
       dbInitialized = true;
+      console.log('[API.switchLibrary] Database initialized');
 
       // Save current library info
+      console.log('[API.switchLibrary] Saving preferences...');
       await Preferences.set({ key: 'currentLibraryId', value: libraryId });
       await Preferences.set({ key: 'libraryPath', value: library.fullPath });
+      await Preferences.set({ key: 'currentLibraryLocation', value: library.location || 'local' });
 
-      return { success: true, path: library.fullPath };
+      console.log('[API.switchLibrary] Complete');
+      return { success: true, path: library.fullPath, location: library.location };
     } catch (error) {
-      console.error('[API] Failed to switch library:', error);
+      console.error('[API.switchLibrary] Failed:', error);
       return { success: false, error: error.message };
     }
   },
@@ -556,65 +906,118 @@ const capacitorAPI = {
     return result.value || null;
   },
 
+  async deleteLibrary(options) {
+    const { libraryId, deleteFiles } = options;
+
+    try {
+      const allLibraries = await this.getAllLibraries();
+      const library = allLibraries.find(l => l.id === libraryId);
+
+      if (!library) {
+        return { success: false, error: 'Library not found' };
+      }
+
+      // Don't allow deleting the current library
+      const currentId = await this.getCurrentLibraryId();
+      if (currentId === libraryId) {
+        return { success: false, error: 'Cannot delete the currently active library. Switch to another library first.' };
+      }
+
+      const location = library.location || 'local';
+      console.log(`[API] Deleting library "${library.name}" from ${location}`);
+
+      // Delete files if requested
+      if (deleteFiles && library.fullPath) {
+        try {
+          await fsRmdir(library.fullPath, location, true);
+          emit('consoleLog', { message: `Deleted library folder: ${library.fullPath}`, level: 'info' });
+        } catch (e) {
+          console.error('[API] Failed to delete library folder:', e);
+          emit('consoleLog', { message: `Warning: Could not delete folder: ${e.message}`, level: 'warn' });
+        }
+      }
+
+      // Update libraries.json in the appropriate location (iCloud or local)
+      if (location === 'icloud') {
+        // Update iCloud libraries.json
+        try {
+          const result = await ICloud.readFile({
+            path: 'libraries.json',
+            encoding: 'utf8'
+          });
+          const data = JSON.parse(result.data);
+          data.libraries = (data.libraries || []).filter(l => l.id !== libraryId);
+
+          await ICloud.writeFile({
+            path: 'libraries.json',
+            data: JSON.stringify(data, null, 2),
+            encoding: 'utf8',
+            recursive: false
+          });
+          console.log('[API] Updated iCloud libraries.json');
+        } catch (e) {
+          console.error('[API] Failed to update iCloud libraries.json:', e);
+        }
+      } else {
+        // Update local libraries.json
+        try {
+          const result = await Filesystem.readFile({
+            path: 'libraries.json',
+            directory: Directory.Documents,
+            encoding: Encoding.UTF8
+          });
+          const data = JSON.parse(result.data);
+          data.libraries = (data.libraries || []).filter(l => l.id !== libraryId);
+
+          await Filesystem.writeFile({
+            path: 'libraries.json',
+            directory: Directory.Documents,
+            data: JSON.stringify(data, null, 2),
+            encoding: Encoding.UTF8
+          });
+          console.log('[API] Updated local libraries.json');
+        } catch (e) {
+          console.error('[API] Failed to update local libraries.json:', e);
+        }
+      }
+
+      emit('consoleLog', { message: `Library "${library.name}" deleted`, level: 'success' });
+      return { success: true };
+    } catch (error) {
+      console.error('[API] Failed to delete library:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  async getLibraryFileInfo(libraryId) {
+    // Return basic info for delete modal
+    try {
+      const allLibraries = await this.getAllLibraries();
+      const library = allLibraries.find(l => l.id === libraryId);
+
+      if (!library) {
+        return { error: 'Library not found' };
+      }
+
+      return {
+        libraryPath: library.fullPath,
+        totalSize: 0, // Would need to calculate
+        files: []
+      };
+    } catch (error) {
+      return { error: error.message };
+    }
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   // LIBRARY MIGRATION
   // ═══════════════════════════════════════════════════════════════════════════
 
   async checkMigrationNeeded() {
-    try {
-      // Check if migration already completed
-      const migrationDone = await Preferences.get({ key: 'migrationCompleted' });
-      if (migrationDone.value === 'true') {
-        return { needed: false };
-      }
-
-      // Check if we have a current library ID (already registered)
-      const currentId = await Preferences.get({ key: 'currentLibraryId' });
-      if (currentId.value) {
-        return { needed: false };
-      }
-
-      // Check for existing local library in Documents
-      try {
-        const localFiles = await Filesystem.readdir({
-          path: LIBRARY_FOLDER,
-          directory: Directory.Documents
-        });
-
-        // Check if there's data (SQLite or papers.json)
-        const hasDatabase = localFiles.files.some(f => f.name === 'library.sqlite');
-        const hasLegacyData = localFiles.files.some(f => f.name === 'papers.json');
-
-        if (!hasDatabase && !hasLegacyData) {
-          return { needed: false };
-        }
-
-        // Count papers
-        let paperCount = 0;
-        if (hasDatabase && dbInitialized) {
-          const stats = MobileDB.getStats();
-          paperCount = stats?.total || 0;
-        }
-
-        // iCloud is always available on iOS (if app is properly signed)
-        const iCloudAvailable = await this.isICloudAvailable();
-
-        return {
-          needed: true,
-          existingPath: LIBRARY_FOLDER,
-          libraryName: 'ADS Library',
-          paperCount,
-          isInICloud: false,
-          iCloudAvailable
-        };
-      } catch (e) {
-        // No local library folder
-        return { needed: false };
-      }
-    } catch (error) {
-      console.error('[API] Migration check failed:', error);
-      return { needed: false };
-    }
+    // iOS: Never show migration modal - users should use iCloud library picker
+    // The migration modal (Move to iCloud / Keep Local) doesn't make sense on iOS
+    // where all libraries are managed through iCloud
+    return { needed: false };
   },
 
   async migrateLibraryToICloud(options) {
@@ -629,24 +1032,10 @@ const capacitorAPI = {
       const libraryName = 'ADS Library';
       const id = crypto.randomUUID();
 
-      // Create target directory in iCloud
-      await Filesystem.mkdir({
-        path: libraryName,
-        directory: Directory.ICloud,
-        recursive: true
-      });
-
-      await Filesystem.mkdir({
-        path: `${libraryName}/papers`,
-        directory: Directory.ICloud,
-        recursive: true
-      });
-
-      await Filesystem.mkdir({
-        path: `${libraryName}/text`,
-        directory: Directory.ICloud,
-        recursive: true
-      });
+      // Create target directory in iCloud using native plugin
+      await fsMkdir(libraryName, 'icloud');
+      await fsMkdir(`${libraryName}/papers`, 'icloud');
+      await fsMkdir(`${libraryName}/text`, 'icloud');
 
       // Close database before migration
       if (MobileDB.isInitialized()) {
@@ -656,25 +1045,14 @@ const capacitorAPI = {
       dbInitialized = false;
 
       // Copy files from Documents to iCloud
-      const localFiles = await Filesystem.readdir({
-        path: LIBRARY_FOLDER,
-        directory: Directory.Documents
-      });
+      const localFiles = await fsReaddir(LIBRARY_FOLDER, 'local');
 
-      for (const file of localFiles.files) {
+      for (const file of localFiles) {
         if (file.type === 'file') {
           try {
-            const content = await Filesystem.readFile({
-              path: `${LIBRARY_FOLDER}/${file.name}`,
-              directory: Directory.Documents
-            });
-
-            await Filesystem.writeFile({
-              path: `${libraryName}/${file.name}`,
-              directory: Directory.ICloud,
-              data: content.data,
-              encoding: file.name.endsWith('.sqlite') ? undefined : Encoding.UTF8
-            });
+            const encoding = file.name.endsWith('.sqlite') ? null : 'utf8';
+            const content = await fsReadFile(`${LIBRARY_FOLDER}/${file.name}`, 'local', encoding);
+            await fsWriteFile(`${libraryName}/${file.name}`, content, 'icloud', encoding);
           } catch (e) {
             console.log('[API] Could not copy file:', file.name, e.message);
           }
@@ -683,38 +1061,23 @@ const capacitorAPI = {
 
       // Copy PDFs
       try {
-        const pdfFiles = await Filesystem.readdir({
-          path: `${LIBRARY_FOLDER}/papers`,
-          directory: Directory.Documents
-        });
+        const pdfFiles = await fsReaddir(`${LIBRARY_FOLDER}/papers`, 'local');
 
-        for (const file of pdfFiles.files) {
+        for (const file of pdfFiles) {
           if (file.type === 'file') {
-            const content = await Filesystem.readFile({
-              path: `${LIBRARY_FOLDER}/papers/${file.name}`,
-              directory: Directory.Documents
-            });
-
-            await Filesystem.writeFile({
-              path: `${libraryName}/papers/${file.name}`,
-              directory: Directory.ICloud,
-              data: content.data
-            });
+            const content = await fsReadFile(`${LIBRARY_FOLDER}/papers/${file.name}`, 'local', null);
+            await fsWriteFile(`${libraryName}/papers/${file.name}`, content, 'icloud', null);
           }
         }
       } catch (e) {
         console.log('[API] No PDFs to migrate or error:', e.message);
       }
 
-      // Update libraries.json
+      // Update libraries.json in iCloud
       let data = { version: 1, libraries: [] };
       try {
-        const result = await Filesystem.readFile({
-          path: 'libraries.json',
-          directory: Directory.ICloud,
-          encoding: Encoding.UTF8
-        });
-        data = JSON.parse(result.data);
+        const result = await fsReadFile('libraries.json', 'icloud');
+        data = JSON.parse(result);
       } catch (e) {
         // No existing file
       }
@@ -723,30 +1086,23 @@ const capacitorAPI = {
         id,
         name: libraryName,
         path: libraryName,
+        location: 'icloud',
         createdAt: new Date().toISOString(),
         createdOn: 'iOS',
         migratedFrom: 'local'
       });
 
-      await Filesystem.writeFile({
-        path: 'libraries.json',
-        directory: Directory.ICloud,
-        data: JSON.stringify(data, null, 2),
-        encoding: Encoding.UTF8
-      });
+      await fsWriteFile('libraries.json', JSON.stringify(data, null, 2), 'icloud');
 
       // Save preferences
       await Preferences.set({ key: 'currentLibraryId', value: id });
       await Preferences.set({ key: 'libraryPath', value: libraryName });
+      await Preferences.set({ key: 'currentLibraryLocation', value: 'icloud' });
       await Preferences.set({ key: 'migrationCompleted', value: 'true' });
 
       // Delete old local folder
       try {
-        await Filesystem.rmdir({
-          path: LIBRARY_FOLDER,
-          directory: Directory.Documents,
-          recursive: true
-        });
+        await fsRmdir(LIBRARY_FOLDER, 'local', true);
       } catch (e) {
         console.log('[API] Could not delete old local folder:', e.message);
       }
@@ -802,6 +1158,17 @@ const capacitorAPI = {
     await Preferences.set({ key: 'lastSelectedPaperId', value: String(paperId) });
   },
 
+  async getLastPdfSources() {
+    const result = await Preferences.get({ key: 'lastPdfSources' });
+    return safeJsonParse(result.value) || {};
+  },
+
+  async setLastPdfSource(paperId, sourceType) {
+    const sources = await this.getLastPdfSources();
+    sources[paperId] = sourceType;
+    await Preferences.set({ key: 'lastPdfSources', value: JSON.stringify(sources) });
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   // ADS SETTINGS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -812,6 +1179,21 @@ const capacitorAPI = {
 
   async setAdsToken(token) {
     try {
+      // Validate token by making a test API call
+      const testResponse = await CapacitorHttp.request({
+        method: 'GET',
+        url: 'https://api.adsabs.harvard.edu/v1/search/query?q=bibcode:"2020ApJ...900..100D"&rows=1',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (testResponse.status !== 200) {
+        return { success: false, error: `Invalid token (status ${testResponse.status})` };
+      }
+
+      // Token is valid, save it
       await Keychain.setItem('adsToken', token);
       return { success: true };
     } catch (error) {
@@ -821,8 +1203,9 @@ const capacitorAPI = {
   },
 
   async getLibraryProxy() {
+    const DEFAULT_LIBRARY_PROXY = 'https://stanford.idm.oclc.org/login?url=';
     const result = await Preferences.get({ key: 'libraryProxyUrl' });
-    return result.value || '';
+    return result.value || DEFAULT_LIBRARY_PROXY;
   },
 
   async setLibraryProxy(proxyUrl) {
@@ -846,6 +1229,47 @@ const capacitorAPI = {
       return { success: true };
     } catch (error) {
       console.error('[API] Failed to save PDF priority:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CLOUD PROVIDER API KEYS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async getApiKey(provider) {
+    try {
+      const key = await Keychain.getItem(`apiKey_${provider}`);
+      return key || null;
+    } catch (error) {
+      console.error(`[API] Failed to get API key for ${provider}:`, error);
+      return null;
+    }
+  },
+
+  async setApiKey(provider, key) {
+    try {
+      if (!key || key.trim() === '') {
+        // If empty key, delete it
+        await Keychain.removeItem(`apiKey_${provider}`);
+        return { success: true };
+      }
+      await Keychain.setItem(`apiKey_${provider}`, key.trim());
+      console.log(`[API] Saved API key for ${provider}`);
+      return { success: true };
+    } catch (error) {
+      console.error(`[API] Failed to save API key for ${provider}:`, error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  async deleteApiKey(provider) {
+    try {
+      await Keychain.removeItem(`apiKey_${provider}`);
+      console.log(`[API] Deleted API key for ${provider}`);
+      return { success: true };
+    } catch (error) {
+      console.error(`[API] Failed to delete API key for ${provider}:`, error);
       return { success: false, error: error.message };
     }
   },
@@ -960,6 +1384,117 @@ const capacitorAPI = {
     }
   },
 
+  async getPdfAsBlob(relativePath) {
+    // Read PDF as Uint8Array for iOS WKWebView (file:// URLs don't work)
+    // Uses ICloud plugin which handles both real iCloud and simulator fallback
+    // Returns Uint8Array directly for PDF.js (blob URLs don't work reliably in WKWebView)
+    try {
+      // Use current library path, not the static LIBRARY_FOLDER constant
+      const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+      const fullPath = relativePath.startsWith(currentLibraryPath)
+        ? relativePath
+        : `${currentLibraryPath}/${relativePath}`;
+
+      console.log('[getPdfAsBlob] Library path:', currentLibraryPath, 'Full path:', fullPath);
+
+      // Read as base64 using ICloud plugin (handles iCloud + fallback)
+      // encoding: null means binary/base64
+      const result = await ICloud.readFile({
+        path: fullPath,
+        encoding: null
+      });
+
+      // Convert base64 to Uint8Array (PDF.js accepts this directly)
+      const byteCharacters = atob(result.data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+
+      // Return the Uint8Array directly - PDF.js can use this with { data: byteArray }
+      return byteArray;
+    } catch (error) {
+      // Don't log "file not found" errors - these are expected on iOS when PDFs aren't synced
+      if (!error.message?.includes("couldn't be opened") && !error.message?.includes('no such file') && !error.message?.includes('File not found')) {
+        console.error('[getPdfAsBlob] Error:', error);
+      }
+      return null;
+    }
+  },
+
+  async openPdfNative(relativePath) {
+    // Open PDF in native iOS viewer (Quick Look)
+    try {
+      // Add library folder prefix if not present
+      const fullPath = relativePath.startsWith(LIBRARY_FOLDER)
+        ? relativePath
+        : `${LIBRARY_FOLDER}/${relativePath}`;
+
+      const result = await Filesystem.getUri({
+        path: fullPath,
+        directory: Directory.Documents
+      });
+
+      if (!result.uri) {
+        return { success: false, error: 'PDF file not found' };
+      }
+
+      // Open with native viewer
+      await FileOpener.open({
+        filePath: result.uri,
+        contentType: 'application/pdf',
+        openWithDefault: true
+      });
+
+      return { success: true };
+    } catch (error) {
+      console.error('[openPdfNative] Error:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  async openAttachment(filename) {
+    // Open any file attachment with native app
+    try {
+      const fullPath = `${LIBRARY_FOLDER}/papers/${filename}`;
+
+      const result = await Filesystem.getUri({
+        path: fullPath,
+        directory: Directory.Documents
+      });
+
+      if (!result.uri) {
+        return { success: false, error: 'File not found' };
+      }
+
+      // Determine content type from filename
+      const ext = filename.split('.').pop().toLowerCase();
+      const contentTypes = {
+        pdf: 'application/pdf',
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        gif: 'image/gif',
+        txt: 'text/plain',
+        doc: 'application/msword',
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      };
+      const contentType = contentTypes[ext] || 'application/octet-stream';
+
+      await FileOpener.open({
+        filePath: result.uri,
+        contentType,
+        openWithDefault: true
+      });
+
+      return { success: true };
+    } catch (error) {
+      console.error('[openAttachment] Error:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   // COLLECTIONS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1031,11 +1566,79 @@ const capacitorAPI = {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async getReferences(paperId) {
-    return [];
+    try {
+      if (!dbInitialized) await initializeDatabase();
+      const refs = MobileDB.getReferences(paperId);
+
+      // Add "inLibrary" flag for each reference
+      const allPapers = MobileDB.getAllPapers();
+      const libraryBibcodes = new Set(allPapers.map(p => p.bibcode).filter(Boolean));
+
+      return refs.map(ref => ({
+        ...ref,
+        inLibrary: ref.bibcode ? libraryBibcodes.has(ref.bibcode) : false
+      }));
+    } catch (error) {
+      console.error('[getReferences] Error:', error);
+      return [];
+    }
   },
 
   async getCitations(paperId) {
-    return [];
+    try {
+      if (!dbInitialized) await initializeDatabase();
+      const cites = MobileDB.getCitations(paperId);
+
+      // Add "inLibrary" flag for each citation
+      const allPapers = MobileDB.getAllPapers();
+      const libraryBibcodes = new Set(allPapers.map(p => p.bibcode).filter(Boolean));
+
+      return cites.map(cite => ({
+        ...cite,
+        inLibrary: cite.bibcode ? libraryBibcodes.has(cite.bibcode) : false
+      }));
+    } catch (error) {
+      console.error('[getCitations] Error:', error);
+      return [];
+    }
+  },
+
+  async addReferences(paperId, refs) {
+    try {
+      if (!dbInitialized) await initializeDatabase();
+      // Normalize format - ADS returns title as array sometimes
+      const normalized = refs.map(r => ({
+        bibcode: r.bibcode,
+        title: Array.isArray(r.title) ? r.title[0] : r.title,
+        author: Array.isArray(r.author) ? r.author : (r.authors ? r.authors.split(', ') : []),
+        year: r.year
+      }));
+      MobileDB.addReferences(paperId, normalized);
+      await MobileDB.saveDatabase();
+      return { success: true };
+    } catch (error) {
+      console.error('[addReferences] Error:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  async addCitations(paperId, cites) {
+    try {
+      if (!dbInitialized) await initializeDatabase();
+      // Normalize format - ADS returns title as array sometimes
+      const normalized = cites.map(c => ({
+        bibcode: c.bibcode,
+        title: Array.isArray(c.title) ? c.title[0] : c.title,
+        author: Array.isArray(c.author) ? c.author : (c.authors ? c.authors.split(', ') : []),
+        year: c.year
+      }));
+      MobileDB.addCitations(paperId, normalized);
+      await MobileDB.saveDatabase();
+      return { success: true };
+    } catch (error) {
+      console.error('[addCitations] Error:', error);
+      return { success: false, error: error.message };
+    }
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1043,12 +1646,126 @@ const capacitorAPI = {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async adsSearch(query, options = {}) {
-    const token = await this.getAdsToken();
-    if (!token) {
-      return { success: false, error: 'ADS token not configured' };
+    try {
+      const token = await this.getAdsToken();
+      if (!token) {
+        return { success: false, error: 'ADS token not configured. Please add your token in Settings.' };
+      }
+
+      const fields = 'bibcode,title,author,year,doi,abstract,keyword,pub,identifier,arxiv_class,citation_count';
+      const rows = options.rows || 10;
+      const start = options.start || 0;
+      const sort = options.sort || 'date desc';
+
+      const params = new URLSearchParams({
+        q: query,
+        fl: fields,
+        rows: rows.toString(),
+        start: start.toString(),
+        sort: sort
+      });
+
+      const url = `${ADS_API_BASE}/search/query?${params}`;
+
+      const response = await CapacitorHttp.get({
+        url: url,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.status !== 200) {
+        const errorText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+        throw new Error(`ADS API error (${response.status}): ${errorText.substring(0, 200)}`);
+      }
+
+      const result = response.data;
+      const docs = result.response?.docs || [];
+      const numFound = result.response?.numFound || 0;
+
+      // Convert to paper format
+      const papers = docs.map(doc => {
+        const paper = adsToPaper(doc);
+        paper._raw = doc; // Keep raw data for metadata application
+        return paper;
+      });
+
+      return {
+        success: true,
+        data: {
+          papers,
+          numFound,
+          start: result.response?.start || 0
+        }
+      };
+    } catch (error) {
+      console.error('[adsSearch] Error:', error);
+      let errorMessage = error.message;
+      if (error.message === 'Load failed' || error.message.includes('Failed to fetch')) {
+        errorMessage = 'Network error: Could not connect to ADS API.';
+      } else if (error.message.includes('401')) {
+        errorMessage = 'Invalid API token. Please check your ADS token in Settings.';
+      }
+      return { success: false, error: errorMessage };
     }
-    // TODO: Implement with fetch
-    return { success: false, error: 'ADS search not yet implemented for iOS' };
+  },
+
+  async adsLookup(identifier, type) {
+    try {
+      const token = await this.getAdsToken();
+      if (!token) {
+        return { success: false, error: 'ADS token not configured' };
+      }
+
+      let query;
+      switch (type) {
+        case 'bibcode':
+          query = `bibcode:"${identifier}"`;
+          break;
+        case 'doi':
+          query = `doi:"${identifier}"`;
+          break;
+        case 'arxiv':
+          query = `identifier:"arXiv:${identifier}" OR identifier:"${identifier}"`;
+          break;
+        default:
+          return { success: false, error: 'Unknown identifier type' };
+      }
+
+      const fields = 'bibcode,title,author,year,doi,abstract,keyword,pub,identifier,arxiv_class,citation_count';
+      const params = new URLSearchParams({
+        q: query,
+        fl: fields,
+        rows: '1'
+      });
+
+      const url = `${ADS_API_BASE}/search/query?${params}`;
+
+      const response = await CapacitorHttp.get({
+        url: url,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.status !== 200) {
+        throw new Error(`ADS API error (${response.status})`);
+      }
+
+      const result = response.data;
+      const docs = result.response?.docs || [];
+
+      if (docs.length === 0) {
+        return { success: false, error: 'Paper not found' };
+      }
+
+      return { success: true, data: adsToPaper(docs[0]) };
+    } catch (error) {
+      console.error('[adsLookup] Error:', error);
+      return { success: false, error: error.message };
+    }
   },
 
   async adsGetEsources(bibcode) {
@@ -1072,18 +1789,8 @@ const capacitorAPI = {
         return { success: false, error: `ADS API error: ${response.status}` };
       }
 
-      // Parse the esources response (various possible formats)
-      let esources = [];
-      const result = response.data;
-      if (Array.isArray(result)) {
-        esources = result;
-      } else if (result && Array.isArray(result.links)) {
-        esources = result.links;
-      } else if (result && result.links && Array.isArray(result.links.records)) {
-        esources = result.links.records;
-      } else if (result && Array.isArray(result.records)) {
-        esources = result.records;
-      }
+      // Parse the esources response
+      const esources = parseEsourcesResponse(response.data);
 
       emit('consoleLog', { message: `ADS returned ${esources.length} esource(s)`, level: 'info' });
 
@@ -1150,17 +1857,7 @@ const capacitorAPI = {
       }
 
       // Parse esources
-      let esources = [];
-      const result = response.data;
-      if (Array.isArray(result)) {
-        esources = result;
-      } else if (result && Array.isArray(result.links)) {
-        esources = result.links;
-      } else if (result && result.links && Array.isArray(result.links.records)) {
-        esources = result.links.records;
-      } else if (result && Array.isArray(result.records)) {
-        esources = result.records;
-      }
+      const esources = parseEsourcesResponse(response.data);
 
       // Map user-friendly type to ADS type
       const typeMap = {
@@ -1262,24 +1959,536 @@ const capacitorAPI = {
     return false;
   },
 
+  async getAttachments(paperId) {
+    // Not implemented for iOS - return empty array
+    return [];
+  },
+
   async adsSyncPapers(paperIds) {
-    return { success: false, error: 'Not implemented for iOS' };
+    try {
+      // Reset cancellation flag at start
+      syncCancelled = false;
+
+      const token = await Keychain.getItem('adsToken');
+      if (!token) {
+        return { success: false, error: 'No ADS API token configured' };
+      }
+
+      if (!dbInitialized) await initializeDatabase();
+
+      // Get papers to sync
+      let papersToSync;
+      if (paperIds && paperIds.length > 0) {
+        papersToSync = paperIds.map(id => MobileDB.getPaper(id)).filter(p => p);
+      } else {
+        papersToSync = MobileDB.getAllPapers();
+      }
+
+      if (papersToSync.length === 0) {
+        return { success: true, results: { total: 0, updated: 0, failed: 0 } };
+      }
+
+      // Filter papers with bibcodes
+      const papersWithBibcode = papersToSync.filter(p => p.bibcode);
+      const papersWithoutBibcode = papersToSync.filter(p => !p.bibcode && (p.doi || p.arxiv_id));
+
+      emit('consoleLog', { message: `Sync: ${papersWithBibcode.length} with bibcode, ${papersWithoutBibcode.length} with doi/arxiv`, level: 'info' });
+
+      const results = {
+        total: papersToSync.length,
+        updated: 0,
+        failed: 0,
+        errors: []
+      };
+
+      let bytesReceived = 0;
+
+      // Helper to merge ADS metadata with existing paper
+      const mergeMetadata = (existing, adsMetadata) => {
+        const merged = {};
+        const allKeys = new Set([...Object.keys(existing), ...Object.keys(adsMetadata)]);
+
+        for (const key of allKeys) {
+          const adsValue = adsMetadata[key];
+          const existingValue = existing[key];
+
+          const adsHasValue = adsValue !== null && adsValue !== undefined &&
+            adsValue !== '' &&
+            !(Array.isArray(adsValue) && adsValue.length === 0);
+
+          if (adsHasValue) {
+            merged[key] = adsValue;
+          } else if (existingValue !== undefined) {
+            merged[key] = existingValue;
+          }
+        }
+
+        return merged;
+      };
+
+      // Helper for retry logic on 500 errors
+      const fetchWithRetry = async (url, options, maxRetries = 3) => {
+        let lastError;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            const response = await CapacitorHttp.get({ url, ...options });
+            if (response.status === 500 && attempt < maxRetries) {
+              emit('consoleLog', { message: `ADS 500 error, retry ${attempt}/${maxRetries}...`, level: 'warn' });
+              await new Promise(r => setTimeout(r, 1000 * attempt));
+              continue;
+            }
+            bytesReceived += JSON.stringify(response.data || '').length;
+            return response;
+          } catch (e) {
+            lastError = e;
+            if (attempt < maxRetries) {
+              await new Promise(r => setTimeout(r, 1000 * attempt));
+            }
+          }
+        }
+        throw lastError;
+      };
+
+      // Process papers with bibcodes
+      if (papersWithBibcode.length > 0) {
+        const bibcodes = papersWithBibcode.map(p => p.bibcode);
+        emit('consoleLog', { message: `Batch fetching ${bibcodes.length} papers from ADS...`, level: 'info' });
+
+        // Build batch query: bibcode:"X" OR bibcode:"Y"
+        const bibcodeQuery = bibcodes.map(b => `bibcode:"${b}"`).join(' OR ');
+        const fields = 'bibcode,title,author,year,doi,abstract,keyword,pub,identifier,arxiv_class,citation_count';
+
+        const searchUrl = `${ADS_API_BASE}/search/query?q=${encodeURIComponent(bibcodeQuery)}&fl=${fields}&rows=${bibcodes.length}`;
+
+        let adsResults = [];
+        try {
+          const response = await fetchWithRetry(searchUrl, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          if (response.status === 200 && response.data?.response?.docs) {
+            adsResults = response.data.response.docs;
+          }
+        } catch (e) {
+          emit('consoleLog', { message: `Batch fetch failed: ${e.message}`, level: 'error' });
+        }
+
+        // Create lookup maps
+        const adsMap = new Map();
+        const adsMapNormalized = new Map();
+        for (const r of adsResults) {
+          adsMap.set(r.bibcode, r);
+          adsMapNormalized.set(r.bibcode.replace(/\./g, ''), r);
+        }
+
+        emit('consoleLog', { message: `Fetched metadata for ${adsResults.length}/${bibcodes.length} papers`, level: 'success' });
+
+        // Batch fetch BibTeX
+        let bibtexMap = new Map();
+        try {
+          emit('consoleLog', { message: `Fetching BibTeX entries...`, level: 'info' });
+          const bibtexResponse = await CapacitorHttp.post({
+            url: `${ADS_API_BASE}/export/bibtex`,
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            data: { bibcode: bibcodes }
+          });
+
+          bytesReceived += JSON.stringify(bibtexResponse.data || '').length;
+
+          if (bibtexResponse.status === 200 && bibtexResponse.data?.export) {
+            const bibtexStr = bibtexResponse.data.export;
+            // Parse combined bibtex to map by bibcode
+            const entries = bibtexStr.split(/(?=@)/);
+            for (const entry of entries) {
+              if (!entry.trim()) continue;
+              // Extract bibcode from adsurl field
+              const adsurlMatch = entry.match(/adsurl\s*=\s*\{[^}]*\/abs\/([^}\/]+)/i);
+              if (adsurlMatch) {
+                const extractedBibcode = adsurlMatch[1];
+                const matchingBibcode = bibcodes.find(b =>
+                  b === extractedBibcode ||
+                  b.replace(/\./g, '') === extractedBibcode.replace(/\./g, '')
+                );
+                if (matchingBibcode) {
+                  bibtexMap.set(matchingBibcode, '@' + entry.replace(/^@/, '').trim());
+                  continue;
+                }
+              }
+              // Fallback: check if entry contains any of our bibcodes
+              for (const bibcode of bibcodes) {
+                if (entry.includes(bibcode) || entry.includes(bibcode.replace(/\./g, ''))) {
+                  bibtexMap.set(bibcode, '@' + entry.replace(/^@/, '').trim());
+                  break;
+                }
+              }
+            }
+          }
+          emit('consoleLog', { message: `Got BibTeX for ${bibtexMap.size} papers`, level: 'success' });
+        } catch (e) {
+          emit('consoleLog', { message: `BibTeX fetch failed: ${e.message}`, level: 'warn' });
+        }
+
+        // Process each paper
+        for (let i = 0; i < papersWithBibcode.length; i++) {
+          // Check for cancellation
+          if (syncCancelled) {
+            emit('consoleLog', { message: 'Sync cancelled by user', level: 'warn' });
+            emit('adsSyncProgress', {
+              current: i,
+              total: papersToSync.length,
+              paper: 'Complete',
+              bytesReceived,
+              done: true,
+              cancelled: true
+            });
+            await MobileDB.saveDatabase();
+            return { success: true, results, cancelled: true };
+          }
+
+          const paper = papersWithBibcode[i];
+          const bibcode = paper.bibcode;
+
+          emit('adsSyncProgress', {
+            current: i + 1,
+            total: papersToSync.length,
+            paper: paper.title || bibcode,
+            bytesReceived
+          });
+
+          // Find ADS data
+          let adsData = adsMap.get(bibcode) || adsMapNormalized.get(bibcode.replace(/\./g, ''));
+
+          if (!adsData) {
+            emit('consoleLog', { message: `[${bibcode}] Not found in ADS`, level: 'warn' });
+            results.failed++;
+            continue;
+          }
+
+          try {
+            emit('consoleLog', { message: `[${bibcode}] Updating metadata...`, level: 'info' });
+            const adsMetadata = adsToPaper(adsData);
+            const mergedMetadata = mergeMetadata(paper, adsMetadata);
+
+            // Get BibTeX
+            const bibtexStr = bibtexMap.get(bibcode) || paper.bibtex;
+
+            // Update paper metadata
+            MobileDB.updatePaper(paper.id, {
+              ...mergedMetadata,
+              bibtex: bibtexStr
+            });
+
+            // Download PDF if paper doesn't have one yet
+            if (!paper.pdf_path) {
+              try {
+                emit('consoleLog', { message: `[${bibcode}] Downloading PDF...`, level: 'info' });
+                const pdfPriority = await capacitorAPI.getPdfPriority() || ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'];
+                const downloadResult = await downloadPaperPdf({ ...paper, ...adsMetadata }, token, pdfPriority);
+                if (downloadResult.success) {
+                  MobileDB.updatePaper(paper.id, {
+                    pdf_path: downloadResult.path,
+                    pdf_source: downloadResult.source
+                  });
+                  emit('consoleLog', { message: `[${bibcode}] PDF downloaded (${downloadResult.source})`, level: 'success' });
+                } else {
+                  emit('consoleLog', { message: `[${bibcode}] No PDF available`, level: 'warn' });
+                }
+              } catch (pdfErr) {
+                emit('consoleLog', { message: `[${bibcode}] PDF download failed: ${pdfErr.message}`, level: 'warn' });
+              }
+            }
+
+            emit('consoleLog', { message: `[${bibcode}] Done`, level: 'success' });
+            results.updated++;
+          } catch (e) {
+            emit('consoleLog', { message: `[${bibcode}] Error: ${e.message}`, level: 'error' });
+            results.failed++;
+            results.errors.push({ bibcode, error: e.message });
+          }
+        }
+      }
+
+      // Handle papers without bibcode (DOI or arXiv lookup)
+      for (const paper of papersWithoutBibcode) {
+        const identifier = paper.doi || paper.arxiv_id;
+        emit('consoleLog', { message: `Looking up ${identifier}...`, level: 'info' });
+
+        try {
+          let query;
+          if (paper.doi) {
+            query = `doi:"${paper.doi}"`;
+          } else if (paper.arxiv_id) {
+            query = `identifier:"arXiv:${paper.arxiv_id}"`;
+          }
+
+          const fields = 'bibcode,title,author,year,doi,abstract,keyword,pub,identifier,arxiv_class,citation_count';
+          const searchUrl = `${ADS_API_BASE}/search/query?q=${encodeURIComponent(query)}&fl=${fields}&rows=1`;
+
+          const response = await fetchWithRetry(searchUrl, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          if (response.status === 200 && response.data?.response?.docs?.[0]) {
+            const adsData = response.data.response.docs[0];
+            const adsMetadata = adsToPaper(adsData);
+            const mergedMetadata = mergeMetadata(paper, adsMetadata);
+
+            MobileDB.updatePaper(paper.id, mergedMetadata);
+            emit('consoleLog', { message: `[${identifier}] Found and updated`, level: 'success' });
+            results.updated++;
+          } else {
+            emit('consoleLog', { message: `[${identifier}] Not found in ADS`, level: 'warn' });
+            results.failed++;
+          }
+        } catch (e) {
+          emit('consoleLog', { message: `[${identifier}] Error: ${e.message}`, level: 'error' });
+          results.failed++;
+        }
+      }
+
+      await MobileDB.saveDatabase();
+
+      emit('consoleLog', { message: `Sync complete: ${results.updated} updated, ${results.failed} failed`, level: 'success' });
+      emit('adsSyncProgress', {
+        current: results.total,
+        total: results.total,
+        paper: 'Complete',
+        bytesReceived,
+        done: true,
+        results: results
+      });
+
+      return { success: true, results };
+    } catch (error) {
+      console.error('[adsSyncPapers] Error:', error);
+      emit('consoleLog', { message: `Sync failed: ${error.message}`, level: 'error' });
+      return { success: false, error: error.message };
+    }
   },
 
   async adsCancelSync() {
+    syncCancelled = true;
+    emit('consoleLog', { message: 'Sync cancellation requested...', level: 'warn' });
     return { success: true };
   },
 
-  async adsGetReferences(bibcode) {
-    return { success: false, error: 'Not implemented for iOS' };
+  async adsGetReferences(bibcode, options = {}) {
+    try {
+      const token = await Keychain.getItem('adsToken');
+      if (!token) {
+        return { success: false, error: 'No ADS API token configured' };
+      }
+
+      const rows = options.rows || 50;
+      const fields = 'bibcode,title,author,year';
+      const query = `references(bibcode:"${bibcode}")`;
+      const url = `${ADS_API_BASE}/search/query?q=${encodeURIComponent(query)}&fl=${fields}&rows=${rows}`;
+
+      emit('consoleLog', { message: `Fetching references for ${bibcode}...`, level: 'info' });
+
+      const response = await CapacitorHttp.get({
+        url,
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (response.status !== 200) {
+        return { success: false, error: `ADS API error: ${response.status}` };
+      }
+
+      const docs = response.data?.response?.docs || [];
+      const references = docs.map(doc => ({
+        bibcode: doc.bibcode,
+        title: doc.title?.[0] || 'Untitled',
+        author: doc.author || [],
+        year: doc.year
+      }));
+
+      emit('consoleLog', { message: `Found ${references.length} references`, level: 'success' });
+
+      return { success: true, data: references };
+    } catch (error) {
+      console.error('[adsGetReferences] Error:', error);
+      return { success: false, error: error.message };
+    }
   },
 
-  async adsGetCitations(bibcode) {
-    return { success: false, error: 'Not implemented for iOS' };
+  async adsGetCitations(bibcode, options = {}) {
+    try {
+      const token = await Keychain.getItem('adsToken');
+      if (!token) {
+        return { success: false, error: 'No ADS API token configured' };
+      }
+
+      const rows = options.rows || 50;
+      const fields = 'bibcode,title,author,year';
+      const query = `citations(bibcode:"${bibcode}")`;
+      const url = `${ADS_API_BASE}/search/query?q=${encodeURIComponent(query)}&fl=${fields}&rows=${rows}`;
+
+      emit('consoleLog', { message: `Fetching citations for ${bibcode}...`, level: 'info' });
+
+      const response = await CapacitorHttp.get({
+        url,
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (response.status !== 200) {
+        return { success: false, error: `ADS API error: ${response.status}` };
+      }
+
+      const docs = response.data?.response?.docs || [];
+      const citations = docs.map(doc => ({
+        bibcode: doc.bibcode,
+        title: doc.title?.[0] || 'Untitled',
+        author: doc.author || [],
+        year: doc.year
+      }));
+
+      emit('consoleLog', { message: `Found ${citations.length} citations`, level: 'success' });
+
+      return { success: true, data: citations };
+    } catch (error) {
+      console.error('[adsGetCitations] Error:', error);
+      return { success: false, error: error.message };
+    }
   },
 
   async importSingleFromAds(adsDoc) {
-    return { success: false, error: 'Not implemented for iOS' };
+    try {
+      if (!dbInitialized) await initializeDatabase();
+
+      // Check if paper already exists
+      if (adsDoc.bibcode) {
+        const existing = MobileDB.getPaperByBibcode(adsDoc.bibcode);
+        if (existing) {
+          emit('consoleLog', { message: `[${adsDoc.bibcode}] Already in library`, level: 'warn' });
+          return { success: false, error: 'Paper already in library', paperId: existing.id };
+        }
+      }
+
+      // Convert ADS document to paper format
+      const paper = adsToPaper(adsDoc);
+
+      emit('consoleLog', { message: `Importing ${paper.bibcode || paper.title}...`, level: 'info' });
+
+      const token = await Keychain.getItem('adsToken');
+
+      // Fetch BibTeX from ADS
+      let bibtexStr = null;
+      if (token && adsDoc.bibcode) {
+        try {
+          const bibtexResponse = await CapacitorHttp.request({
+            method: 'POST',
+            url: 'https://api.adsabs.harvard.edu/v1/export/bibtex',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            data: { bibcode: [adsDoc.bibcode] }
+          });
+          if (bibtexResponse.status === 200 && bibtexResponse.data?.export) {
+            bibtexStr = bibtexResponse.data.export;
+            emit('consoleLog', { message: `[${paper.bibcode}] Got BibTeX`, level: 'success' });
+          }
+        } catch (e) {
+          emit('consoleLog', { message: `[${paper.bibcode}] BibTeX fetch failed`, level: 'warn' });
+        }
+      }
+
+      // Add to database
+      const paperId = MobileDB.addPaper({
+        bibcode: paper.bibcode,
+        doi: paper.doi,
+        arxiv_id: paper.arxiv_id,
+        title: paper.title,
+        authors: paper.authors,
+        year: paper.year,
+        journal: paper.journal,
+        abstract: paper.abstract,
+        keywords: paper.keywords,
+        citation_count: paper.citation_count || 0,
+        bibtex: bibtexStr
+      });
+
+      await MobileDB.saveDatabase();
+
+      // Fetch and store references/citations
+      if (token && adsDoc.bibcode) {
+        try {
+          emit('consoleLog', { message: `[${paper.bibcode}] Fetching refs & cites...`, level: 'info' });
+
+          const [refsResponse, citesResponse] = await Promise.all([
+            CapacitorHttp.request({
+              method: 'GET',
+              url: `https://api.adsabs.harvard.edu/v1/search/query?q=references(bibcode:"${encodeURIComponent(adsDoc.bibcode)}")&fl=bibcode,title,author,year&rows=100`,
+              headers: { 'Authorization': `Bearer ${token}` }
+            }).catch(() => ({ data: { response: { docs: [] } } })),
+            CapacitorHttp.request({
+              method: 'GET',
+              url: `https://api.adsabs.harvard.edu/v1/search/query?q=citations(bibcode:"${encodeURIComponent(adsDoc.bibcode)}")&fl=bibcode,title,author,year&rows=100`,
+              headers: { 'Authorization': `Bearer ${token}` }
+            }).catch(() => ({ data: { response: { docs: [] } } }))
+          ]);
+
+          const refs = refsResponse.data?.response?.docs || [];
+          const cites = citesResponse.data?.response?.docs || [];
+
+          emit('consoleLog', { message: `[${paper.bibcode}] Found ${refs.length} refs, ${cites.length} cites`, level: 'success' });
+
+          // Store references
+          if (refs.length > 0) {
+            MobileDB.addReferences(paperId, refs.map(r => ({
+              bibcode: r.bibcode,
+              title: r.title?.[0],
+              authors: r.author?.join(', '),
+              year: r.year
+            })));
+          }
+
+          // Store citations
+          if (cites.length > 0) {
+            MobileDB.addCitations(paperId, cites.map(c => ({
+              bibcode: c.bibcode,
+              title: c.title?.[0],
+              authors: c.author?.join(', '),
+              year: c.year
+            })));
+          }
+
+          await MobileDB.saveDatabase();
+        } catch (e) {
+          emit('consoleLog', { message: `[${paper.bibcode}] Refs/cites fetch failed: ${e.message}`, level: 'warn' });
+        }
+      }
+
+      // Download PDF
+      if (token && paper.bibcode) {
+        try {
+          const pdfPriority = await capacitorAPI.getPdfPriority();
+          const downloadResult = await downloadPaperPdf(paper, token, pdfPriority);
+          if (downloadResult.success) {
+            MobileDB.updatePaper(paperId, {
+              pdf_path: downloadResult.path,
+              pdf_source: downloadResult.source
+            });
+            await MobileDB.saveDatabase();
+            emit('consoleLog', { message: `[${paper.bibcode}] PDF downloaded`, level: 'success' });
+          }
+        } catch (e) {
+          emit('consoleLog', { message: `[${paper.bibcode}] PDF download failed: ${e.message}`, level: 'warn' });
+        }
+      }
+
+      emit('consoleLog', { message: `[${paper.bibcode || paper.title}] ✓ Import complete`, level: 'success' });
+
+      return { success: true, paperId, hasPdf: !!paper.pdf_path };
+    } catch (error) {
+      console.error('[importSingleFromAds] Error:', error);
+      emit('consoleLog', { message: `Import failed: ${error.message}`, level: 'error' });
+      return { success: false, error: error.message };
+    }
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1437,17 +2646,74 @@ const capacitorAPI = {
         });
 
         try {
-          // Skip if already in library
+          // Check if already in library - improved duplicate detection
           if (paper.bibcode) {
             const existing = MobileDB.getPaperByBibcode(paper.bibcode);
             if (existing) {
-              emit('consoleLog', { message: `[${paper.bibcode}] Already in library, skipping`, level: 'warn' });
-              results.skipped.push({ paper, reason: 'Already in library' });
-              continue;
+              // Paper exists - check if it already has a PDF
+              if (existing.pdf_path) {
+                // Has PDF - skip entirely
+                emit('consoleLog', { message: `[${paper.bibcode}] Already has PDF, skipping`, level: 'info' });
+                results.skipped.push({ paper, reason: 'Already has PDF' });
+                continue;
+              } else {
+                // No PDF - try to download PDF for existing paper
+                emit('consoleLog', { message: `[${paper.bibcode}] Exists but missing PDF, attempting download...`, level: 'info' });
+
+                if (token) {
+                  try {
+                    const downloadResult = await Promise.race([
+                      downloadPaperPdf(paper, token, pdfPriority),
+                      new Promise(resolve => setTimeout(() => resolve({ success: false, error: 'timeout' }), 30000))
+                    ]);
+
+                    if (downloadResult.success) {
+                      // Update existing paper with PDF path
+                      MobileDB.updatePaper(existing.id, {
+                        pdf_path: downloadResult.path,
+                        pdf_source: downloadResult.source
+                      });
+                      await MobileDB.saveDatabase();
+                      emit('consoleLog', { message: `[${paper.bibcode}] PDF downloaded for existing paper (${downloadResult.source})`, level: 'success' });
+                      results.imported.push({ paper, id: existing.id, hasPdf: true, pdfSource: downloadResult.source, wasUpdate: true });
+                    } else {
+                      emit('consoleLog', { message: `[${paper.bibcode}] Still no PDF available`, level: 'warn' });
+                      results.skipped.push({ paper, reason: 'No PDF available (existing paper)' });
+                    }
+                  } catch (pdfError) {
+                    console.warn('[adsImportPapers] PDF download error for existing paper:', pdfError);
+                    emit('consoleLog', { message: `[${paper.bibcode}] PDF download failed for existing paper`, level: 'warn' });
+                    results.skipped.push({ paper, reason: 'PDF download failed (existing paper)' });
+                  }
+                } else {
+                  emit('consoleLog', { message: `[${paper.bibcode}] No token for PDF download`, level: 'warn' });
+                  results.skipped.push({ paper, reason: 'No token (existing paper)' });
+                }
+                continue;
+              }
             }
           }
 
           emit('consoleLog', { message: `[${paper.bibcode || 'unknown'}] Importing...`, level: 'info' });
+
+          // If we only have bibcode, fetch full metadata from ADS
+          if (paper.bibcode && !paper.title && token) {
+            try {
+              emit('consoleLog', { message: `[${paper.bibcode}] Fetching metadata...`, level: 'info' });
+              const metadataResponse = await CapacitorHttp.request({
+                method: 'GET',
+                url: `https://api.adsabs.harvard.edu/v1/search/query?q=bibcode:"${encodeURIComponent(paper.bibcode)}"&fl=bibcode,title,author,year,doi,abstract,keyword,pub,identifier,arxiv_class,citation_count&rows=1`,
+                headers: { 'Authorization': `Bearer ${token}` }
+              });
+              const doc = metadataResponse.data?.response?.docs?.[0];
+              if (doc) {
+                paper = adsToPaper(doc);
+                emit('consoleLog', { message: `[${paper.bibcode}] Got metadata`, level: 'success' });
+              }
+            } catch (e) {
+              emit('consoleLog', { message: `[${paper.bibcode}] Could not fetch metadata`, level: 'warn' });
+            }
+          }
 
           // Try to download PDF (don't let PDF failures block import)
           let pdfPath = null;
@@ -1474,6 +2740,28 @@ const capacitorAPI = {
             }
           }
 
+          // Fetch BibTeX from ADS
+          let bibtexStr = null;
+          if (token && paper.bibcode) {
+            try {
+              const bibtexResponse = await CapacitorHttp.request({
+                method: 'POST',
+                url: 'https://api.adsabs.harvard.edu/v1/export/bibtex',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                },
+                data: { bibcode: [paper.bibcode] }
+              });
+              if (bibtexResponse.status === 200 && bibtexResponse.data?.export) {
+                bibtexStr = bibtexResponse.data.export;
+                emit('consoleLog', { message: `[${paper.bibcode}] Got BibTeX`, level: 'success' });
+              }
+            } catch (e) {
+              console.warn('[adsImportPapers] BibTeX fetch failed:', e.message);
+            }
+          }
+
           // Add paper to storage
           console.log('[adsImportPapers] Adding paper to storage');
           const paperId = MobileDB.addPaper({
@@ -1488,11 +2776,62 @@ const capacitorAPI = {
             keywords: paper.keywords,
             citation_count: paper.citation_count || 0,
             pdf_path: pdfPath,
-            pdf_source: pdfSource
+            pdf_source: pdfSource,
+            bibtex: bibtexStr
           });
           console.log('[adsImportPapers] Paper added with ID:', paperId);
 
-          emit('consoleLog', { message: `[${paper.bibcode}] ✓ Imported`, level: 'success' });
+          // Fetch and store references/citations
+          if (token && paper.bibcode) {
+            try {
+              emit('consoleLog', { message: `[${paper.bibcode}] Fetching refs & cites...`, level: 'info' });
+
+              const [refsResponse, citesResponse] = await Promise.all([
+                CapacitorHttp.request({
+                  method: 'GET',
+                  url: `https://api.adsabs.harvard.edu/v1/search/query?q=references(bibcode:"${encodeURIComponent(paper.bibcode)}")&fl=bibcode,title,author,year&rows=100`,
+                  headers: { 'Authorization': `Bearer ${token}` }
+                }).catch(() => ({ data: { response: { docs: [] } } })),
+                CapacitorHttp.request({
+                  method: 'GET',
+                  url: `https://api.adsabs.harvard.edu/v1/search/query?q=citations(bibcode:"${encodeURIComponent(paper.bibcode)}")&fl=bibcode,title,author,year&rows=100`,
+                  headers: { 'Authorization': `Bearer ${token}` }
+                }).catch(() => ({ data: { response: { docs: [] } } }))
+              ]);
+
+              const refs = refsResponse.data?.response?.docs || [];
+              const cites = citesResponse.data?.response?.docs || [];
+
+              emit('consoleLog', { message: `[${paper.bibcode}] Found ${refs.length} refs, ${cites.length} cites`, level: 'success' });
+
+              // Store references
+              if (refs.length > 0) {
+                MobileDB.addReferences(paperId, refs.map(r => ({
+                  bibcode: r.bibcode,
+                  title: r.title?.[0],
+                  authors: r.author?.join(', '),
+                  year: r.year
+                })));
+              }
+
+              // Store citations
+              if (cites.length > 0) {
+                MobileDB.addCitations(paperId, cites.map(c => ({
+                  bibcode: c.bibcode,
+                  title: c.title?.[0],
+                  authors: c.author?.join(', '),
+                  year: c.year
+                })));
+              }
+            } catch (e) {
+              console.warn('[adsImportPapers] Refs/cites fetch failed:', e.message);
+            }
+          }
+
+          // Save database after each paper
+          await MobileDB.saveDatabase();
+
+          emit('consoleLog', { message: `[${paper.bibcode}] ✓ Import complete`, level: 'success' });
           results.imported.push({
             paper,
             id: paperId,
@@ -1529,56 +2868,620 @@ const capacitorAPI = {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async copyCite(paperIds, style = 'cite') {
-    return { success: false, error: 'Not implemented for iOS' };
+    try {
+      if (!dbInitialized) await initializeDatabase();
+
+      // Get papers from database
+      const papers = [];
+      for (const id of paperIds) {
+        const paper = MobileDB.getPaper(id);
+        if (paper) {
+          papers.push(paper);
+        }
+      }
+
+      if (papers.length === 0) {
+        return { success: false, error: 'No papers found' };
+      }
+
+      // Generate cite keys
+      const citeKeys = papers.map(paper => generateCiteKey(paper));
+
+      // Format based on style
+      let citeCommand;
+      if (style === 'citep') {
+        citeCommand = `\\citep{${citeKeys.join(',')}}`;
+      } else {
+        citeCommand = `\\cite{${citeKeys.join(',')}}`;
+      }
+
+      // Copy to clipboard
+      await navigator.clipboard.writeText(citeCommand);
+
+      emit('consoleLog', { message: `Copied ${style} command for ${papers.length} paper(s)`, level: 'success' });
+
+      return { success: true };
+    } catch (error) {
+      console.error('[copyCite] Error:', error);
+      emit('consoleLog', { message: `Copy cite failed: ${error.message}`, level: 'error' });
+      return { success: false, error: error.message };
+    }
   },
 
   async exportBibtex(paperIds) {
-    return { success: false, error: 'Not implemented for iOS' };
+    try {
+      if (!dbInitialized) await initializeDatabase();
+
+      // Get papers from database
+      const papers = [];
+      for (const id of paperIds) {
+        const paper = MobileDB.getPaper(id);
+        if (paper) {
+          papers.push(paper);
+        }
+      }
+
+      if (papers.length === 0) {
+        return { success: false, error: 'No papers found' };
+      }
+
+      emit('consoleLog', { message: `Exporting BibTeX for ${papers.length} paper(s)...`, level: 'info' });
+
+      // Separate papers with and without bibcodes
+      const papersWithBibcode = papers.filter(p => p.bibcode);
+      const papersWithoutBibcode = papers.filter(p => !p.bibcode);
+
+      const bibtexEntries = [];
+
+      // For papers with bibcode, fetch from ADS API
+      if (papersWithBibcode.length > 0) {
+        const token = await Keychain.getItem('adsToken');
+
+        if (token) {
+          try {
+            const bibcodes = papersWithBibcode.map(p => p.bibcode);
+
+            const response = await CapacitorHttp.post({
+              url: `${ADS_API_BASE}/export/bibtex`,
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              data: { bibcode: bibcodes }
+            });
+
+            if (response.status === 200 && response.data?.export) {
+              bibtexEntries.push(response.data.export);
+              emit('consoleLog', { message: `Fetched BibTeX for ${bibcodes.length} paper(s) from ADS`, level: 'success' });
+            } else {
+              // Fallback to local generation if ADS fails
+              emit('consoleLog', { message: 'ADS BibTeX export failed, generating locally', level: 'warn' });
+              for (const paper of papersWithBibcode) {
+                bibtexEntries.push(paperToBibtex(paper));
+              }
+            }
+          } catch (e) {
+            console.error('[exportBibtex] ADS API error:', e);
+            emit('consoleLog', { message: 'ADS BibTeX export failed, generating locally', level: 'warn' });
+            // Fallback to local generation
+            for (const paper of papersWithBibcode) {
+              bibtexEntries.push(paperToBibtex(paper));
+            }
+          }
+        } else {
+          // No token, generate locally
+          emit('consoleLog', { message: 'No ADS token, generating BibTeX locally', level: 'warn' });
+          for (const paper of papersWithBibcode) {
+            bibtexEntries.push(paperToBibtex(paper));
+          }
+        }
+      }
+
+      // For papers without bibcode, generate locally
+      for (const paper of papersWithoutBibcode) {
+        bibtexEntries.push(paperToBibtex(paper));
+      }
+
+      // Combine all entries
+      const combinedBibtex = bibtexEntries.join('\n\n');
+
+      emit('consoleLog', { message: `BibTeX export complete (${papers.length} entries)`, level: 'success' });
+
+      return { success: true, bibtex: combinedBibtex };
+    } catch (error) {
+      console.error('[exportBibtex] Error:', error);
+      emit('consoleLog', { message: `BibTeX export failed: ${error.message}`, level: 'error' });
+      return { success: false, error: error.message };
+    }
   },
 
   async saveBibtexFile(content) {
-    return { success: false, error: 'Not implemented for iOS' };
+    try {
+      await ensureLibraryExists();
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `export-${timestamp}.bib`;
+      const filePath = `${LIBRARY_FOLDER}/${filename}`;
+
+      // Write the file
+      await Filesystem.writeFile({
+        path: filePath,
+        directory: Directory.Documents,
+        data: content,
+        encoding: Encoding.UTF8
+      });
+
+      emit('consoleLog', { message: `BibTeX saved to ${filename}`, level: 'success' });
+
+      // Get the full URI for sharing
+      const uri = await Filesystem.getUri({
+        path: filePath,
+        directory: Directory.Documents
+      });
+
+      return { success: true, path: filePath, uri: uri.uri };
+    } catch (error) {
+      console.error('[saveBibtexFile] Error:', error);
+      emit('consoleLog', { message: `Save BibTeX failed: ${error.message}`, level: 'error' });
+      return { success: false, error: error.message };
+    }
   },
 
+  /**
+   * Import BibTeX file using HTML file input (works on iOS Safari/WKWebView)
+   * Opens a file picker, parses BibTeX entries, creates paper entries
+   */
   async importBibtex() {
-    return { success: false, error: 'Not implemented for iOS' };
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.bib,.bibtex,text/plain,text/x-bibtex';
+
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) {
+          resolve({ success: false, canceled: true });
+          return;
+        }
+
+        try {
+          emit('consoleLog', { message: `Reading BibTeX file: ${file.name}`, level: 'info' });
+
+          // Read file as text
+          const content = await file.text();
+
+          // Parse BibTeX entries
+          const entries = parseBibtexContent(content);
+          emit('consoleLog', { message: `Found ${entries.length} BibTeX entries`, level: 'info' });
+
+          if (entries.length === 0) {
+            emit('consoleLog', { message: 'No valid BibTeX entries found', level: 'warn' });
+            resolve({ success: false, error: 'No valid BibTeX entries found' });
+            return;
+          }
+
+          if (!dbInitialized) await initializeDatabase();
+
+          const results = { imported: [], skipped: [], failed: [] };
+
+          for (const entry of entries) {
+            try {
+              // Check if already in library by bibcode
+              if (entry.bibcode) {
+                const existing = MobileDB.getPaperByBibcode(entry.bibcode);
+                if (existing) {
+                  results.skipped.push({ entry, reason: 'Already in library' });
+                  emit('consoleLog', { message: `Skipped: ${entry.bibcode} (already in library)`, level: 'warn' });
+                  continue;
+                }
+              }
+
+              // Extract year as number
+              const year = entry.year ? parseInt(entry.year, 10) : null;
+
+              // Create paper entry with import source tracking
+              const paperId = MobileDB.addPaper({
+                title: entry.title || entry.key || 'Untitled',
+                authors: entry.author || '',
+                year: year,
+                journal: entry.journal || entry.booktitle || '',
+                doi: entry.doi || null,
+                bibcode: entry.bibcode || null,
+                arxiv_id: entry.arxiv_id || entry.eprint || null,
+                abstract: entry.abstract || null,
+                bibtex: entry.raw,
+                import_source: file.name,
+                import_source_key: entry.key,
+                added_date: new Date().toISOString()
+              });
+
+              results.imported.push({ paperId, entry });
+              emit('consoleLog', {
+                message: `Imported: ${entry.title || entry.key}`,
+                level: 'success'
+              });
+            } catch (error) {
+              results.failed.push({ entry, error: error.message });
+              emit('consoleLog', {
+                message: `Failed: ${entry.key} - ${error.message}`,
+                level: 'error'
+              });
+            }
+          }
+
+          await MobileDB.saveDatabase();
+
+          emit('consoleLog', {
+            message: `BibTeX import complete: ${results.imported.length} imported, ${results.skipped.length} skipped, ${results.failed.length} failed`,
+            level: 'success'
+          });
+
+          resolve({ success: true, results });
+        } catch (error) {
+          emit('consoleLog', { message: `BibTeX import failed: ${error.message}`, level: 'error' });
+          resolve({ success: false, error: error.message });
+        }
+      };
+
+      input.click();
+    });
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PDF IMPORT
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /**
+   * Import PDFs using HTML file input (works on iOS Safari/WKWebView)
+   * Opens a file picker, lets user select PDFs, saves them to library
+   */
   async importPDFs() {
-    // TODO: Use Capacitor file picker
-    return { success: false, error: 'PDF import not yet implemented for iOS' };
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.pdf,application/pdf';
+      input.multiple = true;
+
+      input.onchange = async (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) {
+          resolve({ success: false, canceled: true });
+          return;
+        }
+
+        emit('consoleLog', { message: `Importing ${files.length} PDF file(s)...`, level: 'info' });
+
+        const results = [];
+        await ensureLibraryExists();
+        if (!dbInitialized) await initializeDatabase();
+
+        for (const file of files) {
+          try {
+            // Read file as base64
+            const base64 = await fileToBase64(file);
+
+            // Generate filename with timestamp to avoid conflicts
+            const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const filename = `imported_${Date.now()}_${safeName}`;
+            const filePath = `${LIBRARY_FOLDER}/papers/${filename}`;
+
+            // Save to filesystem
+            await Filesystem.writeFile({
+              path: filePath,
+              directory: Directory.Documents,
+              data: base64
+            });
+
+            // Create paper entry with title from filename (remove .pdf extension)
+            const title = file.name.replace(/\.pdf$/i, '');
+            const paperId = MobileDB.addPaper({
+              title: title,
+              pdf_path: `papers/${filename}`,
+              added_date: new Date().toISOString()
+            });
+
+            emit('consoleLog', { message: `Imported: ${file.name}`, level: 'success' });
+            results.push({ success: true, id: paperId, filename: file.name });
+          } catch (error) {
+            emit('consoleLog', { message: `Failed: ${file.name} - ${error.message}`, level: 'error' });
+            results.push({ success: false, filename: file.name, error: error.message });
+          }
+        }
+
+        await MobileDB.saveDatabase();
+
+        const successCount = results.filter(r => r.success).length;
+        emit('consoleLog', {
+          message: `PDF import complete: ${successCount}/${files.length} succeeded`,
+          level: successCount === files.length ? 'success' : 'warn'
+        });
+
+        resolve({ success: true, results });
+      };
+
+      // Handle cancel - note: oncancel is not widely supported, but we handle it via timeout
+      input.click();
+    });
   },
 
+  /**
+   * Select PDF files without importing (returns file info)
+   * Used for alternative import workflows
+   */
   async selectPdfs() {
-    return [];
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.pdf,application/pdf';
+      input.multiple = true;
+
+      input.onchange = async (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) {
+          resolve([]);
+          return;
+        }
+
+        // Return file info without importing
+        const fileInfos = files.map(file => ({
+          name: file.name,
+          size: file.size,
+          type: file.type
+        }));
+        resolve(fileInfos);
+      };
+
+      input.click();
+    });
   },
 
+  /**
+   * Select a BibTeX file (returns file path/content)
+   * Used for BibTeX import workflow
+   */
   async selectBibFile() {
-    return null;
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.bib,.bibtex,text/plain,text/x-bibtex';
+
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+
+        try {
+          const content = await file.text();
+          resolve({ name: file.name, content });
+        } catch (error) {
+          console.error('[selectBibFile] Error reading file:', error);
+          resolve(null);
+        }
+      };
+
+      input.click();
+    });
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // LOCAL LLM (Not available on iOS)
+  // LLM CONFIG (Multi-provider support)
   // ═══════════════════════════════════════════════════════════════════════════
 
   async getLlmConfig() {
-    return null;
+    const result = await Preferences.get({ key: 'llmConfig' });
+    const config = safeJsonParse(result.value) || {
+      activeProvider: 'anthropic',
+      selectedModel: null,
+      anthropic: { model: 'claude-3-5-sonnet-20241022' },
+      gemini: { model: 'gemini-1.5-flash' },
+      perplexity: { model: 'llama-3.1-sonar-small-128k-online' }
+    };
+    return config;
   },
 
   async setLlmConfig(config) {
-    return { success: false, error: 'Local LLM not available on iOS' };
+    try {
+      await Preferences.set({ key: 'llmConfig', value: JSON.stringify(config) });
+      return { success: true };
+    } catch (error) {
+      console.error('[API] Failed to save LLM config:', error);
+      return { success: false, error: error.message };
+    }
   },
 
   async checkLlmConnection() {
-    return { connected: false, error: 'Local LLM not available on iOS. Use Cloud API.' };
+    // On iOS, check if any cloud provider is configured
+    const anthropicKey = await Keychain.getItem('apiKey_anthropic');
+    const geminiKey = await Keychain.getItem('apiKey_gemini');
+    const perplexityKey = await Keychain.getItem('apiKey_perplexity');
+
+    if (anthropicKey || geminiKey || perplexityKey) {
+      return { connected: true };
+    }
+    return { connected: false, error: 'No cloud LLM configured. Add API key in Settings.' };
   },
 
   async listLlmModels() {
+    // Ollama not available on iOS
     return [];
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MULTI-PROVIDER LLM SUPPORT
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async getAllProviders() {
+    return [
+      { id: 'anthropic', name: 'Anthropic (Claude)', available: true },
+      { id: 'gemini', name: 'Google Gemini', available: true },
+      { id: 'perplexity', name: 'Perplexity', available: true },
+      { id: 'ollama', name: 'Ollama (Local)', available: false } // Not on iOS
+    ];
+  },
+
+  async testProviderConnection(provider) {
+    try {
+      const apiKey = await Keychain.getItem(`apiKey_${provider}`);
+      if (!apiKey) {
+        return { connected: false, error: 'No API key configured' };
+      }
+
+      // Test the connection based on provider
+      let testUrl, headers;
+
+      if (provider === 'anthropic') {
+        testUrl = 'https://api.anthropic.com/v1/messages';
+        headers = {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json'
+        };
+        // Just check if we get a valid error (auth works) or success
+        const response = await CapacitorHttp.request({
+          method: 'POST',
+          url: testUrl,
+          headers,
+          data: { model: 'claude-3-5-sonnet-20241022', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }
+        });
+        if (response.status === 200 || response.status === 201) {
+          return { connected: true, provider: 'anthropic' };
+        } else if (response.status === 401) {
+          return { connected: false, error: 'Invalid API key' };
+        } else if (response.status === 400) {
+          // 400 can mean various things, but if we get here the key is probably valid
+          return { connected: true, provider: 'anthropic' };
+        }
+        return { connected: false, error: `API error: ${response.status}` };
+      }
+
+      if (provider === 'gemini') {
+        testUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+        const response = await CapacitorHttp.request({
+          method: 'GET',
+          url: testUrl
+        });
+        if (response.status === 200) {
+          return { connected: true, provider: 'gemini' };
+        }
+        return { connected: false, error: `API error: ${response.status}` };
+      }
+
+      if (provider === 'perplexity') {
+        testUrl = 'https://api.perplexity.ai/chat/completions';
+        headers = {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        };
+        const response = await CapacitorHttp.request({
+          method: 'POST',
+          url: testUrl,
+          headers,
+          data: { model: 'llama-3.1-sonar-small-128k-online', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }
+        });
+        if (response.status === 200 || response.status === 201) {
+          return { connected: true, provider: 'perplexity' };
+        } else if (response.status === 401) {
+          return { connected: false, error: 'Invalid API key' };
+        }
+        return { connected: false, error: `API error: ${response.status}` };
+      }
+
+      return { connected: false, error: 'Unknown provider' };
+    } catch (error) {
+      console.error(`[API] Failed to test ${provider} connection:`, error);
+      return { connected: false, error: error.message };
+    }
+  },
+
+  async getProviderModels(provider) {
+    const models = {
+      anthropic: [
+        { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet' },
+        { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku' },
+        { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus' }
+      ],
+      gemini: [
+        { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' },
+        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
+        { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash' }
+      ],
+      perplexity: [
+        { id: 'llama-3.1-sonar-small-128k-online', name: 'Sonar Small (Online)' },
+        { id: 'llama-3.1-sonar-large-128k-online', name: 'Sonar Large (Online)' },
+        { id: 'llama-3.1-sonar-huge-128k-online', name: 'Sonar Huge (Online)' }
+      ],
+      ollama: [] // Not available on iOS
+    };
+    return models[provider] || [];
+  },
+
+  async getAllModels() {
+    const providers = ['anthropic', 'gemini', 'perplexity'];
+    const result = [];
+
+    for (const provider of providers) {
+      const apiKey = await Keychain.getItem(`apiKey_${provider}`);
+      const models = await this.getProviderModels(provider);
+
+      result.push({
+        provider,
+        providerName: provider === 'anthropic' ? 'Anthropic' :
+                      provider === 'gemini' ? 'Google Gemini' : 'Perplexity',
+        connected: !!apiKey,
+        models: models.map(m => ({ ...m, id: `${provider}:${m.id}` }))
+      });
+    }
+
+    return result;
+  },
+
+  async setSelectedModel(modelId) {
+    try {
+      await Preferences.set({ key: 'selectedModel', value: modelId });
+      return { success: true };
+    } catch (error) {
+      console.error('[API] Failed to save selected model:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Summary prompt methods
+  async getSummaryPrompt() {
+    const result = await Preferences.get({ key: 'summaryPrompt' });
+    return result.value || this._getDefaultSummaryPrompt();
+  },
+
+  async setSummaryPrompt(prompt) {
+    try {
+      await Preferences.set({ key: 'summaryPrompt', value: prompt });
+      return { success: true };
+    } catch (error) {
+      console.error('[API] Failed to save summary prompt:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  async resetSummaryPrompt() {
+    try {
+      await Preferences.remove({ key: 'summaryPrompt' });
+      return { success: true, defaultPrompt: this._getDefaultSummaryPrompt() };
+    } catch (error) {
+      console.error('[API] Failed to reset summary prompt:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  _getDefaultSummaryPrompt() {
+    return `You are an expert academic assistant. Your task is to summarize scientific papers.
+Provide a clear, concise summary that captures the key contributions and findings.
+Structure your response with:
+1. A brief overview (2-3 sentences)
+2. Key contributions or findings (bullet points)
+3. Methodology highlights (if relevant)
+4. Main conclusions`;
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1623,10 +3526,20 @@ const capacitorAPI = {
   async checkCloudLlmConnection() {
     const config = await this.getCloudLlmConfig();
     if (!config || !config.apiKey) {
-      return { success: false, error: 'Cloud LLM not configured' };
+      return { success: false, error: 'No API key configured' };
     }
-    // TODO: Actually test the connection
-    return { success: true, provider: config.provider };
+
+    try {
+      // Reinitialize service with current config
+      const { CloudLLMService } = await import('../main/cloud-llm-service.js');
+      cloudLlmService = new CloudLLMService(config);
+
+      // Test with a simple request
+      await cloudLlmService.generate('Say "ok"', { maxTokens: 10 });
+      return { success: true, provider: config.provider };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   },
 
   async getPreferredLlmType() {
@@ -1642,19 +3555,119 @@ const capacitorAPI = {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async llmSummarize(paperId, options = {}) {
-    return { success: false, error: 'Not yet implemented for iOS' };
+    try {
+      if (!cloudLlmService) {
+        return { success: false, error: 'Cloud LLM not configured. Add API key in Settings.' };
+      }
+
+      if (!dbInitialized) await initializeDatabase();
+
+      const paper = MobileDB.getPaper(paperId);
+      if (!paper) return { success: false, error: 'Paper not found' };
+
+      // Check for existing summary
+      const existing = MobileDB.getSummary(paperId);
+      if (existing && !options.regenerate) {
+        return { success: true, summary: existing.summary, cached: true };
+      }
+
+      // Get paper text content
+      let textContent = paper.abstract || '';
+      // Could also read from text file if available
+
+      emit('consoleLog', { message: `Summarizing: ${paper.title}...`, level: 'info' });
+
+      // Build prompt with available information
+      const authorStr = Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || 'Unknown authors');
+
+      const prompt = `Please summarize this academic paper in 3-5 key points:
+
+Title: ${paper.title}
+Authors: ${authorStr}
+Abstract: ${textContent}`;
+
+      const response = await cloudLlmService.generate(prompt, {
+        maxTokens: 1000,
+        temperature: 0.3
+      });
+
+      // Save summary
+      const config = await Storage.get('cloudLlmConfig');
+      MobileDB.saveSummary(paperId, response, config?.model || 'unknown');
+      await MobileDB.saveDatabase();
+
+      emit('consoleLog', { message: 'Summary generated', level: 'success' });
+      return { success: true, summary: response };
+    } catch (error) {
+      emit('consoleLog', { message: `Summarization failed: ${error.message}`, level: 'error' });
+      return { success: false, error: error.message };
+    }
   },
 
-  async llmAsk(paperId, question) {
-    return { success: false, error: 'Not yet implemented for iOS' };
+  async llmAsk(paperId, question, options = {}) {
+    try {
+      if (!cloudLlmService) {
+        return { success: false, error: 'Cloud LLM not configured' };
+      }
+
+      if (!dbInitialized) await initializeDatabase();
+
+      const paper = MobileDB.getPaper(paperId);
+      if (!paper) return { success: false, error: 'Paper not found' };
+
+      const authorStr = Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || 'Unknown authors');
+
+      const prompt = `Based on this paper, please answer the question:
+
+Title: ${paper.title}
+Authors: ${authorStr}
+Abstract: ${paper.abstract || 'No abstract available'}
+
+Question: ${question}
+
+Please provide a concise answer based on the paper content.`;
+
+      const response = await cloudLlmService.generate(prompt, {
+        maxTokens: 500,
+        temperature: 0.5
+      });
+
+      // Save to history
+      const config = await Storage.get('cloudLlmConfig');
+      MobileDB.addQAEntry(paperId, question, response, config?.model || 'unknown');
+      await MobileDB.saveDatabase();
+
+      return { success: true, answer: response };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   },
 
   async llmExplain(text, paperId) {
-    return { success: false, error: 'Not yet implemented for iOS' };
+    try {
+      if (!cloudLlmService) {
+        return { success: false, error: 'Cloud LLM not configured' };
+      }
+
+      const prompt = `Please explain this text from an academic paper in simpler terms:
+
+"${text}"
+
+Provide a clear, accessible explanation.`;
+
+      const response = await cloudLlmService.generate(prompt, {
+        maxTokens: 300,
+        temperature: 0.5
+      });
+
+      return { success: true, explanation: response };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   },
 
   async llmGenerateEmbeddings(paperId) {
-    return { success: false, error: 'Not yet implemented for iOS' };
+    return { success: false, error: 'Embeddings not yet implemented for iOS' };
   },
 
   async llmGetUnindexedPapers() {
@@ -1662,7 +3675,7 @@ const capacitorAPI = {
   },
 
   async llmExtractMetadata(paperId) {
-    return { success: false, error: 'Not yet implemented for iOS' };
+    return { success: false, error: 'Metadata extraction not yet implemented for iOS' };
   },
 
   async llmSemanticSearch(query, limit = 10) {
@@ -1670,14 +3683,21 @@ const capacitorAPI = {
   },
 
   async llmGetQAHistory(paperId) {
-    return [];
+    if (!dbInitialized) await initializeDatabase();
+    return MobileDB.getQAHistory(paperId);
   },
 
   async llmClearQAHistory(paperId) {
+    if (!dbInitialized) await initializeDatabase();
+    MobileDB.clearQAHistory(paperId);
+    await MobileDB.saveDatabase();
     return { success: true };
   },
 
   async llmDeleteSummary(paperId) {
+    if (!dbInitialized) await initializeDatabase();
+    MobileDB.deleteSummary(paperId);
+    await MobileDB.saveDatabase();
     return { success: true };
   },
 
@@ -1685,12 +3705,14 @@ const capacitorAPI = {
   // ANNOTATIONS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getAnnotations(paperId) {
-    return [];
+  async getAnnotations(paperId, pdfSource = null) {
+    if (!dbInitialized) await initializeDatabase();
+    return MobileDB.getAnnotations(paperId, pdfSource);
   },
 
   async getAnnotationCountsBySource(paperId) {
-    return {};
+    if (!dbInitialized) await initializeDatabase();
+    return MobileDB.getAnnotationCountsBySource(paperId);
   },
 
   async getDownloadedPdfSources(paperId) {
@@ -1765,15 +3787,39 @@ const capacitorAPI = {
   },
 
   async createAnnotation(paperId, data) {
-    return { success: false, error: 'Not implemented for iOS' };
+    try {
+      if (!dbInitialized) await initializeDatabase();
+      const id = MobileDB.createAnnotation(paperId, data);
+      await MobileDB.saveDatabase();
+      return { success: true, id };
+    } catch (error) {
+      console.error('[createAnnotation] Error:', error);
+      return { success: false, error: error.message };
+    }
   },
 
   async updateAnnotation(id, data) {
-    return { success: false, error: 'Not implemented for iOS' };
+    try {
+      if (!dbInitialized) await initializeDatabase();
+      MobileDB.updateAnnotation(id, data);
+      await MobileDB.saveDatabase();
+      return { success: true };
+    } catch (error) {
+      console.error('[updateAnnotation] Error:', error);
+      return { success: false, error: error.message };
+    }
   },
 
   async deleteAnnotation(id) {
-    return { success: false, error: 'Not implemented for iOS' };
+    try {
+      if (!dbInitialized) await initializeDatabase();
+      MobileDB.deleteAnnotation(id);
+      await MobileDB.saveDatabase();
+      return { success: true };
+    } catch (error) {
+      console.error('[deleteAnnotation] Error:', error);
+      return { success: false, error: error.message };
+    }
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1837,10 +3883,12 @@ const capacitorAPI = {
   },
 
   onImportProgress(callback) {
+    console.log('[API] Registering importProgress listener');
     eventListeners.importProgress.push(callback);
   },
 
   onImportComplete(callback) {
+    console.log('[API] Registering importComplete listener');
     eventListeners.importComplete.push(callback);
   },
 
