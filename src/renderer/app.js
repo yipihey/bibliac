@@ -3619,7 +3619,14 @@ class ADSReader {
           // Cmd+A: Select all papers
           e.preventDefault();
           this.selectAllPapers();
-        } else if (this.selectedPaper) {
+        } else if (this.currentSmartSearch && this.selectedPapers.size > 0) {
+          // 'a' adds selected papers to library (from smart search)
+          this.addSelectedPapersToLibrary();
+        }
+        break;
+      case 'w':
+        // 'w' opens in ADS (web)
+        if (this.selectedPaper) {
           this.openInADS();
         }
         break;
@@ -4591,15 +4598,17 @@ class ADSReader {
         '<span class="in-library-badge" title="Already in your library">In Library</span>' : '';
 
       // For ADS papers, hide the swipe action if already in library
-      const showSwipeAction = !isAdsSearchView || !paper.inLibrary;
-
-      return `
-      <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${index}" data-bibcode="${paper.bibcode || ''}">
-        ${showSwipeAction ? `
+      // Only render swipe action on iOS - it's not needed on macOS
+      const showSwipeAction = this.isIOS && (!isAdsSearchView || !paper.inLibrary);
+      const swipeActionHtml = showSwipeAction ? `
         <div class="paper-swipe-action ${actionClass}" title="${actionTitle}">
           <span class="swipe-action-icon">${actionIcon}</span>
         </div>
-        ` : '<div class="paper-swipe-action disabled"></div>'}
+      ` : '';
+
+      return `
+      <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${index}" data-bibcode="${paper.bibcode || ''}">
+        ${swipeActionHtml}
         <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}${paper.inLibrary ? ' dimmed' : ''}" data-id="${paper.id}" data-index="${index}" draggable="${!isAdsSearchView}">
           <div class="paper-item-title">
             <span class="paper-item-status ${paper.read_status || 'unread'}"></span>
@@ -4699,16 +4708,18 @@ class ADSReader {
         '<span class="in-library-badge" title="Already in your library">In Library</span>' : '';
 
       // For ADS papers, hide the swipe action if already in library
-      const showSwipeAction = !isAdsSearchView || !paper.inLibrary;
+      // Only render swipe action on iOS - it's not needed on macOS
+      const showSwipeAction = this.isIOS && (!isAdsSearchView || !paper.inLibrary);
+      const swipeActionHtml = showSwipeAction ? `
+        <div class="paper-swipe-action ${actionClass}" title="${actionTitle}">
+          <span class="swipe-action-icon">${actionIcon}</span>
+        </div>
+      ` : '';
 
       html += `
         <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${i}" data-bibcode="${paper.bibcode || ''}"
              style="position: absolute; top: ${top}px; left: 0; right: 0; height: ${this.PAPER_ITEM_HEIGHT}px;">
-          ${showSwipeAction ? `
-          <div class="paper-swipe-action ${actionClass}" title="${actionTitle}">
-            <span class="swipe-action-icon">${actionIcon}</span>
-          </div>
-          ` : '<div class="paper-swipe-action disabled"></div>'}
+          ${swipeActionHtml}
           <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}${paper.inLibrary ? ' dimmed' : ''}"
                data-id="${paper.id}" data-index="${i}" draggable="${!isAdsSearchView}">
             <div class="paper-item-title">
