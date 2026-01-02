@@ -100,7 +100,8 @@ class BaseDownloader {
       }
 
       if (res.statusCode !== 200) {
-        reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        console.log(`[Downloader] Failed: HTTP ${res.statusCode} for ${url}`);
+        reject(new Error(`HTTP ${res.statusCode} from ${parsedUrl.hostname}`));
         return;
       }
 
@@ -367,31 +368,39 @@ class PublisherDownloader extends BaseDownloader {
   /**
    * Find publisher PDF URL from ADS esources
    * @param {Object} paper - Paper metadata
-   * @returns {Promise<{url: string, type: string}|null>}
+   * @returns {Promise<{url: string, type: string, error?: string}|null>}
    */
   async findPdfUrl(paper) {
-    if (!this.adsApi || !this.adsToken || !paper.bibcode) {
-      return null;
+    if (!this.adsApi) {
+      return { error: 'ADS API not configured' };
+    }
+    if (!this.adsToken) {
+      return { error: 'ADS token not set' };
+    }
+    if (!paper.bibcode) {
+      return { error: 'Paper has no bibcode' };
     }
 
     try {
       const esources = await this.adsApi.getEsources(this.adsToken, paper.bibcode);
       if (!esources || esources.length === 0) {
-        return null;
+        return { error: `No esources from ADS for ${paper.bibcode}` };
       }
 
       // Look for PUB_PDF
+      const availableTypes = [];
       for (const source of esources) {
         const type = source.type || source.link_type || '';
+        availableTypes.push(type);
         if (type.includes('PUB_PDF') && this._isValidUrl(source.url)) {
           return { url: source.url, type: 'PUB_PDF' };
         }
       }
 
-      return null;
+      return { error: `No PUB_PDF in esources (available: ${availableTypes.join(', ')})` };
     } catch (error) {
       console.error('[PublisherDownloader] Error fetching esources:', error.message);
-      return null;
+      return { error: `ADS esources fetch failed: ${error.message}` };
     }
   }
 
@@ -414,11 +423,11 @@ class PublisherDownloader extends BaseDownloader {
   async download(paper, destPath, onProgress, signal) {
     try {
       const pdfInfo = await this.findPdfUrl(paper);
-      if (!pdfInfo) {
+      if (!pdfInfo || pdfInfo.error) {
         return {
           success: false,
           source: PDF_SOURCES.PUBLISHER,
-          error: 'No publisher PDF URL found'
+          error: pdfInfo?.error || 'No publisher PDF URL found'
         };
       }
 
@@ -484,31 +493,39 @@ class AdsDownloader extends BaseDownloader {
   /**
    * Find ADS PDF URL from esources
    * @param {Object} paper - Paper metadata
-   * @returns {Promise<{url: string, type: string}|null>}
+   * @returns {Promise<{url: string, type: string, error?: string}|null>}
    */
   async findPdfUrl(paper) {
-    if (!this.adsApi || !this.adsToken || !paper.bibcode) {
-      return null;
+    if (!this.adsApi) {
+      return { error: 'ADS API not configured' };
+    }
+    if (!this.adsToken) {
+      return { error: 'ADS token not set' };
+    }
+    if (!paper.bibcode) {
+      return { error: 'Paper has no bibcode' };
     }
 
     try {
       const esources = await this.adsApi.getEsources(this.adsToken, paper.bibcode);
       if (!esources || esources.length === 0) {
-        return null;
+        return { error: `No esources from ADS for ${paper.bibcode}` };
       }
 
       // Look for ADS_PDF
+      const availableTypes = [];
       for (const source of esources) {
         const type = source.type || source.link_type || '';
+        availableTypes.push(type);
         if (type.includes('ADS_PDF') && this._isValidUrl(source.url)) {
           return { url: source.url, type: 'ADS_PDF' };
         }
       }
 
-      return null;
+      return { error: `No ADS_PDF in esources (available: ${availableTypes.join(', ')})` };
     } catch (error) {
       console.error('[AdsDownloader] Error fetching esources:', error.message);
-      return null;
+      return { error: `ADS esources fetch failed: ${error.message}` };
     }
   }
 
@@ -531,11 +548,11 @@ class AdsDownloader extends BaseDownloader {
   async download(paper, destPath, onProgress, signal) {
     try {
       const pdfInfo = await this.findPdfUrl(paper);
-      if (!pdfInfo) {
+      if (!pdfInfo || pdfInfo.error) {
         return {
           success: false,
           source: PDF_SOURCES.ADS_SCAN,
-          error: 'No ADS PDF URL found'
+          error: pdfInfo?.error || 'No ADS PDF URL found'
         };
       }
 

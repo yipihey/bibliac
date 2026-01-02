@@ -14,11 +14,36 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
-  <!-- Mobile Top Bar -->
+  <!-- Top Bar -->
   <div class="mobile-top-bar" id="mobile-top-bar">
     <button class="hamburger-btn" id="hamburger-btn" aria-label="Open menu">☰</button>
+    <div class="mobile-toolbar-btns">
+      <div class="mobile-sort-dropdown">
+        <button class="mobile-tb-btn mobile-sort-btn" id="mobile-sort-btn" title="Sort papers">
+          <span class="mobile-sort-label">Date</span>
+          <span class="mobile-sort-dir">↓</span>
+        </button>
+        <div class="mobile-sort-menu hidden" id="mobile-sort-menu">
+          <div class="mobile-sort-option" data-sort="added">Date Added</div>
+          <div class="mobile-sort-option" data-sort="year">Year</div>
+          <div class="mobile-sort-option" data-sort="title">Title</div>
+          <div class="mobile-sort-option" data-sort="author">Author</div>
+          <div class="mobile-sort-option" data-sort="citations">Citations</div>
+          <div class="mobile-sort-option" data-sort="rating">Rating</div>
+        </div>
+      </div>
+      <button class="mobile-tb-btn" id="mobile-import-btn" title="Import files">+</button>
+      <button class="mobile-tb-btn" id="mobile-ads-btn" title="Search ADS">ADS 🔍</button>
+      <button class="mobile-tb-btn" id="mobile-sync-btn" title="Sync with ADS">⟳</button>
+      <div class="mobile-download-dropdown">
+        <button class="mobile-tb-btn" id="mobile-download-btn" title="Download PDFs">⬇</button>
+        <div class="mobile-download-menu hidden" id="mobile-download-menu">
+          <!-- Populated dynamically based on ADS sources -->
+        </div>
+      </div>
+      <button class="search-btn" id="mobile-search-btn" aria-label="Search">🔍</button>
+    </div>
     <span class="top-bar-title" id="mobile-title">Papers</span>
-    <button class="search-btn" id="mobile-search-btn" aria-label="Search">🔍</button>
   </div>
 
   <!-- Mobile Drawer -->
@@ -29,36 +54,60 @@
       <button class="drawer-close" id="drawer-close-btn">✕</button>
     </div>
     <div class="drawer-content">
-      <!-- Library Picker -->
+      <!-- Console (Activity Log) -->
       <div class="drawer-section">
-        <div class="drawer-section-label">Library</div>
-        <div class="drawer-library-picker" id="drawer-library-picker">
-          <!-- Populated by JS -->
+        <div class="drawer-section-label drawer-toggle" id="drawer-console-toggle">
+          Console
+          <span class="drawer-section-arrow">▶</span>
+        </div>
+        <div class="drawer-console hidden" id="drawer-console">
+          <div class="drawer-console-log" id="drawer-console-log"></div>
         </div>
       </div>
 
-      <!-- Filters -->
+      <!-- Keyboard Shortcuts -->
       <div class="drawer-section">
-        <div class="drawer-section-label">Filter</div>
-        <div class="drawer-nav-items">
-          <button class="drawer-nav-item active" data-filter="all">All Papers</button>
-          <button class="drawer-nav-item" data-filter="unread">Unread</button>
-          <button class="drawer-nav-item" data-filter="reading">Reading</button>
-          <button class="drawer-nav-item" data-filter="read">Read</button>
+        <div class="drawer-section-label drawer-toggle" id="drawer-shortcuts-toggle">
+          Shortcuts
+          <span class="drawer-section-arrow">▶</span>
         </div>
-      </div>
-
-      <!-- Collections -->
-      <div class="drawer-section">
-        <div class="drawer-section-label">Collections</div>
-        <div class="drawer-collections" id="drawer-collections">
-          <!-- Populated by JS -->
+        <div class="drawer-shortcuts hidden" id="drawer-shortcuts">
+          <div class="drawer-shortcuts-grid">
+            <span class="shortcut-key">/</span><span>Search</span>
+            <span class="shortcut-key">j/k</span><span>Next/Prev paper</span>
+            <span class="shortcut-key">s</span><span>Sync with ADS</span>
+            <span class="shortcut-key">a</span><span>Open in ADS</span>
+            <span class="shortcut-key">p</span><span>PDF tab</span>
+            <span class="shortcut-key">n</span><span>Notes panel</span>
+            <span class="shortcut-key">1-3</span><span>Read status</span>
+            <span class="shortcut-key">⇧1-4</span><span>Rating</span>
+            <span class="shortcut-key">+/-</span><span>Zoom PDF</span>
+            <span class="shortcut-key">r</span><span>Rotate page</span>
+            <span class="shortcut-key">m</span><span>Toggle menu</span>
+          </div>
         </div>
       </div>
 
       <!-- Settings -->
       <div class="drawer-section drawer-section-bottom">
-        <button class="drawer-nav-item" id="drawer-settings-btn">⚙️ Settings</button>
+        <div class="drawer-section-label">Settings</div>
+        <div class="drawer-nav-items">
+          <button class="drawer-nav-item" id="drawer-ads-token-btn">
+            🔑 ADS API Token
+            <span class="nav-status" id="drawer-ads-status">●</span>
+          </button>
+          <button class="drawer-nav-item" id="drawer-proxy-btn">
+            🏛️ Library Proxy
+            <span class="nav-status" id="drawer-proxy-status">●</span>
+          </button>
+          <button class="drawer-nav-item" id="drawer-llm-btn">
+            🤖 AI Integration
+            <span class="nav-status" id="drawer-llm-status">●</span>
+          </button>
+          <button class="drawer-nav-item" id="drawer-settings-btn">
+            ⚙️ PDF Preferences
+          </button>
+        </div>
       </div>
     </div>
   </aside>
@@ -292,38 +341,31 @@
       <div class="content-split">
         <!-- Paper List Panel -->
         <div class="paper-list-panel" data-mobile-view="papers">
-          <div class="list-toolbar">
-            <button id="import-btn" class="import-btn" title="Import PDF">+</button>
-            <button id="import-bib-btn" class="import-btn" title="Import .bib file">.bib</button>
-            <button id="ads-search-btn" class="ads-btn" title="Search ADS">ADS</button>
-            <button id="ads-sync-btn" class="sync-btn" title="Sync selected papers with ADS">⟳</button>
+          <!-- Search section (hidden on mobile until search button tapped) -->
+          <div class="search-section">
             <div class="search-wrapper">
               <input type="text" id="search-input" placeholder="Search... (/)">
               <button id="search-clear-btn" class="search-clear-btn" title="Clear search">&times;</button>
             </div>
-          </div>
-          <div class="search-shortcuts">
+            <div class="search-shortcuts">
             <button class="search-shortcut-btn" data-insert="author:">author:</button>
             <button class="search-shortcut-btn" data-insert="year:">year:</button>
             <button class="search-shortcut-btn" data-insert="title:">title:</button>
             <button class="search-shortcut-btn" data-insert="bibcode:">bibcode:</button>
             <button class="search-shortcut-btn" data-insert="journal:">journal:</button>
             <button class="search-shortcut-btn" data-insert="source:">source:</button>
+            </div>
           </div>
-          <div class="sort-dropdown-container">
-            <button class="sort-dropdown-trigger" id="sort-dropdown-trigger">
-              <span class="sort-field-label">Date Added</span>
-              <span class="sort-direction">↓</span>
-            </button>
-            <div class="sort-dropdown-menu hidden" id="sort-dropdown-menu">
-              <div class="sort-option" data-sort="added">Date Added</div>
-              <div class="sort-option" data-sort="year">Year</div>
-              <div class="sort-option" data-sort="title">Title</div>
-              <div class="sort-option" data-sort="author">Author</div>
-              <div class="sort-option" data-sort="citations">Citations</div>
-              <div class="sort-option" data-sort="rating">Rating</div>
-              <div class="sort-option" data-sort="journal">Journal</div>
-              <div class="sort-option" data-sort="bibcode">Bibcode</div>
+          <!-- Toolbar buttons -->
+          <div class="list-toolbar">
+            <button id="import-btn" class="import-btn" title="Import files">+</button>
+            <button id="ads-search-btn" class="ads-btn" title="Search ADS">ADS 🔍</button>
+            <button id="ads-sync-btn" class="sync-btn" title="Sync selected papers with ADS">⟳</button>
+            <div class="download-pdf-dropdown">
+              <button id="download-pdf-btn" class="download-btn" title="Download PDFs for selected papers">⬇</button>
+              <div class="download-pdf-menu hidden" id="download-pdf-menu">
+                <!-- Populated dynamically based on ADS sources -->
+              </div>
             </div>
           </div>
           <div class="paper-list" id="paper-list">
@@ -339,7 +381,7 @@
         <div class="resize-handle" id="list-resize" data-resize="list"></div>
 
         <!-- Paper Detail / PDF Viewer -->
-        <div class="paper-detail" id="paper-detail">
+        <div class="paper-detail" id="paper-detail" data-mobile-view="detail">
           <div class="detail-placeholder" id="detail-placeholder">
             <p>Select a paper to view</p>
           </div>
@@ -379,8 +421,6 @@
                   </div>
                   <div class="refs-actions">
                     <button class="text-button" id="refs-select-all">Select All</button>
-                    <button class="text-button" id="refs-select-none">None</button>
-                    <button class="primary-button small" id="refs-import-btn" disabled>Import Selected</button>
                   </div>
                 </div>
                 <div class="refs-list" id="refs-list">
@@ -399,8 +439,6 @@
                   </div>
                   <div class="cites-actions">
                     <button class="text-button" id="cites-select-all">Select All</button>
-                    <button class="text-button" id="cites-select-none">None</button>
-                    <button class="primary-button small" id="cites-import-btn" disabled>Import Selected</button>
                   </div>
                 </div>
                 <div class="cites-list" id="cites-list">
@@ -408,7 +446,7 @@
                 </div>
               </div>
 
-              <!-- BibTeX Tab -->
+              <!-- Info Tab -->
               <div class="tab-pane hidden" id="tab-bibtex">
                 <!-- Files Panel (unified view of all paper files) -->
                 <div class="files-panel" id="files-panel">
@@ -536,6 +574,40 @@
                 </div>
               </div>
 
+              <!-- Library Tab -->
+              <div class="tab-pane hidden" id="tab-library">
+                <div class="library-tab-content">
+                  <!-- Libraries Section -->
+                  <div class="library-section">
+                    <div class="section-header">
+                      <h3>Libraries</h3>
+                      <div class="section-actions">
+                        <button class="lib-action-btn" id="new-icloud-lib-btn" title="New iCloud Library">
+                          + iCloud
+                        </button>
+                        <button class="lib-action-btn" id="new-local-lib-btn" title="New Local Library">
+                          + Local
+                        </button>
+                      </div>
+                    </div>
+                    <div class="libraries-list" id="libraries-list">
+                      <!-- Dynamically populated -->
+                    </div>
+                  </div>
+
+                  <!-- Collections Section -->
+                  <div class="library-section">
+                    <div class="section-header">
+                      <h3>Collections</h3>
+                      <button class="lib-action-btn" id="new-collection-btn" title="New Collection">+</button>
+                    </div>
+                    <div class="collections-list" id="tab-collections-list">
+                      <!-- Dynamically populated -->
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <!-- Semantic Search Info Popup -->
               <div class="info-popup hidden" id="semantic-search-info-popup">
                 <div class="info-popup-content">
@@ -577,49 +649,6 @@
               </div>
             </div><!-- end viewer-content-row -->
 
-            <!-- Bottom Status Bar -->
-            <div class="bottom-bar" id="bottom-bar">
-              <div class="bottom-bar-left">
-                <div class="info-tabs">
-                  <button class="tab-btn active" data-tab="pdf">PDF</button>
-                  <button class="tab-btn" data-tab="abstract">Abstract</button>
-                  <button class="tab-btn" data-tab="refs">Refs</button>
-                  <button class="tab-btn" data-tab="cites">Cites</button>
-                  <button class="tab-btn" data-tab="bibtex">BibTeX</button>
-                  <button class="tab-btn" data-tab="ai">AI</button>
-                </div>
-                <span class="separator">|</span>
-                <div class="pdf-controls">
-                  <button class="pdf-btn" id="zoom-out-btn" title="Zoom out">−</button>
-                  <span id="zoom-level">100%</span>
-                  <button class="pdf-btn" id="zoom-in-btn" title="Zoom in">+</button>
-                  <button class="pdf-btn" id="rotate-btn" title="Rotate page">↻</button>
-                  <span class="page-info">
-                    <span id="current-page">1</span>/<span id="total-pages">1</span>
-                  </span>
-                </div>
-              </div>
-              <div class="bottom-bar-center">
-                <span class="paper-title-bar" id="paper-title-bar" title="">Select a paper</span>
-              </div>
-              <div class="bottom-bar-right">
-                <select id="paper-rating-select" class="status-select rating-select" title="Rate paper (1-4 keys)">
-                  <option value="0">--</option>
-                  <option value="1">1 - Seminal</option>
-                  <option value="2">2 - Important</option>
-                  <option value="3">3 - Average</option>
-                  <option value="4">4 - Meh</option>
-                </select>
-                <select id="read-status-select" class="status-select" title="Reading status">
-                  <option value="unread">Unread</option>
-                  <option value="reading">Reading</option>
-                  <option value="read">Read</option>
-                </select>
-                <button class="action-btn" id="attach-file-btn" title="Attach files">Attach</button>
-                <button class="action-btn" id="copy-cite-btn" title="Copy \\cite command">Cite</button>
-                <button class="action-btn" id="open-ads-btn" title="Open in ADS">Link</button>
-              </div>
-            </div>
           </div>
 
           <!-- Hidden elements for storing full paper info -->
@@ -632,6 +661,59 @@
             <span id="paper-doi"></span>
             <span id="paper-arxiv"></span>
           </div>
+        </div>
+      </div>
+
+      <!-- Bottom Status Bar (outside content-split for mobile visibility) -->
+      <div class="bottom-bar" id="bottom-bar">
+        <div class="bottom-bar-left">
+          <div class="info-tabs">
+            <!-- Filter Select -->
+            <select id="filter-select" class="status-select filter-select" title="Filter papers">
+              <optgroup label="Status">
+                <option value="all" selected>All</option>
+                <option value="unread">Unread</option>
+                <option value="reading">Reading</option>
+                <option value="read">Read</option>
+              </optgroup>
+              <optgroup label="Collections" id="filter-collections-group">
+                <!-- Dynamically populated -->
+              </optgroup>
+            </select>
+            <button class="tab-btn mobile-only" data-tab="papers">Papers</button>
+            <button class="tab-btn active" data-tab="pdf">PDF</button>
+            <button class="tab-btn" data-tab="abstract">Abstract</button>
+            <button class="tab-btn" data-tab="refs">Refs</button>
+            <button class="tab-btn" data-tab="cites">Cites</button>
+            <button class="tab-btn" data-tab="bibtex">Info</button>
+            <button class="tab-btn" data-tab="ai">AI</button>
+            <button class="tab-btn" data-tab="library">Library</button>
+          </div>
+          <span class="separator desktop-only">|</span>
+          <div class="pdf-controls desktop-only">
+            <button class="pdf-btn" id="zoom-out-btn" title="Zoom out">−</button>
+            <span id="zoom-level">100%</span>
+            <button class="pdf-btn" id="zoom-in-btn" title="Zoom in">+</button>
+            <button class="pdf-btn" id="rotate-btn" title="Rotate page">↻</button>
+            <span class="page-info">
+              <span id="current-page">1</span>/<span id="total-pages">1</span>
+            </span>
+          </div>
+        </div>
+        <div class="bottom-bar-center desktop-only">
+          <span class="paper-title-bar" id="paper-title-bar" title="">Select a paper</span>
+        </div>
+        <div class="bottom-bar-right">
+          <select id="paper-rating-select" class="status-select rating-select" title="Rate paper (1-4 keys)">
+            <option value="0">--</option>
+            <option value="1">1 - Seminal</option>
+            <option value="2">2 - Important</option>
+            <option value="3">3 - Average</option>
+            <option value="4">4 - Meh</option>
+          </select>
+          <button class="action-btn" id="attach-file-btn" title="Attach files">Attach</button>
+          <button class="action-btn" id="copy-cite-btn" title="Copy \\cite command">Cite</button>
+          <button class="action-btn" id="open-ads-btn" title="Open in ADS">↗</button>
         </div>
       </div>
     </div>
@@ -1206,6 +1288,151 @@
     </div>
   </div>
 
+  <!-- Export Library Modal -->
+  <div class="modal hidden" id="export-library-modal">
+    <div class="modal-content export-modal-content">
+      <div class="modal-header">
+        <h2>Export Library</h2>
+        <button class="modal-close-btn" id="export-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-name-section">
+          <label for="export-library-name">Library name:</label>
+          <input type="text" id="export-library-name" class="modal-input" placeholder="My Library">
+        </div>
+
+        <p class="export-summary" id="export-summary">
+          Exporting <strong id="export-paper-count">0</strong> papers
+        </p>
+
+        <div class="export-options">
+          <label class="export-option">
+            <input type="checkbox" id="export-pdfs" checked>
+            <span class="option-text">Include PDF files</span>
+            <span class="option-size" id="export-pdfs-size"></span>
+          </label>
+
+          <label class="export-option">
+            <input type="checkbox" id="export-refs" checked>
+            <span class="option-text">Include references</span>
+            <span class="option-size" id="export-refs-count"></span>
+          </label>
+
+          <label class="export-option">
+            <input type="checkbox" id="export-cites" checked>
+            <span class="option-text">Include citations</span>
+            <span class="option-size" id="export-cites-count"></span>
+          </label>
+
+          <label class="export-option">
+            <input type="checkbox" id="export-annotations" checked>
+            <span class="option-text">Include annotations &amp; notes</span>
+            <span class="option-size" id="export-annotations-count"></span>
+          </label>
+        </div>
+
+        <div class="export-estimate">
+          <span>Estimated size:</span>
+          <strong id="export-total-size">calculating...</strong>
+        </div>
+
+        <div class="export-progress hidden" id="export-progress-section">
+          <p id="export-progress-text">Preparing export...</p>
+          <div class="progress-bar">
+            <div class="progress-fill" id="export-progress-fill"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" id="export-cancel-btn">Cancel</button>
+        <button class="primary-button" id="export-share-btn">Share...</button>
+        <button class="primary-button" id="export-save-btn">Export to File</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import Library Modal -->
+  <div class="modal hidden" id="import-library-modal">
+    <div class="modal-content import-modal-content">
+      <div class="modal-header">
+        <h2>Import Library</h2>
+        <button class="modal-close-btn" id="import-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="import-file-info" id="import-file-info">
+          <span class="import-icon">📦</span>
+          <div class="import-file-details">
+            <div class="import-filename" id="import-filename">Select a .adslib file</div>
+            <div class="import-meta" id="import-meta"></div>
+          </div>
+        </div>
+
+        <div class="import-stats hidden" id="import-stats">
+          <div class="import-stat">
+            <span class="stat-value" id="import-paper-count">0</span>
+            <span class="stat-label">papers</span>
+          </div>
+          <div class="import-stat">
+            <span class="stat-value" id="import-pdf-count">0</span>
+            <span class="stat-label">PDFs</span>
+          </div>
+          <div class="import-stat">
+            <span class="stat-value" id="import-annotation-count">0</span>
+            <span class="stat-label">notes</span>
+          </div>
+        </div>
+
+        <div class="import-options hidden" id="import-options">
+          <div class="import-name-section">
+            <label for="import-library-name">Library name:</label>
+            <input type="text" id="import-library-name" class="modal-input" placeholder="Imported Library">
+          </div>
+
+          <div class="import-mode">
+            <label class="radio-option">
+              <input type="radio" name="import-mode" value="new" checked>
+              <span class="option-text">Create new library</span>
+              <small class="option-hint">Creates a separate library you can switch to</small>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="import-mode" value="merge">
+              <span class="option-text">Add to current library</span>
+              <small class="option-hint">Adds new papers, skips duplicates</small>
+            </label>
+          </div>
+
+          <div class="import-checkboxes">
+            <label class="export-option">
+              <input type="checkbox" id="import-pdfs" checked>
+              <span class="option-text">Import PDF files</span>
+            </label>
+            <label class="export-option">
+              <input type="checkbox" id="import-annotations" checked>
+              <span class="option-text">Import annotations &amp; notes</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="import-progress hidden" id="import-progress-section">
+          <p id="import-progress-text">Importing papers...</p>
+          <div class="progress-bar">
+            <div class="progress-fill" id="import-progress-fill"></div>
+          </div>
+        </div>
+
+        <div class="import-result hidden" id="import-result-section">
+          <p id="import-result-text">Import complete!</p>
+          <div class="import-result-stats" id="import-result-stats"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" id="import-cancel-btn">Cancel</button>
+        <button class="primary-button" id="import-select-btn">Select File...</button>
+        <button class="primary-button hidden" id="import-confirm-btn">Import</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Text Selection Context Menu (for AI Explain and Notes) -->
   <div class="context-menu hidden" id="text-context-menu">
     <div class="context-menu-item" id="ctx-add-note">Add Note</div>
@@ -1296,30 +1523,6 @@
       </div>
     </div>
   </div>
-
-  <!-- Mobile Tab Bar -->
-  <nav class="mobile-tab-bar" id="mobile-tab-bar">
-    <button class="tab-item active" data-view="papers">
-      <span class="tab-icon">📄</span>
-      <span class="tab-label">Papers</span>
-    </button>
-    <button class="tab-item" data-view="pdf">
-      <span class="tab-icon">📖</span>
-      <span class="tab-label">PDF</span>
-    </button>
-    <button class="tab-item" data-view="notes">
-      <span class="tab-icon">📝</span>
-      <span class="tab-label">Notes</span>
-    </button>
-    <button class="tab-item" data-view="ai">
-      <span class="tab-icon">🤖</span>
-      <span class="tab-label">AI</span>
-    </button>
-    <button class="tab-item" data-view="libraries">
-      <span class="tab-icon">📚</span>
-      <span class="tab-label">Libraries</span>
-    </button>
-  </nav>
 
   <!-- Platform initialization (for iOS/Capacitor only) -->
   <script type="module" src="platform-init.js"></script>

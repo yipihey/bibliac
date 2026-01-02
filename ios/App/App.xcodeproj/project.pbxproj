@@ -17,6 +17,7 @@
 		A084ECDBA7D38E1E42DFC39D /* Pods_App.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF277DCFFFF123FFC6DF26C7 /* Pods_App.framework */; };
 		A565DEF22F04D68000138435 /* ICloudPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A565DEF12F04D68000138435 /* ICloudPlugin.swift */; };
 		A565DEF42F04D77300138435 /* CustomBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A565DEF32F04D77300138435 /* CustomBridgeViewController.swift */; };
+		A565DEF62F04D88800138435 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A565DEF52F04D88800138435 /* SceneDelegate.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +33,7 @@
 		A565DEF02F04D30E00138435 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		A565DEF12F04D68000138435 /* ICloudPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ICloudPlugin.swift; path = App/ICloudPlugin.swift; sourceTree = "<group>"; };
 		A565DEF32F04D77300138435 /* CustomBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CustomBridgeViewController.swift; path = App/CustomBridgeViewController.swift; sourceTree = "<group>"; };
+		A565DEF52F04D88800138435 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		AF277DCFFFF123FFC6DF26C7 /* Pods_App.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_App.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF51FD2D460BCFE21FA515B2 /* Pods-App.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.release.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.release.xcconfig"; sourceTree = "<group>"; };
 		FC68EB0AF532CFC21C3344DD /* Pods-App.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.debug.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.debug.xcconfig"; sourceTree = "<group>"; };
@@ -83,6 +85,7 @@
 				A565DEF02F04D30E00138435 /* App.entitlements */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
+				A565DEF52F04D88800138435 /* SceneDelegate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -220,6 +223,7 @@
 				A565DEF42F04D77300138435 /* CustomBridgeViewController.swift in Sources */,
 				A565DEF22F04D68000138435 /* ICloudPlugin.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				A565DEF62F04D88800138435 /* SceneDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

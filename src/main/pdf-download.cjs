@@ -53,7 +53,9 @@ function downloadFile(url, destPath, maxRedirects = 5) {
       }
 
       if (res.statusCode !== 200) {
-        reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        const hostname = new URL(url).hostname;
+        console.log(`[pdfDownload] HTTP ${res.statusCode} from ${hostname}`);
+        reject(new Error(`HTTP ${res.statusCode} from ${hostname}`));
         return;
       }
 

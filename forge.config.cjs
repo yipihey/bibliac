@@ -26,7 +26,8 @@ module.exports = {
     } : undefined,
     // Extra resources to include
     extraResource: [
-      './entitlements.mac.plist'
+      './entitlements.mac.plist',
+      './native'  // Swift share helper for native macOS sharing
     ]
   },
   rebuildConfig: {},

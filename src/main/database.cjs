@@ -623,7 +623,8 @@ function addReferences(paperId, refs, save = true) {
 
   for (const ref of refs) {
     if (ref.bibcode) {  // Only add if bibcode exists
-      stmt.run([paperId, ref.bibcode, ref.title, ref.authors, ref.year]);
+      // sql.js requires null instead of undefined
+      stmt.run([paperId, ref.bibcode, ref.title ?? null, ref.authors ?? null, ref.year ?? null]);
     }
   }
   stmt.free();
@@ -646,7 +647,8 @@ function addCitations(paperId, citations, save = true) {
 
   for (const cit of citations) {
     if (cit.bibcode) {  // Only add if bibcode exists
-      stmt.run([paperId, cit.bibcode, cit.title, cit.authors, cit.year]);
+      // sql.js requires null instead of undefined
+      stmt.run([paperId, cit.bibcode, cit.title ?? null, cit.authors ?? null, cit.year ?? null]);
     }
   }
   stmt.free();
@@ -1110,6 +1112,56 @@ function deleteAnnotationsForPaper(paperId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PDF PAGE ROTATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function getPageRotations(paperId, pdfSource = null) {
+  const sourceCondition = pdfSource ? 'AND pdf_source = ?' : 'AND (pdf_source IS NULL OR pdf_source = ?)';
+  const params = pdfSource ? [paperId, pdfSource] : [paperId, ''];
+
+  const results = db.exec(
+    `SELECT page_number, rotation FROM pdf_page_rotations WHERE paper_id = ? ${sourceCondition}`,
+    params
+  );
+
+  if (results.length === 0) return {};
+
+  const rotations = {};
+  for (const row of results[0].values) {
+    rotations[row[0]] = row[1];
+  }
+  return rotations;
+}
+
+function setPageRotation(paperId, pageNumber, rotation, pdfSource = null) {
+  // Use REPLACE to upsert
+  db.run(
+    `INSERT OR REPLACE INTO pdf_page_rotations (paper_id, pdf_source, page_number, rotation)
+     VALUES (?, ?, ?, ?)`,
+    [paperId, pdfSource || '', pageNumber, rotation]
+  );
+  saveDatabase();
+}
+
+function setPageRotations(paperId, rotations, pdfSource = null) {
+  // Clear existing rotations for this paper/source
+  const sourceCondition = pdfSource ? 'AND pdf_source = ?' : 'AND (pdf_source IS NULL OR pdf_source = ?)';
+  const deleteParams = pdfSource ? [paperId, pdfSource] : [paperId, ''];
+  db.run(`DELETE FROM pdf_page_rotations WHERE paper_id = ? ${sourceCondition}`, deleteParams);
+
+  // Insert new rotations
+  for (const [pageNum, rotation] of Object.entries(rotations)) {
+    if (rotation !== 0) {
+      db.run(
+        `INSERT INTO pdf_page_rotations (paper_id, pdf_source, page_number, rotation) VALUES (?, ?, ?, ?)`,
+        [paperId, pdfSource || '', parseInt(pageNum), rotation]
+      );
+    }
+  }
+  saveDatabase();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ATTACHMENTS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1445,6 +1497,10 @@ module.exports = {
   updateAnnotation,
   deleteAnnotation,
   deleteAnnotationsForPaper,
+  // PDF page rotations
+  getPageRotations,
+  setPageRotation,
+  setPageRotations,
   // Attachments
   addAttachment,
   getAttachments,

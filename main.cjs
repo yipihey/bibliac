@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, clipboard, shell, session, Menu } =
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { spawn } = require('child_process');
 const Store = require('electron-store');
 
 // Paper Files Container system
@@ -13,6 +14,16 @@ const {
   AdsDownloader,
   DownloadStrategyManager
 } = require('./src/lib/files/download-strategies.cjs');
+
+// sql.js for reading other library databases (for paper counts)
+let sqlJs = null;
+async function ensureSqlJs() {
+  if (!sqlJs) {
+    const initSqlJs = require('sql.js');
+    sqlJs = await initSqlJs();
+  }
+  return sqlJs;
+}
 
 // iCloud container identifier (matches iOS entitlements)
 const ICLOUD_CONTAINER_ID = 'iCloud.io.adsreader.app';
@@ -133,12 +144,15 @@ let cloudService = null;
 let llmService = null; // Legacy alias for backward compatibility
 
 // Helper to send console log messages to renderer
-function sendConsoleLog(message, type = 'info') {
+function sendConsoleLog(message, type = 'info', details = null) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('console-log', { message, type });
+    mainWindow.webContents.send('console-log', { message, type, details });
   }
   // Also log to terminal
   console.log(`[${type.toUpperCase()}] ${message}`);
+  if (details) {
+    console.log(`  Details: ${details}`);
+  }
 }
 
 /**
@@ -635,9 +649,175 @@ function createLibraryStructure(libraryPath) {
   return true;
 }
 
+// Create a minimal database interface for importing into a new library
+// This wraps a raw sql.js database with the methods needed by exportService.importLibrary
+function createTempDatabaseInterface(db, libraryPath) {
+  let lastPaperId = 0;
+  let lastCollectionId = 0;
+  let lastAnnotationId = 0;
+
+  const saveDb = () => {}; // No-op, we save at the end
+
+  return {
+    getAllPapers() {
+      const result = db.exec('SELECT * FROM papers');
+      if (result.length === 0) return [];
+      return result[0].values.map(row => {
+        const obj = {};
+        result[0].columns.forEach((col, i) => obj[col] = row[i]);
+        return obj;
+      });
+    },
+
+    deletePaper(id) {
+      db.run('DELETE FROM papers WHERE id = ?', [id]);
+    },
+
+    getCollections() {
+      const result = db.exec('SELECT * FROM collections');
+      if (result.length === 0) return [];
+      return result[0].values.map(row => {
+        const obj = {};
+        result[0].columns.forEach((col, i) => obj[col] = row[i]);
+        return obj;
+      });
+    },
+
+    deleteCollection(id) {
+      db.run('DELETE FROM collections WHERE id = ?', [id]);
+      db.run('DELETE FROM paper_collections WHERE collection_id = ?', [id]);
+    },
+
+    getPaperByBibcode(bibcode) {
+      const result = db.exec('SELECT * FROM papers WHERE bibcode = ?', [bibcode]);
+      if (result.length === 0 || result[0].values.length === 0) return null;
+      const obj = {};
+      result[0].columns.forEach((col, i) => obj[col] = result[0].values[0][i]);
+      return obj;
+    },
+
+    addPaper(paper) {
+      const now = new Date().toISOString();
+      const stmt = db.prepare(`
+        INSERT INTO papers (bibcode, doi, arxiv_id, title, authors, year, journal, abstract, keywords,
+          pdf_path, pdf_source, bibtex, read_status, rating, added_date, modified_date, citation_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      stmt.run([
+        paper.bibcode || null, paper.doi || null, paper.arxiv_id || null,
+        paper.title || '', JSON.stringify(paper.authors || []), paper.year || null,
+        paper.journal || null, paper.abstract || null, JSON.stringify(paper.keywords || []),
+        paper.pdf_path || null, paper.pdf_source || null, paper.bibtex || null,
+        paper.read_status || 'unread', paper.rating || 0,
+        paper.added_date || now, paper.modified_date || now, paper.citation_count || 0
+      ]);
+      stmt.free();
+      lastPaperId = db.exec('SELECT last_insert_rowid()')[0].values[0][0];
+      return lastPaperId;
+    },
+
+    updatePaper(id, data) {
+      const fields = [];
+      const values = [];
+      for (const [key, val] of Object.entries(data)) {
+        fields.push(`${key} = ?`);
+        values.push(val);
+      }
+      if (fields.length > 0) {
+        values.push(id);
+        db.run(`UPDATE papers SET ${fields.join(', ')} WHERE id = ?`, values);
+      }
+    },
+
+    createCollection(name, parentId, isSmart, query) {
+      const now = new Date().toISOString();
+      const stmt = db.prepare(`
+        INSERT INTO collections (name, parent_id, is_smart, query, created_date)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      stmt.run([name, parentId || null, isSmart ? 1 : 0, query || null, now]);
+      stmt.free();
+      lastCollectionId = db.exec('SELECT last_insert_rowid()')[0].values[0][0];
+      return lastCollectionId;
+    },
+
+    addPaperToCollection(paperId, collectionId) {
+      try {
+        db.run('INSERT OR IGNORE INTO paper_collections (paper_id, collection_id) VALUES (?, ?)',
+          [paperId, collectionId]);
+      } catch (e) { /* Ignore duplicates */ }
+    },
+
+    addReferences(paperId, refs) {
+      for (const ref of refs) {
+        const stmt = db.prepare(`
+          INSERT INTO refs (paper_id, ref_bibcode, ref_title, ref_authors, ref_year)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+        stmt.run([paperId, ref.bibcode, ref.title, ref.authors, ref.year]);
+        stmt.free();
+      }
+    },
+
+    addCitations(paperId, cites) {
+      for (const cite of cites) {
+        const stmt = db.prepare(`
+          INSERT INTO citations (paper_id, citing_bibcode, citing_title, citing_authors, citing_year)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+        stmt.run([paperId, cite.bibcode, cite.title, cite.authors, cite.year]);
+        stmt.free();
+      }
+    },
+
+    createAnnotation(paperId, annotation) {
+      const now = new Date().toISOString();
+      const stmt = db.prepare(`
+        INSERT INTO annotations (paper_id, page_number, selection_text, selection_rects, note_content, color, pdf_source, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      stmt.run([
+        paperId,
+        annotation.page_number,
+        annotation.selection_text || null,
+        typeof annotation.selection_rects === 'string' ? annotation.selection_rects : JSON.stringify(annotation.selection_rects || []),
+        annotation.note_content || null,
+        annotation.color || '#ffeb3b',
+        annotation.pdf_source || null,
+        annotation.created_at || now,
+        annotation.updated_at || now
+      ]);
+      stmt.free();
+      lastAnnotationId = db.exec('SELECT last_insert_rowid()')[0].values[0][0];
+      return lastAnnotationId;
+    },
+
+    setPageRotations(paperId, rotations, pdfSource = null) {
+      // Clear existing rotations for this paper/source
+      const sourceCondition = pdfSource ? 'AND pdf_source = ?' : 'AND (pdf_source IS NULL OR pdf_source = ?)';
+      const deleteParams = pdfSource ? [paperId, pdfSource] : [paperId, ''];
+      db.run(`DELETE FROM pdf_page_rotations WHERE paper_id = ? ${sourceCondition}`, deleteParams);
+
+      // Insert new rotations
+      for (const [pageNum, rotation] of Object.entries(rotations)) {
+        if (rotation !== 0) {
+          db.run(
+            `INSERT INTO pdf_page_rotations (paper_id, pdf_source, page_number, rotation) VALUES (?, ?, ?, ?)`,
+            [paperId, pdfSource || '', parseInt(pageNum), rotation]
+          );
+        }
+      }
+    },
+
+    saveDatabase() {
+      // No-op - caller handles saving
+    }
+  };
+}
+
 // ===== Library Management IPC Handlers =====
 
-ipcMain.handle('get-library-path', () => {
+ipcMain.handle('get-library-path', async () => {
   // First try the stored library path
   let libraryPath = store.get('libraryPath');
 
@@ -645,7 +825,7 @@ ipcMain.handle('get-library-path', () => {
   if (!libraryPath) {
     const currentId = store.get('currentLibraryId');
     if (currentId) {
-      const allLibraries = getAllLibraries();
+      const allLibraries = await getAllLibraries();
       const currentLib = allLibraries.find(l => l.id === currentId);
       if (currentLib && currentLib.exists) {
         libraryPath = currentLib.fullPath;
@@ -768,35 +948,41 @@ ipcMain.handle('is-icloud-available', () => {
   return isICloudAvailable();
 });
 
-// Helper function to count papers in a library folder
-function countPapersInLibrary(libraryPath) {
+// Helper function to count papers in a library folder (from database)
+async function countPapersInLibrary(libraryPath) {
   try {
-    const papersDir = path.join(libraryPath, 'papers');
-    if (!fs.existsSync(papersDir)) return 0;
-
-    const files = fs.readdirSync(papersDir);
-    // Count unique bibcodes (papers may have multiple PDFs like _EPRINT_PDF, _PUB_PDF)
-    const bibcodes = new Set();
-    for (const file of files) {
-      if (file.endsWith('.pdf')) {
-        // Extract bibcode from filename (format: BIBCODE_SOURCETYPE.pdf)
-        const match = file.match(/^(.+?)_(?:EPRINT_PDF|PUB_PDF|ADS_PDF)\.pdf$/);
-        if (match) {
-          bibcodes.add(match[1]);
-        } else {
-          // Fallback: count as unique paper
-          bibcodes.add(file);
-        }
-      }
+    // Use the database module if this is the current library
+    const currentPath = store.get('libraryPath');
+    if (database && libraryPath === currentPath) {
+      const stats = database.getStats();
+      return stats.total || 0;
     }
-    return bibcodes.size;
+
+    // For other libraries, open their database and count
+    const dbFile = path.join(libraryPath, 'library.sqlite');
+    if (!fs.existsSync(dbFile)) return 0;
+
+    const fileBuffer = fs.readFileSync(dbFile);
+    if (fileBuffer.length < 100) return 0;
+
+    const SQL = await ensureSqlJs();
+    const tempDb = new SQL.Database(fileBuffer);
+
+    try {
+      const result = tempDb.exec('SELECT COUNT(*) FROM papers');
+      const count = result[0]?.values[0][0] || 0;
+      return count;
+    } finally {
+      tempDb.close();
+    }
   } catch (e) {
+    console.error('Error counting papers in library:', libraryPath, e.message);
     return 0;
   }
 }
 
 // Helper function to get all libraries (used internally and via IPC)
-function getAllLibraries() {
+async function getAllLibraries() {
   const libraries = [];
 
   // Get iCloud libraries (check both real iCloud and fallback path)
@@ -821,7 +1007,7 @@ function getAllLibraries() {
         for (const lib of data.libraries || []) {
           const libPath = path.join(basePath, lib.path);
           const exists = fs.existsSync(libPath);
-          const paperCount = exists ? countPapersInLibrary(libPath) : 0;
+          const paperCount = exists ? await countPapersInLibrary(libPath) : 0;
           // Avoid duplicates
           if (!libraries.find(l => l.id === lib.id)) {
             libraries.push({
@@ -843,7 +1029,7 @@ function getAllLibraries() {
   const localLibraries = store.get('localLibraries') || [];
   for (const lib of localLibraries) {
     const exists = fs.existsSync(lib.path);
-    const paperCount = exists ? countPapersInLibrary(lib.path) : 0;
+    const paperCount = exists ? await countPapersInLibrary(lib.path) : 0;
     libraries.push({
       ...lib,
       fullPath: lib.path,
@@ -961,7 +1147,7 @@ ipcMain.handle('create-library', async (event, { name, location }) => {
 ipcMain.handle('switch-library', async (event, libraryId) => {
   try {
     // Find library by ID
-    const allLibraries = getAllLibraries();
+    const allLibraries = await getAllLibraries();
     const library = allLibraries.find(l => l.id === libraryId);
 
     if (!library) {
@@ -998,7 +1184,7 @@ ipcMain.handle('get-current-library-id', () => {
 
 ipcMain.handle('delete-library', async (event, { libraryId, deleteFiles }) => {
   try {
-    const allLibraries = getAllLibraries();
+    const allLibraries = await getAllLibraries();
     const library = allLibraries.find(l => l.id === libraryId);
 
     if (!library) {
@@ -1065,7 +1251,7 @@ ipcMain.handle('delete-library', async (event, { libraryId, deleteFiles }) => {
  */
 ipcMain.handle('get-library-file-info', async (event, libraryId) => {
   try {
-    const allLibraries = getAllLibraries();
+    const allLibraries = await getAllLibraries();
     const library = allLibraries.find(l => l.id === libraryId);
 
     if (!library || !library.exists || !library.fullPath) {
@@ -1491,6 +1677,84 @@ ipcMain.handle('import-pdfs', async () => {
   return { success: true, results: importResults };
 });
 
+// Unified import handler - accepts both PDFs and BibTeX files
+ipcMain.handle('import-files', async () => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library selected' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import Files',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Supported Files', extensions: ['pdf', 'bib'] },
+      { name: 'PDF Files', extensions: ['pdf'] },
+      { name: 'BibTeX Files', extensions: ['bib'] }
+    ]
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
+
+  // Separate files by type
+  const pdfFiles = result.filePaths.filter(f => f.toLowerCase().endsWith('.pdf'));
+  const bibFiles = result.filePaths.filter(f => f.toLowerCase().endsWith('.bib'));
+
+  const results = { pdfs: [], bibtex: { imported: 0, skipped: 0 } };
+
+  // Import PDFs
+  for (const filePath of pdfFiles) {
+    try {
+      const importResult = await pdfImport.importPDF(filePath, libraryPath);
+      const paperId = database.addPaper({
+        title: importResult.title,
+        pdf_path: importResult.pdf_path,
+        text_path: importResult.text_path,
+        bibcode: importResult.bibcode,
+        arxiv_id: importResult.arxiv_id,
+        doi: importResult.doi
+      });
+
+      // Auto-fetch ADS metadata
+      const adsResult = await fetchAndApplyAdsMetadata(paperId, importResult.extractedMetadata);
+      results.pdfs.push({ success: true, id: paperId, ...importResult });
+    } catch (error) {
+      results.pdfs.push({ success: false, path: filePath, error: error.message });
+    }
+  }
+
+  // Import BibTeX files
+  for (const filePath of bibFiles) {
+    try {
+      const filename = path.basename(filePath);
+      sendConsoleLog(`Importing BibTeX: ${filename}`, 'info');
+      const entries = bibtex.importBibtex(filePath);
+
+      if (entries.length > 0) {
+        const bulkResult = database.addPapersBulk(entries, (progress) => {
+          mainWindow.webContents.send('import-progress', {
+            current: progress.current,
+            total: progress.total,
+            inserted: progress.inserted,
+            skipped: progress.skipped,
+            paper: entries[progress.current - 1]?.title || 'Processing...'
+          });
+        });
+        results.bibtex.imported += bulkResult.inserted.length;
+        results.bibtex.skipped += bulkResult.skipped.length;
+        sendConsoleLog(`BibTeX import: ${bulkResult.inserted.length} added, ${bulkResult.skipped.length} skipped`, 'success');
+      }
+    } catch (error) {
+      sendConsoleLog(`BibTeX import error: ${error.message}`, 'error');
+    }
+  }
+
+  // Update master.bib once at the end
+  const allPapers = database.getAllPapers();
+  bibtex.updateMasterBib(libraryPath, allPapers);
+
+  return { success: true, results };
+});
+
 ipcMain.handle('get-all-papers', (event, options) => {
   if (!dbInitialized) return [];
   const papers = database.getAllPapers(options);
@@ -1877,41 +2141,9 @@ function convertPublisherHtmlToPdf(htmlUrl) {
   }
 }
 
-// ============ LEGACY PDF/ATTACHMENT HANDLERS ============
-// These handlers will be removed after migration to the new Paper Files system.
-// New code should use paper-files:* and download-queue:* APIs instead.
-// TODO: Remove these handlers after migration is complete
+// ============ PDF/ATTACHMENT HANDLERS ============
 
-// [LEGACY] Check if a PDF for a specific source already exists
-// Use paper-files:list instead
-ipcMain.handle('check-pdf-exists', async (event, paperId, sourceType) => {
-  const libraryPath = store.get('libraryPath');
-  if (!libraryPath) return null;
-
-  // Map source types to expected suffixes
-  const sourceSuffixes = {
-    publisher: '_pub.pdf',
-    arxiv: '_arxiv.pdf',
-    ads: '_ads.pdf',
-    author: '_author.pdf'
-  };
-
-  const suffix = sourceSuffixes[sourceType];
-  if (!suffix) return null;
-
-  // Check for PDF with the source suffix
-  const pdfPath = `pdfs/${paperId}${suffix}`;
-  const fullPath = path.join(libraryPath, pdfPath);
-
-  if (fs.existsSync(fullPath)) {
-    return pdfPath;
-  }
-
-  return null;
-});
-
-// [LEGACY] Download PDF from a specific source
-// Use download-queue:enqueue instead
+// Download PDF from a specific source
 ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) => {
   const token = store.get('adsToken');
   const libraryPath = store.get('libraryPath');
@@ -2306,33 +2538,42 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
       // Fetch refs/cites in parallel
       sendConsoleLog(`[${bibcode}] Fetching refs & cites...`, 'info');
       const [refs, cits] = await Promise.all([
-        adsApi.getReferences(token, adsData.bibcode).catch(() => []),
-        adsApi.getCitations(token, adsData.bibcode).catch(() => [])
+        adsApi.getReferences(token, adsData.bibcode).catch(e => {
+          sendConsoleLog(`[${bibcode}] Refs fetch failed: ${e?.message || e}`, 'warn');
+          return [];
+        }),
+        adsApi.getCitations(token, adsData.bibcode).catch(e => {
+          sendConsoleLog(`[${bibcode}] Cites fetch failed: ${e?.message || e}`, 'warn');
+          return [];
+        })
       ]);
 
-      database.addReferences(paper.id, refs.map(r => ({
+      // Filter out any null/undefined entries and map to database format
+      const validRefs = (refs || []).filter(r => r && r.bibcode).map(r => ({
         bibcode: r.bibcode,
         title: r.title?.[0],
         authors: r.author?.join(', '),
         year: r.year
-      })), false);
+      }));
+      database.addReferences(paper.id, validRefs, false);
 
-      database.addCitations(paper.id, cits.map(c => ({
+      const validCites = (cits || []).filter(c => c && c.bibcode).map(c => ({
         bibcode: c.bibcode,
         title: c.title?.[0],
         authors: c.author?.join(', '),
         year: c.year
-      })), false);
+      }));
+      database.addCitations(paper.id, validCites, false);
 
-      if (refs.length > 0 || cits.length > 0) {
-        sendConsoleLog(`[${bibcode}] Found ${refs.length} refs, ${cits.length} cites`, 'success');
+      if (validRefs.length > 0 || validCites.length > 0) {
+        sendConsoleLog(`[${bibcode}] Found ${validRefs.length} refs, ${validCites.length} cites`, 'success');
       }
 
       // Store available PDF sources as metadata (don't download during sync)
       try {
         const esources = await adsApi.getEsources(token, bibcode);
-        const availableSources = esources
-          .filter(e => ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'].includes(e.link_type?.split('|').pop() || e.type))
+        const availableSources = (esources || [])
+          .filter(e => e && ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'].includes(e.link_type?.split('|').pop() || e.type))
           .map(e => {
             const linkType = e.link_type?.split('|').pop() || e.type;
             if (linkType === 'EPRINT_PDF') return 'arxiv';
@@ -2350,14 +2591,26 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
         }
       } catch (e) {
         // Esources fetch is non-critical, log and continue
-        sendConsoleLog(`[${bibcode}] Could not fetch esources: ${e.message}`, 'warn');
+        sendConsoleLog(`[${bibcode}] Could not fetch esources: ${e?.message || e}`, 'warn');
       }
 
       sendConsoleLog(`[${bibcode}] ✓ Done`, 'success');
       return { success: true };
     } catch (error) {
-      sendConsoleLog(`[${bibcode}] ✗ Error: ${error.message}`, 'error');
-      return { success: false, error: error.message };
+      // Extract error message from various error types
+      const errorMessage = error?.message || (typeof error === 'string' ? error : JSON.stringify(error) || 'Unknown error');
+      const errorStack = error?.stack || '';
+
+      // Build detailed error report
+      const details = [
+        `Paper: ${bibcode}`,
+        `Error: ${errorMessage}`,
+        errorStack ? `\nStack Trace:\n${errorStack}` : '',
+        `\nTimestamp: ${new Date().toISOString()}`
+      ].filter(Boolean).join('\n');
+
+      sendConsoleLog(`[${bibcode}] ✗ Error: ${errorMessage}`, 'error', details);
+      return { success: false, error: errorMessage };
     }
   };
 
@@ -3329,6 +3582,287 @@ ipcMain.handle('import-bibtex-from-path', async (event, filePath) => {
   } catch (error) {
     return { success: false, error: error.message };
   }
+});
+
+// ===== Library Export/Import IPC Handlers =====
+
+const exportService = require('./src/main/export-service.cjs');
+
+ipcMain.handle('get-export-stats', () => {
+  if (!dbInitialized) return null;
+  const libraryPath = store.get('libraryPath');
+  return exportService.getExportStats(database, libraryPath);
+});
+
+ipcMain.handle('export-library', async (event, options) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library selected' };
+
+  // Determine save path - use library name for filename
+  const safeLibraryName = (options.libraryName || 'My Library').replace(/[^a-zA-Z0-9 _-]/g, '').trim();
+  let savePath = options.targetPath;
+  if (options.forSharing) {
+    // Export to temp directory for sharing
+    savePath = path.join(os.tmpdir(), `${safeLibraryName}.adslib`);
+  } else if (!savePath) {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export Library',
+      defaultPath: `${safeLibraryName}.adslib`,
+      filters: [{ name: 'ADS Library', extensions: ['adslib'] }]
+    });
+    if (result.canceled) return { success: false, canceled: true };
+    savePath = result.filePath;
+  }
+
+  try {
+    sendConsoleLog('Starting library export...', 'info');
+
+    const result = await exportService.exportLibrary(
+      options,
+      database,
+      libraryPath,
+      savePath,
+      (phase, current, total) => {
+        mainWindow.webContents.send('export-progress', { phase, current, total });
+      }
+    );
+
+    sendConsoleLog(`Library exported to ${path.basename(savePath)}`, 'success');
+    return result;
+  } catch (error) {
+    console.error('Export failed:', error);
+    sendConsoleLog(`Export failed: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('preview-library-import', async (event, filePath) => {
+  try {
+    // If no file path provided, show open dialog
+    let targetPath = filePath;
+    if (!targetPath) {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Import Library',
+        properties: ['openFile'],
+        filters: [{ name: 'ADS Library', extensions: ['adslib'] }]
+      });
+      if (result.canceled) return { success: false, canceled: true };
+      targetPath = result.filePaths[0];
+    }
+
+    const preview = await exportService.previewImport(targetPath);
+    return { success: true, filePath: targetPath, ...preview };
+  } catch (error) {
+    console.error('Preview failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('import-library', async (event, options) => {
+  const { mode, libraryName } = options;
+
+  // Handle "new" mode - create a new library and import there
+  if (mode === 'new') {
+    try {
+      sendConsoleLog(`Creating new library "${libraryName}" from import...`, 'info');
+
+      // Determine where to create the library (prefer iCloud)
+      let iCloudPath;
+      if (isICloudAvailable() && canWriteToICloud()) {
+        iCloudPath = getICloudContainerPath();
+      } else if (isICloudAvailable()) {
+        iCloudPath = getICloudFallbackPath();
+        if (!fs.existsSync(iCloudPath)) {
+          fs.mkdirSync(iCloudPath, { recursive: true });
+        }
+      } else {
+        // Fallback to Documents
+        iCloudPath = path.join(app.getPath('documents'), 'ADS Reader Libraries');
+        if (!fs.existsSync(iCloudPath)) {
+          fs.mkdirSync(iCloudPath, { recursive: true });
+        }
+      }
+
+      // Create unique library name
+      const safeName = (libraryName || 'Imported Library').replace(/[^a-zA-Z0-9 _-]/g, '').trim();
+      let newLibraryPath = path.join(iCloudPath, safeName);
+      let counter = 1;
+      while (fs.existsSync(newLibraryPath)) {
+        newLibraryPath = path.join(iCloudPath, `${safeName} ${counter}`);
+        counter++;
+      }
+
+      // Create library folder structure
+      createLibraryStructure(newLibraryPath);
+
+      // Use sql.js directly to create a fresh database for the new library
+      const initSqlJs = require('sql.js');
+      const { applySchema } = require('./src/shared/database-schema.cjs');
+      const SQL = await initSqlJs();
+      const newDb = new SQL.Database();
+      applySchema(newDb);
+
+      // Create a minimal database interface for the import
+      const tempDbInterface = createTempDatabaseInterface(newDb, newLibraryPath);
+
+      // Import into the new library
+      const result = await exportService.importLibrary(
+        { ...options, mode: 'merge' }, // Force merge mode since it's a new empty library
+        tempDbInterface,
+        newLibraryPath,
+        (phase, current, total) => {
+          mainWindow.webContents.send('import-library-progress', { phase, current, total });
+        }
+      );
+
+      // Save the new database to disk
+      const dbData = newDb.export();
+      const dbBuffer = Buffer.from(dbData);
+      fs.writeFileSync(path.join(newLibraryPath, 'library.sqlite'), dbBuffer);
+
+      // Add to libraries.json
+      const librariesJsonPath = path.join(iCloudPath, 'libraries.json');
+      let data = { version: 1, libraries: [] };
+      if (fs.existsSync(librariesJsonPath)) {
+        try {
+          data = JSON.parse(fs.readFileSync(librariesJsonPath, 'utf8'));
+        } catch (e) { /* Use default */ }
+      }
+
+      const id = require('crypto').randomUUID();
+      data.libraries.push({
+        id,
+        name: path.basename(newLibraryPath),
+        path: path.basename(newLibraryPath),
+        createdAt: new Date().toISOString(),
+        createdOn: 'macOS',
+        importedFrom: options.filePath ? path.basename(options.filePath) : 'import'
+      });
+
+      fs.writeFileSync(librariesJsonPath, JSON.stringify(data, null, 2));
+
+      sendConsoleLog(
+        `Library "${path.basename(newLibraryPath)}" created with ${result.papersImported} papers`,
+        'success'
+      );
+
+      return { success: true, libraryPath: newLibraryPath, ...result };
+    } catch (error) {
+      console.error('Import to new library failed:', error);
+      sendConsoleLog(`Import failed: ${error.message}`, 'error');
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Handle "merge" mode - add to current library
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath) return { success: false, error: 'No library selected' };
+
+  try {
+    sendConsoleLog(`Adding to current library...`, 'info');
+
+    const result = await exportService.importLibrary(
+      options,
+      database,
+      libraryPath,
+      (phase, current, total) => {
+        mainWindow.webContents.send('import-library-progress', { phase, current, total });
+      }
+    );
+
+    sendConsoleLog(
+      `Import complete: ${result.papersImported} papers, ${result.pdfsImported} PDFs, ${result.annotationsImported} annotations`,
+      'success'
+    );
+
+    return { success: true, ...result };
+  } catch (error) {
+    console.error('Import failed:', error);
+    sendConsoleLog(`Import failed: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('share-file-native', async (event, filePath, title) => {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { success: false, error: 'File not found' };
+  }
+
+  // On macOS, use native share sheet via Swift helper
+  if (process.platform === 'darwin') {
+    // Path to the Swift share helper (bundled with the app)
+    let helperPath;
+    if (app.isPackaged) {
+      // In packaged app, helper is in Resources/native/
+      helperPath = path.join(process.resourcesPath, 'native', 'ShareHelper');
+    } else {
+      // In development, helper is in project root
+      helperPath = path.join(__dirname, 'native', 'ShareHelper');
+    }
+
+    // Check if helper exists
+    if (!fs.existsSync(helperPath)) {
+      // Fallback to Finder if helper not available
+      sendConsoleLog('Share helper not found, using Finder fallback', 'warn');
+      shell.showItemInFolder(filePath);
+      return { success: true, method: 'finder' };
+    }
+
+    return new Promise((resolve) => {
+      const child = spawn(helperPath, [filePath]);
+      let output = '';
+      let errorOutput = '';
+
+      child.stdout.on('data', (data) => { output += data.toString(); });
+      child.stderr.on('data', (data) => { errorOutput += data.toString(); });
+
+      child.on('close', (code) => {
+        if (output.includes('SUCCESS')) {
+          sendConsoleLog('File shared successfully', 'success');
+          resolve({ success: true, method: 'native-picker' });
+        } else if (output.includes('CANCELLED')) {
+          resolve({ success: true, canceled: true });
+        } else if (output.includes('TIMEOUT')) {
+          resolve({ success: false, error: 'Share timed out' });
+        } else {
+          sendConsoleLog(`Share helper error: ${errorOutput || output}`, 'error');
+          resolve({ success: false, error: errorOutput || output || 'Unknown error' });
+        }
+      });
+
+      child.on('error', (err) => {
+        sendConsoleLog(`Failed to launch share helper: ${err.message}`, 'error');
+        // Fallback to Finder
+        shell.showItemInFolder(filePath);
+        resolve({ success: true, method: 'finder' });
+      });
+    });
+  }
+
+  return { success: false, error: 'Not supported on this platform' };
+});
+
+ipcMain.handle('compose-email', async (event, { to, subject, body, attachmentPath }) => {
+  // Encode for mailto URL
+  const encodedSubject = encodeURIComponent(subject || '');
+  const encodedBody = encodeURIComponent(body || '');
+  const encodedTo = encodeURIComponent(to || '');
+
+  const mailtoUrl = `mailto:${encodedTo}?subject=${encodedSubject}&body=${encodedBody}`;
+
+  // Show the file in Finder for easy attachment
+  if (attachmentPath && fs.existsSync(attachmentPath)) {
+    shell.showItemInFolder(attachmentPath);
+  }
+
+  // Open mail client
+  shell.openExternal(mailtoUrl);
+
+  return { success: true };
 });
 
 // ===== Collections IPC Handlers =====
@@ -4380,6 +4914,73 @@ ipcMain.handle('get-downloaded-pdf-sources', (event, paperId) => {
   return downloadedSources;
 });
 
+// Get full paths to all PDFs for a paper (for drag-and-drop)
+ipcMain.handle('get-paper-pdf-paths', (event, paperId) => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath || !dbInitialized) return {};
+
+  const paper = database.getPaper(paperId);
+  if (!paper) return {};
+
+  const papersDir = path.join(libraryPath, 'papers');
+  const paths = {};
+
+  // Check for new naming convention: bibcode_SOURCETYPE.pdf
+  if (paper.bibcode) {
+    const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF', 'ATTACHED'];
+    for (const sourceType of sourceTypes) {
+      const filename = `${baseFilename}_${sourceType}.pdf`;
+      const filePath = path.join(papersDir, filename);
+      if (fs.existsSync(filePath)) {
+        paths[sourceType] = filePath;
+      }
+    }
+  }
+
+  // Also check legacy pdf_path
+  if (paper.pdf_path && Object.keys(paths).length === 0) {
+    const legacyPath = path.join(libraryPath, paper.pdf_path);
+    if (fs.existsSync(legacyPath)) {
+      paths['LEGACY'] = legacyPath;
+    }
+  }
+
+  return paths;
+});
+
+// Native file drag for dragging files to Finder, Mail, etc.
+ipcMain.on('start-file-drag', (event, filePath) => {
+  if (!filePath || !fs.existsSync(filePath)) {
+    console.error('Cannot drag file - path not found:', filePath);
+    return;
+  }
+
+  // Use Electron's native drag API
+  event.sender.startDrag({
+    file: filePath,
+    icon: path.join(__dirname, 'assets', 'icon.png') // Use app icon as drag icon
+  });
+});
+
+// Open file with system default application (Preview.app for PDFs, etc.)
+ipcMain.handle('open-path', async (event, filePath) => {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { success: false, error: 'File not found' };
+  }
+
+  try {
+    const result = await shell.openPath(filePath);
+    if (result) {
+      // openPath returns an error string if failed, empty string on success
+      return { success: false, error: result };
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // [LEGACY] Delete a PDF file for a paper
 // Use paper-files:remove instead
 ipcMain.handle('delete-pdf', (event, paperId, sourceType) => {
@@ -4438,6 +5039,22 @@ ipcMain.handle('delete-annotation', (event, id) => {
   if (!dbInitialized) return { success: false, error: 'Database not initialized' };
   try {
     database.deleteAnnotation(id);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// PDF Page Rotations
+ipcMain.handle('get-page-rotations', (event, paperId, pdfSource) => {
+  if (!dbInitialized) return {};
+  return database.getPageRotations(paperId, pdfSource);
+});
+
+ipcMain.handle('set-page-rotation', (event, paperId, pageNumber, rotation, pdfSource) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+  try {
+    database.setPageRotation(paperId, pageNumber, rotation, pdfSource);
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
@@ -4695,8 +5312,8 @@ function initializePaperFilesSystem(libraryPath) {
 
     const strategies = {
       arxiv: new ArxivDownloader(),
-      publisher: new PublisherDownloader({ proxyUrl }),
-      ads_scan: new AdsDownloader({ adsToken })
+      publisher: new PublisherDownloader({ proxyUrl, adsApi, adsToken }),
+      ads_scan: new AdsDownloader({ adsApi, adsToken })
     };
 
     strategyManager = new DownloadStrategyManager(strategies, pdfSourcePriority);
@@ -4704,14 +5321,65 @@ function initializePaperFilesSystem(libraryPath) {
     // Initialize DownloadQueue with download function and paper lookup
     downloadQueue = new DownloadQueue({
       concurrency: 2,
-      downloadFn: async (paper, destPath, sourceType, onProgress, signal) => {
+      downloadFn: async (paper, sourceType, onProgress, signal) => {
+        // Generate destination path for the PDF
+        const libraryPath = store.get('libraryPath');
+        if (!libraryPath) {
+          return { success: false, error: 'No library path configured' };
+        }
+
+        const baseFilename = (paper.bibcode || `paper_${paper.id}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const sourceTypeUpper = sourceType.toUpperCase().replace(/-/g, '_');
+        const sourceMap = { 'ARXIV': 'EPRINT_PDF', 'PUBLISHER': 'PUB_PDF', 'ADS_SCAN': 'ADS_PDF' };
+        const normalizedSource = sourceMap[sourceTypeUpper] || sourceTypeUpper;
+        const filename = `${baseFilename}_${normalizedSource}.pdf`;
+        const destPath = path.join(libraryPath, 'papers', filename);
+        const papersDir = path.join(libraryPath, 'papers');
+
+        // Ensure papers directory exists
+        if (!fs.existsSync(papersDir)) {
+          fs.mkdirSync(papersDir, { recursive: true });
+        }
+
         // Use the strategy manager to download the PDF
-        return await strategyManager.downloadForPaper(paper, destPath, sourceType, onProgress, signal);
+        const result = await strategyManager.downloadForPaper(paper, destPath, sourceType, onProgress, signal);
+
+        // Add relative path to result for the renderer to use
+        if (result.success) {
+          result.path = `papers/${filename}`;
+          // Also update the database with the new pdf_path
+          database.updatePaper(paper.id, { pdf_path: result.path });
+
+          // Register in paper_files table for the unified files panel
+          const sourceTypeMap = { 'arxiv': 'arxiv', 'publisher': 'publisher', 'ads_scan': 'ads_scan' };
+          const normalizedSourceType = sourceTypeMap[sourceType] || sourceType;
+          const fileSize = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0;
+
+          // Check if already registered (avoid duplicates)
+          const existingFiles = database.getPaperFiles(paper.id);
+          const alreadyExists = existingFiles.some(f => f.source_type === normalizedSourceType);
+
+          if (!alreadyExists) {
+            database.addPaperFile(paper.id, {
+              filename: filename,
+              original_name: filename,
+              mime_type: 'application/pdf',
+              file_size: fileSize,
+              file_role: 'pdf',
+              source_type: normalizedSourceType,
+              status: 'ready'
+            });
+          }
+        }
+
+        return result;
       },
       getPaperFn: async (paperId) => {
-        // Look up paper by ID or bibcode
-        const paper = database.getPaperByBibcode(paperId);
-        return paper;
+        // Look up paper by ID (number) or bibcode (string)
+        if (typeof paperId === 'number') {
+          return database.getPaper(paperId);
+        }
+        return database.getPaperByBibcode(paperId);
       }
     });
 
@@ -4774,7 +5442,15 @@ ipcMain.handle('paper-files:remove', async (event, fileId) => {
       return { success: false, error: 'Paper Files system not initialized' };
     }
 
-    await fileManager.removeFile(fileId);
+    // Ensure fileId is an integer
+    const parsedFileId = typeof fileId === 'string' ? parseInt(fileId, 10) : fileId;
+    if (isNaN(parsedFileId)) {
+      return { success: false, error: `Invalid file ID: ${fileId}` };
+    }
+
+    console.log(`[paper-files:remove] Removing file ${parsedFileId}`);
+    await fileManager.removeFile(parsedFileId);
+    sendConsoleLog(`File removed (ID: ${parsedFileId})`, 'info');
     return { success: true };
   } catch (error) {
     console.error('paper-files:remove error:', error);
@@ -4840,6 +5516,65 @@ ipcMain.handle('paper-files:set-primary-pdf', async (event, paperId, fileId) => 
     return { success: true };
   } catch (error) {
     console.error('paper-files:set-primary-pdf error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Rescan paper files - find PDFs on disk that aren't registered in paper_files
+ipcMain.handle('paper-files:rescan', async (event, paperId) => {
+  const libraryPath = store.get('libraryPath');
+  if (!libraryPath || !dbInitialized) {
+    return { success: false, error: 'Library not initialized' };
+  }
+
+  try {
+    const paper = database.getPaper(paperId);
+    if (!paper) {
+      return { success: false, error: 'Paper not found' };
+    }
+
+    const papersDir = path.join(libraryPath, 'papers');
+    if (!fs.existsSync(papersDir)) {
+      return { success: true, found: 0 };
+    }
+
+    // Get currently registered files
+    const registeredFiles = database.getPaperFiles(paperId);
+    const registeredSources = new Set(registeredFiles.map(f => f.source_type));
+
+    // Check for PDFs matching this paper's bibcode
+    const baseFilename = (paper.bibcode || `paper_${paper.id}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const sourceTypes = [
+      { pattern: 'EPRINT_PDF', normalized: 'arxiv' },
+      { pattern: 'PUB_PDF', normalized: 'publisher' },
+      { pattern: 'ADS_PDF', normalized: 'ads_scan' },
+      { pattern: 'ATTACHED', normalized: 'manual' }
+    ];
+
+    let found = 0;
+    for (const { pattern, normalized } of sourceTypes) {
+      const filename = `${baseFilename}_${pattern}.pdf`;
+      const filePath = path.join(papersDir, filename);
+
+      if (fs.existsSync(filePath) && !registeredSources.has(normalized)) {
+        const stats = fs.statSync(filePath);
+        database.addPaperFile(paperId, {
+          filename: filename,
+          original_name: filename,
+          mime_type: 'application/pdf',
+          file_size: stats.size,
+          file_role: 'pdf',
+          source_type: normalized,
+          status: 'ready'
+        });
+        found++;
+        sendConsoleLog(`Found unregistered PDF: ${filename}`, 'info');
+      }
+    }
+
+    return { success: true, found };
+  } catch (error) {
+    console.error('paper-files:rescan error:', error);
     return { success: false, error: error.message };
   }
 });
@@ -5353,6 +6088,45 @@ function createApplicationMenu() {
         { role: 'quit' }
       ]
     }] : []),
+    // File menu
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'Export Library...',
+          accelerator: 'CmdOrCtrl+Shift+E',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) {
+              win.webContents.send('show-export-modal');
+            }
+          }
+        },
+        {
+          label: 'Import Library...',
+          accelerator: 'CmdOrCtrl+Shift+I',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) {
+              win.webContents.send('show-import-modal');
+            }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Import BibTeX...',
+          accelerator: 'CmdOrCtrl+I',
+          click: async () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) {
+              const result = await require('./src/main/database.cjs');
+              // Trigger via renderer
+              win.webContents.send('trigger-import-bibtex');
+            }
+          }
+        }
+      ]
+    },
     // Edit menu
     {
       label: 'Edit',

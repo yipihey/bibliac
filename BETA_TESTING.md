@@ -71,7 +71,7 @@ Thank you for participating in the ADS Reader beta! Your feedback is invaluable 
 6. Click "Send Feedback" to open your email client
 
 ### Email Directly
-Send feedback to: **adsreader@icloud.com**
+Send feedback to: **adsreader@tomabel.org**
 
 Please include:
 - What you were trying to do
@@ -117,7 +117,7 @@ Please include:
 
 ## Contact
 
-- **Email**: adsreader@icloud.com
+- **Email**: adsreader@tomabel.org
 - **GitHub**: Issues for technical bug reports
 
 ---

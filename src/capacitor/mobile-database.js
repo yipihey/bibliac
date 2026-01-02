@@ -976,6 +976,208 @@ export function getStats() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PAPER FILES OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Add a file record to the paper_files table
+ * @param {number} paperId - Paper ID
+ * @param {Object} fileData - File metadata
+ * @returns {number} - New file record ID
+ */
+export function addPaperFile(paperId, fileData) {
+  const now = new Date().toISOString();
+
+  const stmt = db.prepare(`
+    INSERT INTO paper_files (
+      paper_id, file_hash, filename, original_name, mime_type, file_size,
+      file_role, source_type, source_url, added_date, status, error_message,
+      text_extracted, text_path
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  stmt.run([
+    paperId,
+    fileData.file_hash || null,
+    fileData.filename,
+    fileData.original_name || null,
+    fileData.mime_type || 'application/octet-stream',
+    fileData.file_size || null,
+    fileData.file_role || 'other',
+    fileData.source_type || null,
+    fileData.source_url || null,
+    fileData.added_date || now,
+    fileData.status || 'ready',
+    fileData.error_message || null,
+    fileData.text_extracted || 0,
+    fileData.text_path || null
+  ]);
+  stmt.free();
+
+  const result = db.exec('SELECT last_insert_rowid()');
+  return result[0].values[0][0];
+}
+
+/**
+ * Get a file record by ID
+ * @param {number} fileId - File record ID
+ * @returns {Object|null} - File record or null
+ */
+export function getPaperFile(fileId) {
+  const stmt = db.prepare('SELECT * FROM paper_files WHERE id = ?');
+  stmt.bind([fileId]);
+
+  if (stmt.step()) {
+    const file = stmt.getAsObject();
+    stmt.free();
+    return file;
+  }
+  stmt.free();
+  return null;
+}
+
+/**
+ * Get all files for a paper with optional filters
+ * @param {number} paperId - Paper ID
+ * @param {Object} filters - Optional filters (role, status)
+ * @returns {Array} - Array of file records
+ */
+export function getPaperFiles(paperId, filters = {}) {
+  let sql = 'SELECT * FROM paper_files WHERE paper_id = ?';
+  const params = [paperId];
+
+  if (filters.role) {
+    sql += ' AND file_role = ?';
+    params.push(filters.role);
+  }
+
+  if (filters.status) {
+    sql += ' AND status = ?';
+    params.push(filters.status);
+  }
+
+  sql += ' ORDER BY added_date DESC';
+
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+
+  const files = [];
+  while (stmt.step()) {
+    files.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return files;
+}
+
+/**
+ * Update a file record
+ * @param {number} fileId - File record ID
+ * @param {Object} updates - Fields to update
+ * @returns {boolean} - Success
+ */
+export function updatePaperFile(fileId, updates) {
+  const allowedFields = [
+    'file_hash', 'filename', 'original_name', 'mime_type', 'file_size',
+    'file_role', 'source_type', 'source_url', 'status', 'error_message',
+    'text_extracted', 'text_path'
+  ];
+
+  const setClauses = [];
+  const values = [];
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (allowedFields.includes(key)) {
+      setClauses.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+
+  if (setClauses.length === 0) return false;
+
+  values.push(fileId);
+  const sql = `UPDATE paper_files SET ${setClauses.join(', ')} WHERE id = ?`;
+
+  db.run(sql, values);
+  return true;
+}
+
+/**
+ * Delete a file record
+ * @param {number} fileId - File record ID
+ * @returns {boolean} - Success
+ */
+export function deletePaperFile(fileId) {
+  db.run('DELETE FROM paper_files WHERE id = ?', [fileId]);
+  return true;
+}
+
+/**
+ * Find files by hash (for deduplication)
+ * @param {string} hash - SHA-256 hash
+ * @returns {Array} - Array of file records with this hash
+ */
+export function getFilesByHash(hash) {
+  const stmt = db.prepare('SELECT * FROM paper_files WHERE file_hash = ?');
+  stmt.bind([hash]);
+
+  const files = [];
+  while (stmt.step()) {
+    files.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return files;
+}
+
+/**
+ * Get PDF files for a paper, sorted by source priority
+ * @param {number} paperId - Paper ID
+ * @returns {Array} - Array of PDF file records
+ */
+export function getPaperPdfs(paperId) {
+  const stmt = db.prepare(`
+    SELECT * FROM paper_files
+    WHERE paper_id = ? AND file_role = 'pdf' AND status = 'ready'
+    ORDER BY
+      CASE source_type
+        WHEN 'publisher' THEN 1
+        WHEN 'arxiv' THEN 2
+        WHEN 'ads_scan' THEN 3
+        WHEN 'manual' THEN 4
+        ELSE 5
+      END
+  `);
+  stmt.bind([paperId]);
+
+  const files = [];
+  while (stmt.step()) {
+    files.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return files;
+}
+
+/**
+ * Get pending/downloading files (for queue recovery)
+ * @returns {Array} - Array of file records with pending status
+ */
+export function getPendingFiles() {
+  const stmt = db.prepare(`
+    SELECT pf.*, p.bibcode, p.arxiv_id, p.doi
+    FROM paper_files pf
+    JOIN papers p ON pf.paper_id = p.id
+    WHERE pf.status IN ('pending', 'queued', 'downloading')
+    ORDER BY pf.added_date
+  `);
+
+  const files = [];
+  while (stmt.step()) {
+    files.push(stmt.getAsObject());
+  }
+  stmt.free();
+  return files;
+}
+
 /**
  * Initialize database from iCloud
  * @param {string} libPath - Library folder path (relative to iCloud container)

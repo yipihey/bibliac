@@ -11,6 +11,8 @@ import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { SecureStorage } from '@aparajita/capacitor-secure-storage';
 import { CapacitorHttp, registerPlugin } from '@capacitor/core';
 import { FileOpener } from '@capacitor-community/file-opener';
+import { Share } from '@capacitor/share';
+import JSZip from 'jszip';
 
 // Register native iCloud plugin
 const ICloud = registerPlugin('ICloud');
@@ -1411,45 +1413,70 @@ const capacitorAPI = {
   },
 
   async getPdfPath(relativePath) {
-    // Return URI for PDF viewing
+    // Return URI for PDF viewing - but only if file actually exists
     try {
-      // Add library folder prefix if not present
-      const fullPath = relativePath.startsWith(LIBRARY_FOLDER)
+      // Use current library path and location
+      const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+      const location = MobileDB.getLocation?.() || 'local';
+      const fullPath = relativePath.startsWith(currentLibraryPath)
         ? relativePath
-        : `${LIBRARY_FOLDER}/${relativePath}`;
+        : `${currentLibraryPath}/${relativePath}`;
 
-      const result = await Filesystem.getUri({
-        path: fullPath,
-        directory: Directory.Documents
-      });
-      return result.uri;
+      // Check if file exists using appropriate filesystem
+      if (location === 'icloud') {
+        await ICloud.stat({ path: fullPath });
+        // For iCloud, return the path directly (getPdfAsBlob will read it)
+        return fullPath;
+      } else {
+        // Local - check and get URI
+        await Filesystem.stat({
+          path: fullPath,
+          directory: Directory.Documents
+        });
+        const result = await Filesystem.getUri({
+          path: fullPath,
+          directory: Directory.Documents
+        });
+        return result.uri;
+      }
     } catch {
+      // File doesn't exist or error
       return null;
     }
   },
 
   async getPdfAsBlob(relativePath) {
     // Read PDF as Uint8Array for iOS WKWebView (file:// URLs don't work)
-    // Uses ICloud plugin which handles both real iCloud and simulator fallback
     // Returns Uint8Array directly for PDF.js (blob URLs don't work reliably in WKWebView)
     try {
-      // Use current library path, not the static LIBRARY_FOLDER constant
+      // Use current library path and location
       const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+      const location = MobileDB.getLocation?.() || 'local';
       const fullPath = relativePath.startsWith(currentLibraryPath)
         ? relativePath
         : `${currentLibraryPath}/${relativePath}`;
 
-      console.log('[getPdfAsBlob] Library path:', currentLibraryPath, 'Full path:', fullPath);
+      console.log('[getPdfAsBlob] Library path:', currentLibraryPath, 'Location:', location, 'Full path:', fullPath);
 
-      // Read as base64 using ICloud plugin (handles iCloud + fallback)
-      // encoding: null means binary/base64
-      const result = await ICloud.readFile({
-        path: fullPath,
-        encoding: null
-      });
+      // Read file using the appropriate filesystem based on location
+      let base64Data;
+      if (location === 'icloud') {
+        const result = await ICloud.readFile({
+          path: fullPath,
+          encoding: null
+        });
+        base64Data = result.data;
+      } else {
+        // Local storage - use Filesystem plugin
+        const result = await Filesystem.readFile({
+          path: fullPath,
+          directory: Directory.Documents
+        });
+        base64Data = result.data;
+      }
 
       // Convert base64 to Uint8Array (PDF.js accepts this directly)
-      const byteCharacters = atob(result.data);
+      const byteCharacters = atob(base64Data);
       const byteNumbers = new Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
@@ -2908,6 +2935,547 @@ const capacitorAPI = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // LIBRARY EXPORT/IMPORT
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async getExportStats() {
+    try {
+      if (!dbInitialized) await initializeDatabase();
+
+      const papers = MobileDB.getAllPapers();
+      const collections = MobileDB.getCollections();
+
+      let pdfCount = 0;
+      let pdfSize = 0;
+      let annotationCount = 0;
+      let refCount = 0;
+      let citeCount = 0;
+
+      for (const paper of papers) {
+        // Count PDFs
+        if (paper.pdf_path) {
+          try {
+            const pdfPath = `${currentLibraryPath}/${paper.pdf_path}`;
+            const stat = currentLibraryLocation === 'icloud'
+              ? await ICloud.stat({ path: pdfPath })
+              : await Filesystem.stat({ path: pdfPath, directory: Directory.Documents });
+            if (stat) {
+              pdfCount++;
+              pdfSize += stat.size || 0;
+            }
+          } catch (e) {
+            // PDF doesn't exist
+          }
+        }
+
+        // Count annotations
+        annotationCount += paper.annotation_count || 0;
+
+        // Count refs and cites
+        const refs = MobileDB.getReferences(paper.id);
+        const cites = MobileDB.getCitations(paper.id);
+        refCount += refs.length;
+        citeCount += cites.length;
+      }
+
+      return {
+        paperCount: papers.length,
+        collectionCount: collections.length,
+        pdfCount,
+        pdfSize,
+        annotationCount,
+        refCount,
+        citeCount
+      };
+    } catch (error) {
+      console.error('[API] Failed to get export stats:', error);
+      return { paperCount: 0, pdfCount: 0, pdfSize: 0, annotationCount: 0, refCount: 0, citeCount: 0 };
+    }
+  },
+
+  async exportLibrary(options) {
+    try {
+      if (!dbInitialized) await initializeDatabase();
+
+      const { includePdfs, includeRefs, includeCites, includeAnnotations } = options;
+
+      const zip = new JSZip();
+
+      // Get all data
+      const papers = MobileDB.getAllPapers();
+      const collections = MobileDB.getCollections();
+
+      // Build library.json
+      const libraryData = {
+        papers: papers.map(p => ({
+          bibcode: p.bibcode,
+          title: p.title,
+          authors: p.authors,
+          year: p.year,
+          pubdate: p.pubdate,
+          abstract: p.abstract,
+          journal: p.journal,
+          volume: p.volume,
+          page: p.page,
+          doi: p.doi,
+          arxiv_id: p.arxiv_id,
+          bibtex: p.bibtex,
+          rating: p.rating,
+          read_status: p.read_status,
+          pdf_path: p.pdf_path,
+          citation_count: p.citation_count
+        })),
+        collections: collections.map(c => {
+          const paperBibcodes = MobileDB.getPapersInCollection(c.id)
+            .map(pid => papers.find(p => p.id === pid)?.bibcode)
+            .filter(Boolean);
+          return {
+            id: c.id,
+            name: c.name,
+            parent_id: c.parent_id,
+            is_smart: c.is_smart,
+            query: c.query,
+            papers: paperBibcodes
+          };
+        }),
+        refs: {},
+        cites: {},
+        annotations: {}
+      };
+
+      // Add refs if requested
+      if (includeRefs) {
+        for (const paper of papers) {
+          if (paper.bibcode) {
+            const refs = MobileDB.getReferences(paper.id);
+            if (refs.length > 0) {
+              libraryData.refs[paper.bibcode] = refs.map(r => ({
+                ref_bibcode: r.bibcode,
+                ref_title: r.title,
+                ref_authors: r.authors,
+                ref_year: r.year
+              }));
+            }
+          }
+        }
+      }
+
+      // Add cites if requested
+      if (includeCites) {
+        for (const paper of papers) {
+          if (paper.bibcode) {
+            const cites = MobileDB.getCitations(paper.id);
+            if (cites.length > 0) {
+              libraryData.cites[paper.bibcode] = cites.map(c => ({
+                citing_bibcode: c.bibcode,
+                citing_title: c.title,
+                citing_authors: c.authors,
+                citing_year: c.year
+              }));
+            }
+          }
+        }
+      }
+
+      // Add annotations if requested
+      if (includeAnnotations) {
+        for (const paper of papers) {
+          if (paper.bibcode) {
+            const annotations = MobileDB.getAnnotations(paper.id);
+            if (annotations.length > 0) {
+              libraryData.annotations[paper.bibcode] = annotations.map(a => ({
+                page_number: a.page_number,
+                selection_text: a.selection_text,
+                selection_rects: a.selection_rects,
+                note_content: a.note_content,
+                color: a.color,
+                pdf_source: a.pdf_source,
+                created_at: a.created_at,
+                updated_at: a.updated_at
+              }));
+            }
+          }
+        }
+      }
+
+      zip.file('library.json', JSON.stringify(libraryData, null, 2));
+
+      // Build stats for manifest
+      const stats = {
+        paperCount: papers.length,
+        collectionCount: collections.length,
+        pdfCount: 0,
+        annotationCount: Object.values(libraryData.annotations).reduce((sum, anns) => sum + anns.length, 0),
+        refCount: Object.values(libraryData.refs).reduce((sum, refs) => sum + refs.length, 0),
+        citeCount: Object.values(libraryData.cites).reduce((sum, cites) => sum + cites.length, 0)
+      };
+
+      // Add PDFs if requested
+      if (includePdfs && currentLibraryPath) {
+        const papersWithPdf = papers.filter(p => p.pdf_path);
+
+        for (let i = 0; i < papersWithPdf.length; i++) {
+          const paper = papersWithPdf[i];
+          try {
+            const pdfPath = `${currentLibraryPath}/${paper.pdf_path}`;
+            let pdfData;
+
+            if (currentLibraryLocation === 'icloud') {
+              const result = await ICloud.readFile({ path: pdfPath, encoding: null });
+              pdfData = result.data; // base64
+            } else {
+              const result = await Filesystem.readFile({
+                path: pdfPath,
+                directory: Directory.Documents
+              });
+              pdfData = result.data; // base64
+            }
+
+            const safeBibcode = (paper.bibcode || `paper_${paper.id}`).replace(/[/\\:*?"<>|]/g, '_');
+            const pdfFilename = paper.pdf_path.split('/').pop();
+            zip.file(`pdfs/${safeBibcode}/${pdfFilename}`, pdfData, { base64: true });
+            stats.pdfCount++;
+
+            emit('exportProgress', { phase: 'pdfs', current: i + 1, total: papersWithPdf.length });
+          } catch (e) {
+            console.warn(`[Export] Failed to include PDF for ${paper.bibcode}:`, e);
+          }
+        }
+      }
+
+      // Build manifest
+      const manifest = {
+        version: 1,
+        format: 'adslib',
+        exportDate: new Date().toISOString(),
+        exportedBy: 'ADS Reader iOS',
+        platform: 'iOS',
+        options: { includePdfs, includeRefs, includeCites, includeAnnotations },
+        stats
+      };
+      zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+
+      // Generate ZIP
+      const zipData = await zip.generateAsync({ type: 'base64' });
+
+      // Save to temp location
+      const filename = `ADS_Reader_Library_${new Date().toISOString().split('T')[0]}.adslib`;
+      const tempPath = `${filename}`;
+
+      await Filesystem.writeFile({
+        path: tempPath,
+        data: zipData,
+        directory: Directory.Cache
+      });
+
+      // Get full URI for sharing
+      const uriResult = await Filesystem.getUri({
+        path: tempPath,
+        directory: Directory.Cache
+      });
+
+      return { success: true, path: uriResult.uri, filename };
+    } catch (error) {
+      console.error('[API] Export failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  async shareFileNative(filePath, title) {
+    try {
+      await Share.share({
+        title: title || 'ADS Reader Library',
+        url: filePath,
+        dialogTitle: 'Share Library'
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('[API] Share failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  async previewLibraryImport(filePath) {
+    try {
+      let zipData;
+
+      if (filePath) {
+        // Read the file
+        const result = await Filesystem.readFile({
+          path: filePath,
+          directory: Directory.Cache
+        });
+        zipData = result.data;
+      } else {
+        // Let user pick a file - for iOS this would be handled differently
+        // For now, return an error suggesting to use file picker
+        return { success: false, error: 'Please select a .adslib file' };
+      }
+
+      const zip = await JSZip.loadAsync(zipData, { base64: true });
+
+      // Read manifest
+      const manifestFile = zip.file('manifest.json');
+      if (!manifestFile) {
+        return { success: false, error: 'Invalid .adslib file: missing manifest' };
+      }
+      const manifest = JSON.parse(await manifestFile.async('string'));
+
+      // Read library to get additional stats
+      const libraryFile = zip.file('library.json');
+      if (!libraryFile) {
+        return { success: false, error: 'Invalid .adslib file: missing library data' };
+      }
+      const libraryData = JSON.parse(await libraryFile.async('string'));
+
+      return {
+        success: true,
+        filePath,
+        stats: manifest.stats,
+        exportDate: manifest.exportDate,
+        exportedBy: manifest.exportedBy,
+        platform: manifest.platform
+      };
+    } catch (error) {
+      console.error('[API] Preview import failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  async importLibrary(options) {
+    try {
+      if (!dbInitialized) await initializeDatabase();
+
+      const { filePath, mode, importPdfs, importAnnotations } = options;
+
+      // Read the ZIP file
+      const result = await Filesystem.readFile({
+        path: filePath,
+        directory: Directory.Cache
+      });
+
+      const zip = await JSZip.loadAsync(result.data, { base64: true });
+
+      // Read library.json
+      const libraryFile = zip.file('library.json');
+      if (!libraryFile) {
+        return { success: false, error: 'Invalid .adslib file: missing library data' };
+      }
+      const libraryData = JSON.parse(await libraryFile.async('string'));
+
+      const results = {
+        papersImported: 0,
+        papersSkipped: 0,
+        pdfsImported: 0,
+        annotationsImported: 0,
+        collectionsImported: 0,
+        errors: []
+      };
+
+      // If replace mode, clear existing papers
+      if (mode === 'replace') {
+        const existingPapers = MobileDB.getAllPapers();
+        for (const paper of existingPapers) {
+          MobileDB.deletePaper(paper.id, false);
+        }
+        const existingCollections = MobileDB.getCollections();
+        for (const coll of existingCollections) {
+          MobileDB.deleteCollection(coll.id);
+        }
+        await MobileDB.saveDatabase();
+      }
+
+      // Import papers
+      const bibcodeToNewId = {};
+      const papers = libraryData.papers || [];
+
+      for (let i = 0; i < papers.length; i++) {
+        const paper = papers[i];
+
+        emit('importLibraryProgress', { phase: 'papers', current: i + 1, total: papers.length });
+
+        // Check for duplicates in merge mode
+        if (mode === 'merge') {
+          const existingPaper = paper.bibcode ? MobileDB.getPaperByBibcode(paper.bibcode) : null;
+          if (existingPaper) {
+            results.papersSkipped++;
+            bibcodeToNewId[paper.bibcode] = existingPaper.id;
+            continue;
+          }
+        }
+
+        try {
+          const paperToImport = { ...paper };
+          if (!importPdfs) {
+            paperToImport.pdf_path = null;
+          }
+
+          const newId = MobileDB.addPaper(paperToImport, false);
+          results.papersImported++;
+
+          if (paper.bibcode) {
+            bibcodeToNewId[paper.bibcode] = newId;
+          }
+        } catch (e) {
+          results.errors.push(`Failed to import: ${paper.title}`);
+        }
+      }
+
+      // Import collections
+      const collectionIdMap = {};
+      const collections = libraryData.collections || [];
+
+      collections.sort((a, b) => {
+        if (a.parent_id === null && b.parent_id !== null) return -1;
+        if (a.parent_id !== null && b.parent_id === null) return 1;
+        return 0;
+      });
+
+      for (const coll of collections) {
+        try {
+          const parentId = coll.parent_id ? collectionIdMap[coll.parent_id] : null;
+          const newCollId = MobileDB.createCollection(coll.name, parentId, coll.is_smart, coll.query);
+          collectionIdMap[coll.id] = newCollId;
+          results.collectionsImported++;
+
+          for (const bibcode of coll.papers || []) {
+            const paperId = bibcodeToNewId[bibcode];
+            if (paperId) {
+              MobileDB.addPaperToCollection(paperId, newCollId);
+            }
+          }
+        } catch (e) {
+          results.errors.push(`Failed to import collection: ${coll.name}`);
+        }
+      }
+
+      // Import refs
+      const refs = libraryData.refs || {};
+      for (const [bibcode, paperRefs] of Object.entries(refs)) {
+        const paperId = bibcodeToNewId[bibcode];
+        if (paperId && paperRefs.length > 0) {
+          MobileDB.addReferences(paperId, paperRefs.map(r => ({
+            bibcode: r.ref_bibcode,
+            title: r.ref_title,
+            authors: r.ref_authors,
+            year: r.ref_year
+          })), false);
+        }
+      }
+
+      // Import cites
+      const cites = libraryData.cites || {};
+      for (const [bibcode, paperCites] of Object.entries(cites)) {
+        const paperId = bibcodeToNewId[bibcode];
+        if (paperId && paperCites.length > 0) {
+          MobileDB.addCitations(paperId, paperCites.map(c => ({
+            bibcode: c.citing_bibcode,
+            title: c.citing_title,
+            authors: c.citing_authors,
+            year: c.citing_year
+          })), false);
+        }
+      }
+
+      // Import annotations
+      if (importAnnotations) {
+        const annotations = libraryData.annotations || {};
+        for (const [bibcode, paperAnnotations] of Object.entries(annotations)) {
+          const paperId = bibcodeToNewId[bibcode];
+          if (paperId) {
+            for (const ann of paperAnnotations) {
+              try {
+                MobileDB.createAnnotation(paperId, {
+                  page_number: ann.page_number,
+                  selection_text: ann.selection_text,
+                  selection_rects: ann.selection_rects,
+                  note_content: ann.note_content,
+                  color: ann.color,
+                  pdf_source: ann.pdf_source
+                });
+                results.annotationsImported++;
+              } catch (e) {
+                // Ignore annotation errors
+              }
+            }
+          }
+        }
+      }
+
+      // Import PDFs
+      if (importPdfs && currentLibraryPath) {
+        const pdfFiles = Object.keys(zip.files).filter(f => f.startsWith('pdfs/') && !f.endsWith('/'));
+
+        for (let i = 0; i < pdfFiles.length; i++) {
+          const pdfPath = pdfFiles[i];
+          emit('importLibraryProgress', { phase: 'pdfs', current: i + 1, total: pdfFiles.length });
+
+          const pathParts = pdfPath.split('/');
+          if (pathParts.length >= 3) {
+            const bibcode = pathParts[1];
+            const filename = pathParts[2];
+            const paperId = bibcodeToNewId[bibcode];
+
+            if (paperId) {
+              try {
+                const pdfData = await zip.file(pdfPath).async('base64');
+                const destPath = `${currentLibraryPath}/papers/${filename}`;
+
+                if (currentLibraryLocation === 'icloud') {
+                  await ICloud.writeFile({ path: destPath, data: pdfData, encoding: null });
+                } else {
+                  await Filesystem.writeFile({
+                    path: destPath,
+                    data: pdfData,
+                    directory: Directory.Documents
+                  });
+                }
+
+                MobileDB.updatePaper(paperId, { pdf_path: `papers/${filename}` }, false);
+                results.pdfsImported++;
+              } catch (e) {
+                results.errors.push(`Failed to import PDF: ${filename}`);
+              }
+            }
+          }
+        }
+      }
+
+      // Save database
+      await MobileDB.saveDatabase();
+
+      return { success: true, ...results };
+    } catch (error) {
+      console.error('[API] Import failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Export/import event listeners
+  onExportProgress(callback) {
+    eventListeners.exportProgress = eventListeners.exportProgress || [];
+    eventListeners.exportProgress.push(callback);
+  },
+
+  onLibraryImportProgress(callback) {
+    eventListeners.importLibraryProgress = eventListeners.importLibraryProgress || [];
+    eventListeners.importLibraryProgress.push(callback);
+  },
+
+  removeExportImportListeners() {
+    eventListeners.exportProgress = [];
+    eventListeners.importLibraryProgress = [];
+  },
+
+  onShowExportModal(callback) {
+    // No-op on iOS - modals are triggered via UI buttons
+  },
+
+  onShowImportModal(callback) {
+    // No-op on iOS - modals are triggered via UI buttons
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // BIBTEX
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -3870,10 +4438,46 @@ Provide a clear, accessible explanation.`;
   // PAPER FILES (New unified file management system)
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // Helper: compute SHA-256 hash of file data (base64)
+  async _computeFileHash(base64Data) {
+    try {
+      // Decode base64 to ArrayBuffer
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      // Compute SHA-256
+      const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (error) {
+      console.error('[_computeFileHash] Error:', error);
+      return null;
+    }
+  },
+
+  // Helper: detect MIME type from extension
+  _getMimeType(filename) {
+    const ext = (filename.split('.').pop() || '').toLowerCase();
+    const mimeTypes = {
+      'pdf': 'application/pdf',
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'gif': 'image/gif',
+      'csv': 'text/csv',
+      'txt': 'text/plain',
+      'json': 'application/json',
+      'bib': 'application/x-bibtex'
+    };
+    return mimeTypes[ext] || 'application/octet-stream';
+  },
+
   // Paper Files namespace object
   paperFiles: {
     async add(paperId, filePath, options = {}) {
-      // options: { role, sourceType, originalName }
+      // options: { role, sourceType, originalName, sourceUrl }
       try {
         if (!dbInitialized) await initializeDatabase();
 
@@ -3883,41 +4487,118 @@ Provide a clear, accessible explanation.`;
         }
 
         const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
-        const { role = 'pdf', sourceType = 'imported', originalName } = options;
+        const location = MobileDB.getLocation?.() || 'local';
+        const {
+          role = 'pdf',
+          sourceType = 'manual',
+          originalName,
+          sourceUrl
+        } = options;
 
-        // Generate filename based on paper and role
-        const bibcode = paper.bibcode || `paper_${paperId}`;
-        const safeBibcode = bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const ext = filePath.split('.').pop() || 'pdf';
-        const filename = `${safeBibcode}_${sourceType.toUpperCase()}.${ext}`;
-        const destPath = `${currentLibraryPath}/papers/${filename}`;
-
-        // Copy file to library
-        await fsCopy(filePath, destPath, MobileDB.getLibraryLocation() || 'local');
-
-        // Create file record (would be stored in database by FileManager)
-        const fileRecord = {
-          id: crypto.randomUUID(),
-          paperId,
-          path: `papers/${filename}`,
-          role,
-          sourceType,
-          originalName: originalName || filename,
-          status: 'ready',
-          createdAt: new Date().toISOString()
-        };
-
-        // For now, update paper's pdf_path if this is a PDF
-        if (role === 'pdf') {
-          MobileDB.updatePaper(paperId, {
-            pdf_path: `papers/${filename}`,
-            pdf_source: sourceType
-          });
-          await MobileDB.saveDatabase();
+        // Read file data for hashing
+        let fileData, fileSize;
+        try {
+          const result = location === 'icloud'
+            ? await ICloud.readFile({ path: filePath, encoding: null })
+            : await Filesystem.readFile({ path: filePath, directory: Directory.Documents });
+          fileData = result.data;
+          // Estimate size from base64 (rough)
+          fileSize = Math.floor(fileData.length * 0.75);
+        } catch (readError) {
+          console.error('[paperFiles.add] Read error:', readError);
+          return { success: false, error: `Cannot read file: ${readError.message}` };
         }
 
-        emit('consoleLog', { message: `Added file: ${filename}`, level: 'success' });
-        return { success: true, file: fileRecord };
+        // Compute hash
+        const fileHash = await capacitorAPI._computeFileHash(fileData);
+
+        // Check for duplicate by hash
+        if (fileHash) {
+          const existing = MobileDB.getFilesByHash(fileHash);
+          if (existing.length > 0) {
+            emit('consoleLog', { message: `File already exists (duplicate detected)`, level: 'warn' });
+            // Return existing file instead of duplicating
+            return { success: true, file: existing[0], duplicate: true };
+          }
+        }
+
+        // Generate storage filename
+        const ext = (filePath.split('.').pop() || 'pdf').toLowerCase();
+        const mimeType = capacitorAPI._getMimeType(filePath);
+        let storageFilename;
+
+        if (fileHash) {
+          // Content-addressed: files/{prefix}/{hash}.ext
+          const hashPrefix = fileHash.substring(0, 2);
+          storageFilename = `files/${hashPrefix}/${fileHash}.${ext}`;
+
+          // Ensure directory exists
+          try {
+            if (location === 'icloud') {
+              await ICloud.mkdir({ path: `${currentLibraryPath}/files/${hashPrefix}`, recursive: true });
+            } else {
+              await Filesystem.mkdir({
+                path: `${currentLibraryPath}/files/${hashPrefix}`,
+                directory: Directory.Documents,
+                recursive: true
+              });
+            }
+          } catch (e) { /* dir exists */ }
+        } else {
+          // Fallback: legacy naming
+          const bibcode = paper.bibcode || `paper_${paperId}`;
+          const safeBibcode = bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+          storageFilename = `papers/${safeBibcode}_${sourceType.toUpperCase()}.${ext}`;
+        }
+
+        const destPath = `${currentLibraryPath}/${storageFilename}`;
+
+        // Copy/write file to library
+        try {
+          if (location === 'icloud') {
+            await ICloud.writeFile({ path: destPath, data: fileData, encoding: null });
+          } else {
+            await Filesystem.writeFile({
+              path: destPath,
+              data: fileData,
+              directory: Directory.Documents
+            });
+          }
+        } catch (writeError) {
+          console.error('[paperFiles.add] Write error:', writeError);
+          return { success: false, error: `Cannot save file: ${writeError.message}` };
+        }
+
+        // Insert into database
+        const fileRecord = {
+          file_hash: fileHash,
+          filename: storageFilename,
+          original_name: originalName || filePath.split('/').pop(),
+          mime_type: mimeType,
+          file_size: fileSize,
+          file_role: role,
+          source_type: sourceType,
+          source_url: sourceUrl || null,
+          status: 'ready'
+        };
+
+        const fileId = MobileDB.addPaperFile(paperId, fileRecord);
+
+        // Also update legacy pdf_path for backwards compatibility
+        if (role === 'pdf') {
+          MobileDB.updatePaper(paperId, {
+            pdf_path: storageFilename,
+            pdf_source: sourceType
+          });
+        }
+
+        await MobileDB.saveDatabase();
+
+        emit('consoleLog', { message: `Added file: ${originalName || storageFilename}`, level: 'success' });
+        return {
+          success: true,
+          file: { id: fileId, paper_id: paperId, ...fileRecord }
+        };
       } catch (error) {
         console.error('[paperFiles.add] Error:', error);
         return { success: false, error: error.message };
@@ -3928,10 +4609,64 @@ Provide a clear, accessible explanation.`;
       try {
         if (!dbInitialized) await initializeDatabase();
 
-        // For now, we don't have a dedicated file records table
-        // This would be implemented when FileManager is available
-        emit('consoleLog', { message: `File removal not yet implemented for iOS`, level: 'warn' });
-        return { success: false, error: 'Not yet implemented' };
+        // Get file record
+        const file = MobileDB.getPaperFile(fileId);
+        if (!file) {
+          return { success: false, error: 'File not found' };
+        }
+
+        const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+        const location = MobileDB.getLocation?.() || 'local';
+
+        // Check if this hash is used by other files (deduplication)
+        let shouldDeleteFile = true;
+        if (file.file_hash) {
+          const filesWithHash = MobileDB.getFilesByHash(file.file_hash);
+          if (filesWithHash.length > 1) {
+            shouldDeleteFile = false;
+            emit('consoleLog', { message: `File shared by ${filesWithHash.length} papers, keeping physical file`, level: 'info' });
+          }
+        }
+
+        // Delete physical file if not shared
+        if (shouldDeleteFile && file.filename) {
+          const filePath = `${currentLibraryPath}/${file.filename}`;
+          try {
+            if (location === 'icloud') {
+              await ICloud.deleteFile({ path: filePath });
+            } else {
+              await Filesystem.deleteFile({ path: filePath, directory: Directory.Documents });
+            }
+          } catch (delError) {
+            console.warn('[paperFiles.remove] Could not delete file:', delError.message);
+          }
+        }
+
+        // Delete database record
+        MobileDB.deletePaperFile(fileId);
+
+        // Update legacy pdf_path if this was the primary PDF
+        const paper = MobileDB.getPaper(file.paper_id);
+        if (paper && paper.pdf_path === file.filename) {
+          // Find another PDF to set as primary
+          const remainingPdfs = MobileDB.getPaperPdfs(file.paper_id);
+          if (remainingPdfs.length > 0) {
+            MobileDB.updatePaper(file.paper_id, {
+              pdf_path: remainingPdfs[0].filename,
+              pdf_source: remainingPdfs[0].source_type
+            });
+          } else {
+            MobileDB.updatePaper(file.paper_id, {
+              pdf_path: null,
+              pdf_source: null
+            });
+          }
+        }
+
+        await MobileDB.saveDatabase();
+
+        emit('consoleLog', { message: `Removed file`, level: 'success' });
+        return { success: true };
       } catch (error) {
         console.error('[paperFiles.remove] Error:', error);
         return { success: false, error: error.message };
@@ -3941,8 +4676,7 @@ Provide a clear, accessible explanation.`;
     async get(fileId) {
       try {
         if (!dbInitialized) await initializeDatabase();
-        // Would query file records from FileManager
-        return null;
+        return MobileDB.getPaperFile(fileId);
       } catch (error) {
         console.error('[paperFiles.get] Error:', error);
         return null;
@@ -3954,65 +4688,27 @@ Provide a clear, accessible explanation.`;
       try {
         if (!dbInitialized) await initializeDatabase();
 
-        const paper = MobileDB.getPaper(paperId);
-        if (!paper) return [];
+        // Get from database
+        let files = MobileDB.getPaperFiles(paperId, filters);
 
-        const files = [];
-
-        // Check for existing PDF files based on current paper data
-        if (paper.pdf_path) {
-          files.push({
-            id: `${paperId}-primary`,
-            paperId,
-            path: paper.pdf_path,
-            role: 'pdf',
-            sourceType: paper.pdf_source || 'unknown',
-            isPrimary: true,
-            status: 'ready'
-          });
-        }
-
-        // Check for additional PDF sources
-        if (paper.bibcode) {
-          const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'];
-          const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
-          const safeBibcode = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-
-          for (const sourceType of sourceTypes) {
-            const filename = `${safeBibcode}_${sourceType}.pdf`;
-            const filePath = `${currentLibraryPath}/papers/${filename}`;
-
-            try {
-              await Filesystem.stat({ path: filePath, directory: Directory.Documents });
-              // File exists
-              const isPrimary = paper.pdf_path === `papers/${filename}`;
-              if (!isPrimary) {
-                files.push({
-                  id: `${paperId}-${sourceType}`,
-                  paperId,
-                  path: `papers/${filename}`,
-                  role: 'pdf',
-                  sourceType,
-                  isPrimary: false,
-                  status: 'ready'
-                });
-              }
-            } catch (e) {
-              // File doesn't exist, skip
-            }
+        // If no database records, check legacy pdf_path
+        if (files.length === 0 && (!filters.role || filters.role === 'pdf')) {
+          const paper = MobileDB.getPaper(paperId);
+          if (paper?.pdf_path) {
+            files.push({
+              id: -1,  // Legacy marker
+              paper_id: paperId,
+              filename: paper.pdf_path,
+              original_name: paper.pdf_path.split('/').pop(),
+              mime_type: 'application/pdf',
+              file_role: 'pdf',
+              source_type: paper.pdf_source || 'unknown',
+              status: 'ready'
+            });
           }
         }
 
-        // Apply filters
-        let result = files;
-        if (filters.role) {
-          result = result.filter(f => f.role === filters.role);
-        }
-        if (filters.status) {
-          result = result.filter(f => f.status === filters.status);
-        }
-
-        return result;
+        return files;
       } catch (error) {
         console.error('[paperFiles.list] Error:', error);
         return [];
@@ -4023,18 +4719,28 @@ Provide a clear, accessible explanation.`;
       try {
         if (!dbInitialized) await initializeDatabase();
 
-        const paper = MobileDB.getPaper(paperId);
-        if (!paper || !paper.pdf_path) return null;
+        // Try database first
+        const pdfs = MobileDB.getPaperPdfs(paperId);
+        if (pdfs.length > 0) {
+          return pdfs[0];
+        }
 
-        return {
-          id: `${paperId}-primary`,
-          paperId,
-          path: paper.pdf_path,
-          role: 'pdf',
-          sourceType: paper.pdf_source || 'unknown',
-          isPrimary: true,
-          status: 'ready'
-        };
+        // Fallback to legacy pdf_path
+        const paper = MobileDB.getPaper(paperId);
+        if (paper?.pdf_path) {
+          return {
+            id: -1,
+            paper_id: paperId,
+            filename: paper.pdf_path,
+            original_name: paper.pdf_path.split('/').pop(),
+            mime_type: 'application/pdf',
+            file_role: 'pdf',
+            source_type: paper.pdf_source || 'unknown',
+            status: 'ready'
+          };
+        }
+
+        return null;
       } catch (error) {
         console.error('[paperFiles.getPrimaryPdf] Error:', error);
         return null;
@@ -4045,28 +4751,19 @@ Provide a clear, accessible explanation.`;
       try {
         if (!dbInitialized) await initializeDatabase();
 
-        // Extract source type from fileId (format: paperId-sourceType)
-        const parts = fileId.split('-');
-        if (parts.length < 2) {
-          return { success: false, error: 'Invalid file ID' };
+        const file = MobileDB.getPaperFile(fileId);
+        if (!file) {
+          return { success: false, error: 'File not found' };
         }
 
-        const sourceType = parts.slice(1).join('-');
-        const paper = MobileDB.getPaper(paperId);
-        if (!paper) {
-          return { success: false, error: 'Paper not found' };
-        }
-
-        const safeBibcode = (paper.bibcode || `paper_${paperId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-        const filename = `${safeBibcode}_${sourceType}.pdf`;
-
+        // Update legacy pdf_path for compatibility
         MobileDB.updatePaper(paperId, {
-          pdf_path: `papers/${filename}`,
-          pdf_source: sourceType
+          pdf_path: file.filename,
+          pdf_source: file.source_type
         });
         await MobileDB.saveDatabase();
 
-        emit('consoleLog', { message: `Set primary PDF to ${sourceType}`, level: 'success' });
+        emit('consoleLog', { message: `Set primary PDF to ${file.source_type || 'file'}`, level: 'success' });
         return { success: true };
       } catch (error) {
         console.error('[paperFiles.setPrimaryPdf] Error:', error);
@@ -4078,24 +4775,11 @@ Provide a clear, accessible explanation.`;
       try {
         if (!dbInitialized) await initializeDatabase();
 
-        // Parse fileId to get paper and source type
-        const parts = fileId.split('-');
-        if (parts.length < 2) return null;
+        const file = MobileDB.getPaperFile(fileId);
+        if (!file) return null;
 
-        const paperId = parseInt(parts[0]);
-        const paper = MobileDB.getPaper(paperId);
-        if (!paper) return null;
-
-        const sourceType = parts.slice(1).join('-');
         const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
-
-        if (sourceType === 'primary') {
-          if (!paper.pdf_path) return null;
-          return `${currentLibraryPath}/${paper.pdf_path}`;
-        }
-
-        const safeBibcode = (paper.bibcode || `paper_${paperId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-        return `${currentLibraryPath}/papers/${safeBibcode}_${sourceType}.pdf`;
+        return `${currentLibraryPath}/${file.filename}`;
       } catch (error) {
         console.error('[paperFiles.getPath] Error:', error);
         return null;
@@ -4107,36 +4791,100 @@ Provide a clear, accessible explanation.`;
   // DOWNLOAD QUEUE (New download queue management)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Download queue state stored in memory and Preferences
+  // Download queue state stored in memory and paper_files table
   downloadQueue: {
     _queue: [],
     _active: [],
     _paused: false,
     _concurrency: 2,
+    _completedCount: 0,
+    _failedCount: 0,
+
+    // Initialize queue from database (recover pending downloads)
+    async _initFromDatabase() {
+      try {
+        if (!dbInitialized) await initializeDatabase();
+        const pendingFiles = MobileDB.getPendingFiles();
+        for (const file of pendingFiles) {
+          this._queue.push({
+            id: `file-${file.id}`,
+            fileId: file.id,
+            paperId: file.paper_id,
+            bibcode: file.bibcode,
+            sourceType: file.source_type,
+            priority: 0,
+            status: 'pending'
+          });
+        }
+        if (pendingFiles.length > 0) {
+          emit('consoleLog', { message: `Recovered ${pendingFiles.length} pending downloads`, level: 'info' });
+        }
+      } catch (error) {
+        console.error('[downloadQueue._initFromDatabase] Error:', error);
+      }
+    },
 
     async enqueue(paperId, sourceType, priority = 0) {
+      console.log('[downloadQueue.enqueue] Starting:', paperId, sourceType, priority);
       try {
         if (!dbInitialized) await initializeDatabase();
 
         const paper = MobileDB.getPaper(paperId);
+        console.log('[downloadQueue.enqueue] Paper:', paper?.bibcode || 'not found');
         if (!paper) {
           return { success: false, error: 'Paper not found' };
         }
 
+        // Normalize source type for internal use
+        const normalizedSource = {
+          'EPRINT_PDF': 'arxiv',
+          'PUB_PDF': 'publisher',
+          'ADS_PDF': 'ads_scan',
+          'arxiv': 'arxiv',
+          'publisher': 'publisher',
+          'ads_scan': 'ads_scan'
+        }[sourceType] || sourceType || 'arxiv';
+
+        // Map to ADS source type for filename (matches desktop convention)
+        const fileSourceType = {
+          'arxiv': 'EPRINT_PDF',
+          'publisher': 'PUB_PDF',
+          'ads_scan': 'ADS_PDF'
+        }[normalizedSource] || sourceType;
+
+        // Create file record with 'queued' status
+        const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+        const bibcode = paper.bibcode || `paper_${paperId}`;
+        const safeBibcode = bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const filename = `papers/${safeBibcode}_${fileSourceType}.pdf`;
+
+        const fileId = MobileDB.addPaperFile(paperId, {
+          filename: filename,
+          original_name: `${bibcode}_${normalizedSource}.pdf`,
+          mime_type: 'application/pdf',
+          file_role: 'pdf',
+          source_type: normalizedSource,
+          status: 'queued'
+        });
+
+        await MobileDB.saveDatabase();
+
         const queueItem = {
-          id: crypto.randomUUID(),
+          id: `file-${fileId}`,
+          fileId,
           paperId,
           bibcode: paper.bibcode,
-          sourceType: sourceType || 'auto',
+          arxivId: paper.arxiv_id,
+          doi: paper.doi,
+          sourceType: normalizedSource,
           priority,
-          status: 'pending',
-          createdAt: new Date().toISOString()
+          status: 'pending'
         };
 
         this._queue.push(queueItem);
         this._queue.sort((a, b) => b.priority - a.priority);
 
-        emit('consoleLog', { message: `Queued download: ${paper.bibcode || paperId}`, level: 'info' });
+        emit('consoleLog', { message: `Queued download: ${paper.bibcode || paperId} (${normalizedSource})`, level: 'info' });
 
         // Start processing if not paused
         if (!this._paused) {
@@ -4163,24 +4911,34 @@ Provide a clear, accessible explanation.`;
       // Remove from queue
       const index = this._queue.findIndex(item => item.paperId === paperId);
       if (index !== -1) {
-        this._queue.splice(index, 1);
+        const item = this._queue.splice(index, 1)[0];
+        // Update database status
+        if (item.fileId) {
+          MobileDB.updatePaperFile(item.fileId, { status: 'cancelled' });
+          await MobileDB.saveDatabase();
+        }
       }
-      // Note: Cannot cancel active downloads in this simple implementation
       return { success: true };
     },
 
     async cancelAll() {
+      // Update all queued files in database
+      for (const item of this._queue) {
+        if (item.fileId) {
+          MobileDB.updatePaperFile(item.fileId, { status: 'cancelled' });
+        }
+      }
       this._queue = [];
-      // Active downloads will complete but no new ones will start
+      await MobileDB.saveDatabase();
       return { success: true };
     },
 
     async status() {
       return {
-        pending: this._queue.length,
+        queued: this._queue.length,
         active: this._active.length,
-        completed: 0, // Would need to track this
-        failed: 0,
+        completed: this._completedCount,
+        failed: this._failedCount,
         paused: this._paused,
         items: [...this._queue, ...this._active]
       };
@@ -4197,16 +4955,46 @@ Provide a clear, accessible explanation.`;
       this._processQueue();
     },
 
+    // Event listener methods for the download queue
+    onProgress(callback) {
+      eventListeners.downloadQueueProgress.push(callback);
+    },
+
+    onComplete(callback) {
+      eventListeners.downloadQueueComplete.push(callback);
+    },
+
+    onError(callback) {
+      eventListeners.downloadQueueError.push(callback);
+    },
+
     async _processQueue() {
+      console.log('[downloadQueue._processQueue] Starting. Paused:', this._paused, 'Active:', this._active.length, 'Queue:', this._queue.length);
       if (this._paused) return;
       if (this._active.length >= this._concurrency) return;
-      if (this._queue.length === 0) return;
+      if (this._queue.length === 0) {
+        // Check if queue is now empty and we had items
+        if (this._completedCount > 0 || this._failedCount > 0) {
+          emit('downloadQueueEmpty', {
+            completed: this._completedCount,
+            failed: this._failedCount
+          });
+        }
+        return;
+      }
 
       const item = this._queue.shift();
+      console.log('[downloadQueue._processQueue] Processing item:', item?.bibcode, item?.sourceType);
       if (!item) return;
 
       this._active.push(item);
       item.status = 'downloading';
+
+      // Update database status
+      if (item.fileId) {
+        MobileDB.updatePaperFile(item.fileId, { status: 'downloading' });
+        await MobileDB.saveDatabase();
+      }
 
       try {
         const paper = MobileDB.getPaper(item.paperId);
@@ -4214,43 +5002,71 @@ Provide a clear, accessible explanation.`;
           throw new Error('Paper not found');
         }
 
-        const token = await Keychain.getItem('adsToken');
-        const pdfPriority = await Storage.get('pdfPriority') || ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'];
-
         emit('downloadQueueProgress', {
           paperId: item.paperId,
           bibcode: paper.bibcode,
+          sourceType: item.sourceType,
           status: 'downloading',
           progress: 0
         });
 
-        // Use existing download function
-        const result = await downloadPaperPdf(paper, token, pdfPriority);
+        // Download the PDF based on source type
+        const result = await this._downloadFile(paper, item.sourceType, item.fileId);
 
         if (result.success) {
+          // Update file record with hash and path
+          MobileDB.updatePaperFile(item.fileId, {
+            filename: result.path,
+            file_hash: result.hash,
+            file_size: result.size,
+            status: 'ready'
+          });
+
+          // Update legacy pdf_path
           MobileDB.updatePaper(item.paperId, {
             pdf_path: result.path,
-            pdf_source: result.source
+            pdf_source: item.sourceType
           });
+
           await MobileDB.saveDatabase();
+          this._completedCount++;
 
           emit('downloadQueueComplete', {
             paperId: item.paperId,
+            fileId: item.fileId,
             bibcode: paper.bibcode,
             path: result.path,
-            source: result.source
+            source: item.sourceType
           });
         } else {
+          MobileDB.updatePaperFile(item.fileId, {
+            status: 'error',
+            error_message: result.error
+          });
+          await MobileDB.saveDatabase();
+          this._failedCount++;
+
           emit('downloadQueueError', {
             paperId: item.paperId,
+            fileId: item.fileId,
             bibcode: paper.bibcode,
             error: result.error
           });
         }
       } catch (error) {
         console.error('[downloadQueue._processQueue] Error:', error);
+        if (item.fileId) {
+          MobileDB.updatePaperFile(item.fileId, {
+            status: 'error',
+            error_message: error.message
+          });
+          await MobileDB.saveDatabase();
+        }
+        this._failedCount++;
+
         emit('downloadQueueError', {
           paperId: item.paperId,
+          fileId: item.fileId,
           error: error.message
         });
       } finally {
@@ -4262,6 +5078,126 @@ Provide a clear, accessible explanation.`;
 
         // Process next item
         this._processQueue();
+      }
+    },
+
+    async _downloadFile(paper, sourceType, fileId) {
+      console.log('[downloadQueue._downloadFile] Starting:', paper?.bibcode, sourceType);
+      const token = await Keychain.getItem('adsToken');
+      const currentLibraryPath = MobileDB.getLibraryPath() || LIBRARY_FOLDER;
+      const location = MobileDB.getLocation?.() || 'local';
+      const bibcode = paper.bibcode || `paper_${paper.id}`;
+      const safeBibcode = bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+      let pdfUrl = null;
+
+      // Determine PDF URL based on source type
+      if (sourceType === 'arxiv' && paper.arxiv_id) {
+        pdfUrl = `https://arxiv.org/pdf/${paper.arxiv_id}.pdf`;
+        console.log('[downloadQueue._downloadFile] arXiv URL:', pdfUrl);
+      } else if (sourceType === 'publisher' || sourceType === 'ads_scan') {
+        // Fetch e-sources from ADS
+        if (!token) {
+          return { success: false, error: 'ADS token not configured' };
+        }
+
+        try {
+          const esourcesUrl = `${ADS_API_BASE}/resolver/${encodeURIComponent(bibcode)}/esource`;
+          const response = await CapacitorHttp.get({
+            url: esourcesUrl,
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          const links = parseEsourcesResponse(response.data);
+          const sourceKey = sourceType === 'publisher' ? 'PUB_PDF' : 'ADS_PDF';
+          const source = links.find(l => l.type === sourceKey || l.link_type === sourceKey);
+
+          if (source) {
+            pdfUrl = source.url || source.link;
+          }
+        } catch (e) {
+          console.error('[downloadQueue._downloadFile] esources error:', e);
+        }
+      }
+
+      if (!pdfUrl) {
+        return { success: false, error: `No ${sourceType} PDF available` };
+      }
+
+      // Map to ADS source type for filename (matches desktop convention)
+      const fileSourceType = {
+        'arxiv': 'EPRINT_PDF',
+        'publisher': 'PUB_PDF',
+        'ads_scan': 'ADS_PDF'
+      }[sourceType] || sourceType.toUpperCase();
+
+      // Download the file
+      const filename = `papers/${safeBibcode}_${fileSourceType}.pdf`;
+      const destPath = `${currentLibraryPath}/${filename}`;
+      const papersDir = `${currentLibraryPath}/papers`;
+
+      console.log('[downloadQueue._downloadFile] Location:', location, 'Path:', destPath);
+
+      try {
+        // Create directories using iCloud-aware helper
+        console.log('[downloadQueue._downloadFile] Creating directory:', papersDir);
+        try {
+          await fsMkdir(currentLibraryPath, location);
+          console.log('[downloadQueue._downloadFile] Library dir created/exists');
+        } catch (e) {
+          console.log('[downloadQueue._downloadFile] Library dir mkdir:', e.message || 'exists');
+        }
+
+        try {
+          await fsMkdir(papersDir, location);
+          console.log('[downloadQueue._downloadFile] Papers dir created/exists');
+        } catch (e) {
+          console.log('[downloadQueue._downloadFile] Papers dir mkdir:', e.message || 'exists');
+        }
+
+        console.log('[downloadQueue._downloadFile] Downloading from:', pdfUrl);
+
+        // Download file content via HTTP
+        const httpResponse = await CapacitorHttp.get({
+          url: pdfUrl,
+          responseType: 'blob',
+          headers: {
+            'Accept': 'application/pdf'
+          }
+        });
+
+        if (httpResponse.status !== 200) {
+          return { success: false, error: `HTTP ${httpResponse.status}: Download failed` };
+        }
+
+        // Get the data - it's already base64 encoded when responseType is 'blob'
+        const pdfData = httpResponse.data;
+        console.log('[downloadQueue._downloadFile] Downloaded bytes:', pdfData?.length || 0);
+
+        // Check PDF magic bytes (base64 for %PDF = JVBERi)
+        if (!pdfData || !pdfData.startsWith('JVBERi')) {
+          console.log('[downloadQueue._downloadFile] Invalid PDF, magic:', pdfData?.substring(0, 20));
+          return { success: false, error: 'Downloaded file is not a valid PDF' };
+        }
+
+        // Write file using iCloud-aware helper
+        console.log('[downloadQueue._downloadFile] Writing to:', destPath);
+        await fsWriteFile(destPath, pdfData, location, null);  // null encoding = binary/base64
+
+        // Compute hash
+        const hash = await capacitorAPI._computeFileHash(pdfData);
+        const size = Math.floor(pdfData.length * 0.75);  // base64 to bytes estimate
+
+        console.log('[downloadQueue._downloadFile] Success, hash:', hash);
+        return {
+          success: true,
+          path: filename,
+          hash: hash,
+          size: size
+        };
+      } catch (downloadError) {
+        console.error('[downloadQueue._downloadFile] Error:', downloadError);
+        return { success: false, error: downloadError.message };
       }
     }
   },

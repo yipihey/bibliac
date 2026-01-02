@@ -96,6 +96,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // PAPER MANAGEMENT
   // ═══════════════════════════════════════════════════════════════════════════
   importPDFs: () => ipcRenderer.invoke('import-pdfs'),
+  importFiles: () => ipcRenderer.invoke('import-files'),
   getAllPapers: (options) => ipcRenderer.invoke('get-all-papers', options),
   getPaper: (id) => ipcRenderer.invoke('get-paper', id),
   updatePaper: (id, updates) => ipcRenderer.invoke('update-paper', id, updates),
@@ -123,7 +124,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onBatchDownloadProgress: (callback) => ipcRenderer.on('batch-download-progress', (event, data) => callback(data)),
   removeBatchDownloadListeners: () => ipcRenderer.removeAllListeners('batch-download-progress'),
   attachPdfToPaper: (paperId, pdfPath) => ipcRenderer.invoke('attach-pdf-to-paper', paperId, pdfPath),
-  checkPdfExists: (paperId, sourceType) => ipcRenderer.invoke('check-pdf-exists', paperId, sourceType),
   adsSyncPapers: (paperIds) => ipcRenderer.invoke('ads-sync-papers', paperIds),
   adsCancelSync: () => ipcRenderer.invoke('ads-cancel-sync'),
   adsUpdateCitationCounts: (paperIds) => ipcRenderer.invoke('ads-update-citation-counts', paperIds),
@@ -151,6 +151,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveBibtex: (paperId, bibtex) => ipcRenderer.invoke('save-bibtex', paperId, bibtex),
   importBibtex: () => ipcRenderer.invoke('import-bibtex'),
   importBibtexFromPath: (filePath) => ipcRenderer.invoke('import-bibtex-from-path', filePath),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIBRARY EXPORT/IMPORT
+  // ═══════════════════════════════════════════════════════════════════════════
+  getExportStats: () => ipcRenderer.invoke('get-export-stats'),
+  exportLibrary: (options) => ipcRenderer.invoke('export-library', options),
+  previewLibraryImport: (filePath) => ipcRenderer.invoke('preview-library-import', filePath),
+  importLibrary: (options) => ipcRenderer.invoke('import-library', options),
+  shareFileNative: (filePath, title) => ipcRenderer.invoke('share-file-native', filePath, title),
+  composeEmail: (options) => ipcRenderer.invoke('compose-email', options),
+  onExportProgress: (callback) => ipcRenderer.on('export-progress', (event, data) => callback(data)),
+  onLibraryImportProgress: (callback) => ipcRenderer.on('import-library-progress', (event, data) => callback(data)),
+  removeExportImportListeners: () => {
+    ipcRenderer.removeAllListeners('export-progress');
+    ipcRenderer.removeAllListeners('import-library-progress');
+    ipcRenderer.removeAllListeners('show-export-modal');
+    ipcRenderer.removeAllListeners('show-import-modal');
+  },
+  onShowExportModal: (callback) => ipcRenderer.on('show-export-modal', () => callback()),
+  onShowImportModal: (callback) => ipcRenderer.on('show-import-modal', () => callback()),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COLLECTIONS
@@ -209,11 +229,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAnnotations: (paperId) => ipcRenderer.invoke('get-annotations', paperId),
   getAnnotationCountsBySource: (paperId) => ipcRenderer.invoke('get-annotation-counts-by-source', paperId),
   getDownloadedPdfSources: (paperId) => ipcRenderer.invoke('get-downloaded-pdf-sources', paperId),
+  getPaperPdfPaths: (paperId) => ipcRenderer.invoke('get-paper-pdf-paths', paperId),
   deletePdf: (paperId, sourceType) => ipcRenderer.invoke('delete-pdf', paperId, sourceType),
+  startFileDrag: (filePath) => ipcRenderer.send('start-file-drag', filePath),
+  openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   createAnnotation: (paperId, data) => ipcRenderer.invoke('create-annotation', paperId, data),
   updateAnnotation: (id, data) => ipcRenderer.invoke('update-annotation', id, data),
   deleteAnnotation: (id) => ipcRenderer.invoke('delete-annotation', id),
   exportAnnotations: (paperId) => ipcRenderer.invoke('export-annotations', paperId),
+
+  // PDF Page Rotations
+  getPageRotations: (paperId, pdfSource) => ipcRenderer.invoke('get-page-rotations', paperId, pdfSource),
+  setPageRotation: (paperId, pageNumber, rotation, pdfSource) => ipcRenderer.invoke('set-page-rotation', paperId, pageNumber, rotation, pdfSource),
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ATTACHMENTS (LEGACY - will be removed after migration)
@@ -234,6 +261,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPrimaryPdf: (paperId) => ipcRenderer.invoke('paper-files:get-primary-pdf', paperId),
     setPrimaryPdf: (paperId, fileId) => ipcRenderer.invoke('paper-files:set-primary-pdf', paperId, fileId),
     getPath: (fileId) => ipcRenderer.invoke('paper-files:get-path', fileId),
+    rescan: (paperId) => ipcRenderer.invoke('paper-files:rescan', paperId),
   },
 
   // ═══════════════════════════════════════════════════════════════════════════

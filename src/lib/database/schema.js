@@ -133,6 +133,26 @@ CREATE TABLE IF NOT EXISTS attachments (
   added_date TEXT,
   FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
+
+-- Paper files table - content-addressed file storage
+CREATE TABLE IF NOT EXISTS paper_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id INTEGER NOT NULL,
+  file_hash TEXT,
+  filename TEXT NOT NULL,
+  original_name TEXT,
+  mime_type TEXT NOT NULL,
+  file_size INTEGER,
+  file_role TEXT NOT NULL,
+  source_type TEXT,
+  source_url TEXT,
+  added_date TEXT NOT NULL,
+  status TEXT DEFAULT 'ready',
+  error_message TEXT,
+  text_extracted INTEGER DEFAULT 0,
+  text_path TEXT,
+  FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
 `;
 
 /**
@@ -152,6 +172,8 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_paper ON text_embeddings(paper_id);
 CREATE INDEX IF NOT EXISTS idx_qa_paper ON paper_qa(paper_id);
 CREATE INDEX IF NOT EXISTS idx_collections_parent ON collections(parent_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_paper ON attachments(paper_id);
+CREATE INDEX IF NOT EXISTS idx_paper_files_paper ON paper_files(paper_id);
+CREATE INDEX IF NOT EXISTS idx_paper_files_hash ON paper_files(file_hash);
 `;
 
 /**

@@ -199,6 +199,7 @@ html, body {
   background: var(--bg-tertiary);
   border-radius: 6px;
   transition: background 0.15s;
+  cursor: pointer;
 }
 
 .file-item:hover {
@@ -717,27 +718,16 @@ html, body {
 #main-screen {
   display: flex;
   height: 100%;
+  padding-top: calc(36px + env(safe-area-inset-top, 0)); /* Account for top bar */
 }
 
 .titlebar-drag-region {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--titlebar-height);
-  -webkit-app-region: drag;
-  z-index: 1000;
+  display: none; /* Hidden - using mobile-top-bar instead */
 }
 
-/* Sidebar */
+/* Sidebar - Hidden, using drawer instead */
 .sidebar {
-  width: var(--sidebar-width);
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  padding-top: var(--titlebar-height);
-  flex-shrink: 0;
+  display: none;
 }
 
 /* Resize Handles */
@@ -750,7 +740,7 @@ html, body {
 }
 
 #sidebar-resize {
-  margin-top: var(--titlebar-height);
+  display: none; /* Sidebar is hidden */
 }
 
 .resize-handle:hover,
@@ -1308,6 +1298,85 @@ body.resizing * {
   color: #f0ad4e;
 }
 
+.console-log .log-clickable {
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.console-log .log-clickable:hover {
+  background-color: var(--hover);
+}
+
+.console-log .log-clickable::after {
+  content: ' [click for details]';
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+/* Error Detail Modal */
+.error-detail-content {
+  max-width: 700px;
+  width: 90%;
+}
+
+.error-detail-content .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.error-detail-content .modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.modal-close-x {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 24px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.modal-close-x:hover {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.error-detail-text {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  margin: 16px 20px;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+
+.error-detail-content .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    LIBRARY PICKER
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -1848,7 +1917,7 @@ body.ios .desktop-only {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding-top: var(--titlebar-height);
+  padding-top: 36px; /* Height of top bar */
   min-width: 0;
 }
 
@@ -1862,12 +1931,7 @@ body.ios .desktop-only {
 }
 
 .list-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  display: none; /* Hidden - tools are in top bar */
 }
 
 .import-btn {
@@ -1888,6 +1952,23 @@ body.ios .desktop-only {
 
 .import-btn:hover {
   background: var(--accent-hover);
+}
+
+/* Search Section - hidden by default, shown when search button clicked */
+.search-section {
+  display: none;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Show search section when search is active */
+body.mobile-search-active .search-section {
+  display: flex;
+}
+
+.search-section .search-wrapper {
+  padding: 6px 8px;
 }
 
 .search-wrapper {
@@ -1951,7 +2032,6 @@ body.ios .desktop-only {
   gap: 4px;
   padding: 4px 8px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
 }
 
 .search-shortcut-btn {
@@ -1974,9 +2054,7 @@ body.ios .desktop-only {
 /* Sort Dropdown */
 .sort-dropdown-container {
   position: relative;
-  padding: 4px 8px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  margin-left: auto;
 }
 
 .sort-dropdown-trigger {
@@ -2242,6 +2320,119 @@ body.ios .desktop-only {
   background: var(--success);
 }
 
+/* Paper Action Buttons (Info & PDF) */
+.paper-item-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.paper-action-btn {
+  --btn-size: 22px;
+  --btn-font-size: 12px;
+  width: var(--btn-size);
+  height: var(--btn-size);
+  min-width: var(--btn-size);
+  min-height: var(--btn-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: var(--btn-font-size);
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+  position: relative;
+  padding: 0;
+  line-height: 1;
+}
+
+.paper-action-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+/* Info Button */
+.info-btn {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* PDF Button States */
+.pdf-btn {
+  position: relative;
+}
+
+.pdf-btn-unavailable {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pdf-btn-unavailable:hover {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.pdf-btn-available {
+  opacity: 0.7;
+}
+
+.pdf-btn-downloaded {
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* Note badge on PDF button */
+.pdf-btn .note-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 12px;
+  height: 12px;
+  background: var(--accent);
+  color: var(--bg-primary);
+  font-size: 8px;
+  font-weight: bold;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 2px;
+}
+
+/* iOS Touch Optimization for Paper Action Buttons */
+body.ios .paper-item-actions,
+body.ios-platform .paper-item-actions {
+  gap: 4px;
+}
+
+body.ios .paper-action-btn,
+body.ios-platform .paper-action-btn {
+  --btn-size: 36px;
+  --btn-font-size: 16px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body.ios .paper-action-btn:active,
+body.ios-platform .paper-action-btn:active {
+  background: var(--bg-tertiary);
+  transform: scale(0.95);
+}
+
+body.ios .pdf-btn .note-badge,
+body.ios-platform .pdf-btn .note-badge {
+  min-width: 14px;
+  height: 14px;
+  font-size: 9px;
+  top: -4px;
+  right: -4px;
+}
+
 /* Empty State */
 .empty-state {
   display: flex;
@@ -2476,7 +2667,9 @@ body.ios-platform .pdf-container {
 
 .info-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 1px;
+  align-items: center;
 }
 
 .tab-btn {
@@ -2496,6 +2689,11 @@ body.ios-platform .pdf-container {
 .tab-btn.active {
   background: var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+/* Hide mobile-only tabs on desktop */
+.tab-btn.mobile-only {
+  display: none;
 }
 
 .pdf-controls {
@@ -2554,6 +2752,112 @@ body.ios-platform .pdf-container {
 
 .action-btn:hover {
   background: var(--bg-hover);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BOTTOM BAR - MOBILE RESPONSIVE STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  .bottom-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    height: auto;
+    padding: 2px 4px;
+    padding-bottom: calc(2px + env(safe-area-inset-bottom));
+    z-index: 200;
+  }
+
+  /* Tabs become primary navigation row */
+  .bottom-bar-left {
+    width: 100%;
+    order: 1; /* Below actions row */
+    flex-direction: column;
+  }
+
+  .info-tabs {
+    width: 100%;
+    justify-content: space-around;
+    gap: 1px;
+  }
+
+  .tab-btn {
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+
+  /* Hide desktop-only elements on mobile */
+  .desktop-only,
+  .bottom-bar .separator,
+  .bottom-bar .pdf-controls,
+  .bottom-bar-center {
+    display: none !important;
+  }
+
+  /* Actions row above tabs */
+  .bottom-bar-right {
+    width: 100%;
+    order: 0; /* Above tabs row */
+    justify-content: space-around;
+    padding: 3px 4px;
+    border-bottom: 1px solid var(--border);
+    gap: 4px;
+  }
+
+  /* Hide actions row when no paper selected */
+  body:not(.has-selected-paper) .bottom-bar-right {
+    display: none;
+  }
+
+  /* Compact action buttons */
+  .bottom-bar-right .action-btn {
+    flex: 1;
+    min-height: 26px;
+    padding: 4px 8px;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Compact select dropdowns */
+  .bottom-bar-right .status-select {
+    flex: 1;
+    min-height: 26px;
+    padding: 4px 4px;
+    font-size: 10px;
+  }
+
+  /* Disabled state styling */
+  .bottom-bar-right .action-btn:disabled,
+  .bottom-bar-right .status-select:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  /* Adjust main content padding for fixed bottom bar */
+  .content-split,
+  #main-screen {
+    padding-bottom: calc(70px + env(safe-area-inset-bottom));
+  }
+}
+
+/* iOS safe area handling */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  @media (max-width: 768px) {
+    body.ios .bottom-bar,
+    body.ios-platform .bottom-bar {
+      padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    }
+  }
 }
 
 /* Hidden paper info storage */
@@ -2689,54 +2993,16 @@ body.ios-platform .pdf-container {
 
 .ref-item, .cite-item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  background: var(--bg-secondary);
-  border-radius: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
   cursor: pointer;
+  transition: background 0.1s;
 }
 
 .ref-item:hover, .cite-item:hover {
   background: var(--bg-hover);
-}
-
-.ref-number, .cite-number {
-  color: var(--text-muted);
-  font-size: 12px;
-  min-width: 28px;
-  text-align: right;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.ref-checkbox, .cite-checkbox {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  margin-top: 2px;
-  border: 2px solid var(--text-muted);
-  border-radius: 3px;
-  background: transparent;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.ref-checkbox:checked, .cite-checkbox:checked {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.ref-checkbox:checked::after, .cite-checkbox:checked::after {
-  content: '✓';
-  position: relative;
-  top: -3px;
-  left: 1px;
-  color: #000;
-  font-size: 10px;
-  font-weight: bold;
 }
 
 .ref-content, .cite-content {
@@ -2755,42 +3021,23 @@ body.ios-platform .pdf-container {
 }
 
 .ref-item.in-library, .cite-item.in-library {
-  border-left: 3px solid var(--accent);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ref-item.in-library:hover, .cite-item.in-library:hover {
+  background: transparent;
 }
 
 .ref-item.selected, .cite-item.selected {
   background: var(--bg-selected);
 }
 
-.ref-import-btn {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  margin-left: auto;
-  background: var(--accent);
-  border: none;
-  border-radius: 4px;
-  color: white;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
-}
-
-.ref-item:hover .ref-import-btn,
-.cite-item:hover .ref-import-btn {
-  opacity: 1;
-}
-
-.ref-import-btn:hover {
-  background: var(--accent-hover);
-}
-
-.ref-import-btn:disabled {
-  cursor: default;
-  opacity: 0.6;
+.in-library-badge {
+  font-size: 10px;
+  color: var(--accent);
+  margin-left: 8px;
+  font-weight: 500;
 }
 
 .ads-lookup-import-btn {
@@ -2818,31 +3065,21 @@ body.ios-platform .pdf-container {
   opacity: 0.6;
 }
 
-.ref-ads-btn {
+.ref-ads-link, .cite-ads-link {
   flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: none;
   padding: 2px 6px;
-  margin-left: auto;
-  margin-right: 4px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 500;
-  cursor: pointer;
-  opacity: 0;
+  border-radius: 3px;
+  opacity: 0.5;
   transition: opacity 0.15s, background 0.15s;
 }
 
-.ref-item:hover .ref-ads-btn,
-.cite-item:hover .ref-ads-btn {
+.ref-ads-link:hover, .cite-ads-link:hover {
   opacity: 1;
-}
-
-.ref-ads-btn:hover {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
+  background: var(--bg-tertiary);
+  color: var(--accent);
 }
 
 /* BibTeX Tab */
@@ -3065,6 +3302,222 @@ body.ios-platform .pdf-container {
   color: var(--success);
 }
 
+/* Export/Import Library Modals */
+.export-modal-content,
+.import-modal-content {
+  width: 480px;
+}
+
+.export-name-section,
+.import-name-section {
+  margin-bottom: 16px;
+}
+
+.export-name-section label,
+.import-name-section label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+}
+
+.modal-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
+
+.modal-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.2);
+}
+
+.modal-input::placeholder {
+  color: var(--text-muted);
+}
+
+.export-summary,
+.export-estimate {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.export-estimate strong {
+  color: var(--accent);
+}
+
+.export-options,
+.import-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.export-option,
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.export-option:hover,
+.radio-option:hover {
+  background: var(--bg-hover);
+}
+
+.export-option input[type="checkbox"],
+.radio-option input[type="radio"] {
+  width: auto;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.option-text {
+  flex: 1;
+  font-size: 13px;
+}
+
+.option-size {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.option-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.option-hint.warning {
+  color: var(--error);
+}
+
+.export-progress,
+.import-progress {
+  margin: 16px 0;
+}
+
+.export-progress p,
+.import-progress p {
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.progress-bar {
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+  width: 0;
+}
+
+/* Import modal specific */
+.import-file-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.import-icon {
+  font-size: 32px;
+}
+
+.import-file-details {
+  flex: 1;
+}
+
+.import-filename {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.import-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.import-stats {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  padding: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.import-stat {
+  text-align: center;
+}
+
+.stat-value {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.import-mode {
+  margin-bottom: 12px;
+}
+
+.radio-option {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.radio-option > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.import-result {
+  text-align: center;
+  padding: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+}
+
+.import-result-stats {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 /* Smart Collection Modal */
 .collection-type-toggle {
   display: flex;
@@ -3235,6 +3688,75 @@ body.ios-platform .pdf-container {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* Download PDF Dropdown */
+.download-pdf-dropdown {
+  position: relative;
+}
+
+.download-btn {
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.download-btn:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.download-pdf-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  min-width: 140px;
+  overflow: hidden;
+}
+
+.download-pdf-menu.hidden {
+  display: none;
+}
+
+.download-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.download-option:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.download-option.disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+.download-option.disabled:hover {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.download-loading {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 /* ADS Sync Progress */
@@ -4995,6 +5517,38 @@ body.resizing-vertical * {
   border-radius: 10px;
 }
 
+/* Dropdown source item structure */
+.source-status {
+  font-size: 10px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.source-label {
+  flex: 1;
+}
+
+.source-action {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.pdf-source-item.downloaded .source-status {
+  color: var(--success);
+}
+
+/* Sheet action label */
+.sheet-action-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.sheet-option.downloaded .sheet-action-label {
+  color: var(--accent);
+}
+
 .pdf-delete-btn {
   margin-left: auto;
   font-size: 14px;
@@ -5063,15 +5617,203 @@ body.resizing-vertical * {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   FILTER SELECT STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.filter-select {
+  margin-right: 4px;
+  min-width: 50px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIBRARY TAB STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Library Tab Layout */
+.library-tab-content {
+  padding: 16px;
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.library-section {
+  margin-bottom: 24px;
+}
+
+.library-section .section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.library-section .section-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.section-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.lib-action-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.lib-action-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* Library List Items */
+.libraries-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.library-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  gap: 10px;
+}
+
+.library-item:hover {
+  background: var(--bg-hover);
+}
+
+.library-item.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.library-item .library-icon {
+  font-size: 16px;
+}
+
+.library-item .library-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.library-item .library-name {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.library-item .library-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.library-item .library-delete-btn {
+  opacity: 0;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.library-item:hover .library-delete-btn {
+  opacity: 1;
+}
+
+.library-item.active .library-delete-btn {
+  display: none; /* Can't delete active library */
+}
+
+/* Collection List Items in Library Tab */
+#tab-collections-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.collection-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  gap: 10px;
+}
+
+.collection-item:hover {
+  background: var(--bg-hover);
+}
+
+.collection-item.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+
+.collection-item .collection-icon {
+  font-size: 14px;
+}
+
+.collection-item .collection-name {
+  flex: 1;
+  font-size: 13px;
+}
+
+.collection-item .collection-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.collection-item .collection-delete-btn {
+  opacity: 0;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.collection-item:hover .collection-delete-btn {
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    iOS PLATFORM STYLES
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* iOS-specific adjustments */
 body.ios,
 body.ios-platform {
-  /* Safe area insets for notch devices */
+  /* Use dvh for proper mobile viewport height */
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  /* Safe area insets handled by content, not body padding */
+  padding: 0;
+}
+
+body.ios .screen,
+body.ios-platform .screen {
+  height: 100dvh;
+  max-height: 100dvh;
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: border-box;
 }
 
 body.ios .titlebar-drag-region,
@@ -5785,31 +6527,31 @@ body.ios-platform .sidebar {
    MOBILE RESPONSIVE STYLES
    ============================================ */
 
-/* Mobile Top Bar - Hidden on desktop */
+/* Top Bar - Always visible */
 .mobile-top-bar {
-  display: none;
+  display: flex;
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  height: 56px;
+  height: 36px;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border-color);
   z-index: 200;
-  padding: env(safe-area-inset-top, 0) 16px 0 16px;
+  padding: env(safe-area-inset-top, 0) 8px 0 8px;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .mobile-top-bar .hamburger-btn {
   background: none;
   border: none;
-  font-size: 24px;
-  padding: 8px;
+  font-size: 20px;
+  padding: 4px;
   cursor: pointer;
   color: var(--text-primary);
-  min-width: 44px;
-  min-height: 44px;
+  min-width: 32px;
+  min-height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5817,8 +6559,139 @@ body.ios-platform .sidebar {
 
 .mobile-top-bar .top-bar-title {
   flex: 1;
-  font-weight: 600;
-  font-size: 17px;
+  text-align: right;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-top-bar .search-btn {
+  background: none;
+  border: none;
+  font-size: 16px;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+  min-width: auto;
+  min-height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mobile-toolbar-btns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mobile-tb-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 3px 6px;
+  min-width: auto;
+  min-height: auto;
+  cursor: pointer;
+}
+
+.mobile-tb-btn:hover {
+  background: var(--bg-hover);
+}
+
+.mobile-sort-btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mobile-sort-label {
+  font-size: 10px;
+}
+
+.mobile-sort-dir {
+  font-size: 10px;
+}
+
+.mobile-sort-dropdown {
+  position: relative;
+}
+
+.mobile-sort-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  z-index: 300;
+  min-width: 120px;
+}
+
+.mobile-sort-menu.hidden {
+  display: none;
+}
+
+.mobile-sort-option {
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mobile-sort-option:hover {
+  background: var(--bg-hover);
+}
+
+.mobile-sort-option:first-child {
+  border-radius: 4px 4px 0 0;
+}
+
+.mobile-sort-option:last-child {
+  border-radius: 0 0 4px 4px;
+}
+
+.mobile-download-dropdown {
+  position: relative;
+}
+
+.mobile-download-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  z-index: 300;
+  min-width: 120px;
+}
+
+.mobile-download-menu.hidden {
+  display: none;
+}
+
+.mobile-download-menu .download-option {
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mobile-download-menu .download-option:hover {
+  background: var(--bg-hover);
+}
+
+.mobile-download-menu .download-loading {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 /* Mobile Library Picker Overlay */
@@ -5964,45 +6837,92 @@ body.ios-platform .sidebar {
   opacity: 0.8;
 }
 
-/* Mobile Bottom Tab Bar - Hidden on desktop */
-.mobile-tab-bar {
-  display: none;
+/* Mobile Picker Overlay (for rating, etc.) */
+.mobile-picker-overlay {
   position: fixed;
-  bottom: 0;
+  top: 0;
   left: 0;
   right: 0;
-  height: 56px;
-  padding-bottom: env(safe-area-inset-bottom, 0);
-  background: var(--bg-primary);
-  border-top: 1px solid var(--border-color);
-  z-index: 200;
-}
-
-.mobile-tab-bar .tab-item {
-  flex: 1;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 350;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 6px 0;
+  padding: 20px;
+}
+
+.mobile-picker-modal {
+  background: var(--bg-primary);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 320px;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.mobile-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.mobile-picker-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.mobile-picker-close {
+  background: none;
+  border: none;
+  font-size: 28px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mobile-picker-options {
+  padding: 8px 0;
+}
+
+.mobile-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  width: 100%;
   background: none;
   border: none;
   cursor: pointer;
-  color: var(--text-secondary);
-  gap: 2px;
-  min-height: 44px;
+  text-align: left;
+  color: var(--text-primary);
+  font-size: 16px;
 }
 
-.mobile-tab-bar .tab-item.active {
-  color: var(--accent-color);
+.mobile-picker-option:active {
+  background: var(--bg-secondary);
 }
 
-.mobile-tab-bar .tab-icon {
-  font-size: 22px;
+.mobile-picker-option.selected {
+  background: var(--accent-color-light, rgba(0, 122, 255, 0.1));
 }
 
-.mobile-tab-bar .tab-label {
-  font-size: 10px;
+.mobile-picker-option .picker-icon {
+  font-size: 24px;
+  width: 32px;
+  text-align: center;
+}
+
+.mobile-picker-option .picker-label {
+  flex: 1;
   font-weight: 500;
 }
 
@@ -6011,10 +6931,11 @@ body.ios-platform .sidebar {
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.3);
   z-index: 300;
   opacity: 0;
   transition: opacity 0.3s ease;
+  backdrop-filter: blur(2px);
 }
 
 .mobile-drawer-overlay.visible {
@@ -6027,8 +6948,8 @@ body.ios-platform .sidebar {
   top: 0;
   left: 0;
   bottom: 0;
-  width: 280px;
-  max-width: 80vw;
+  width: 300px;
+  max-width: 85vw;
   background: var(--bg-primary);
   z-index: 301;
   transform: translateX(-100%);
@@ -6036,6 +6957,7 @@ body.ios-platform .sidebar {
   padding-top: env(safe-area-inset-top, 0);
   display: flex;
   flex-direction: column;
+  box-shadow: 4px 0 20px rgba(0, 0, 0, 0.15);
 }
 
 .mobile-drawer.open {
@@ -6075,31 +6997,280 @@ body.ios-platform .sidebar {
   padding: 16px;
 }
 
+.drawer-section {
+  margin-bottom: 16px;
+}
+
+.drawer-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.drawer-add-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.drawer-add-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* Drawer Library Section */
+.drawer-current-library {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.drawer-lib-icon {
+  font-size: 16px;
+}
+
+.drawer-lib-name {
+  flex: 1;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.drawer-lib-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.drawer-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.drawer-library-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background 0.15s;
+}
+
+.drawer-library-item:hover {
+  background: var(--bg-hover);
+}
+
+.drawer-library-item.active {
+  background: var(--bg-selected);
+}
+
+.drawer-library-item .lib-icon {
+  font-size: 12px;
+}
+
+.drawer-library-item .lib-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-library-item .lib-count {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.drawer-library-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drawer-lib-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: all 0.15s;
+}
+
+.drawer-lib-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.drawer-nav-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.drawer-nav-item {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: all 0.15s;
+}
+
+.drawer-nav-item:hover {
+  background: var(--bg-hover);
+}
+
+.drawer-nav-item.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+
+.drawer-collections {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drawer-collection-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background 0.15s;
+}
+
+.drawer-collection-item:hover {
+  background: var(--bg-hover);
+}
+
+.drawer-collection-item.active {
+  background: var(--bg-selected);
+}
+
+.drawer-collection-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Collapsible section toggles */
+.drawer-section-label.drawer-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+.drawer-section-arrow {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+  color: var(--text-tertiary);
+}
+
+.drawer-toggle.expanded .drawer-section-arrow {
+  transform: rotate(90deg);
+}
+
+/* Console in drawer */
+.drawer-console {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.drawer-console-log {
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 8px;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  background: var(--bg-secondary);
+}
+
+.drawer-console-log .console-line {
+  padding: 2px 0;
+  word-break: break-word;
+}
+
+.drawer-console-log .console-info {
+  color: var(--text-secondary);
+}
+
+.drawer-console-log .console-success {
+  color: var(--success);
+}
+
+.drawer-console-log .console-warn {
+  color: var(--warning);
+}
+
+.drawer-console-log .console-error {
+  color: var(--error);
+}
+
+/* Shortcuts in drawer */
+.drawer-shortcuts {
+  margin-top: 8px;
+}
+
+.drawer-shortcuts-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.drawer-shortcuts-grid .shortcut-key {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.drawer-section-bottom {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
 /* Mobile Responsive Breakpoint Styles */
 @media (max-width: 768px) {
-  /* Show mobile navigation */
-  .mobile-top-bar {
-    display: flex;
-  }
-
-  .mobile-tab-bar {
-    display: flex;
-  }
-
-  /* Hide desktop elements */
-  .sidebar {
-    display: none;
-  }
-
-  .paper-list-panel {
-    display: none;
-  }
-
+  /* Hide annotations panel on mobile */
   .annotations-panel {
-    display: none;
-  }
-
-  .resize-handle {
     display: none;
   }
 
@@ -6107,9 +7278,8 @@ body.ios-platform .sidebar {
     display: none;
   }
 
-  /* Adjust main content area */
+  /* Adjust main content area for mobile bottom bar */
   #main-screen {
-    padding-top: calc(56px + env(safe-area-inset-top, 0));
     padding-bottom: calc(56px + env(safe-area-inset-bottom, 0));
   }
 
@@ -6117,13 +7287,14 @@ body.ios-platform .sidebar {
     flex-direction: column;
   }
 
-  /* Full screen views when active */
-  .mobile-view-active [data-mobile-view] {
+  /* Mobile view management - base state: hide all views */
+  .paper-list-panel,
+  .paper-detail {
     position: fixed !important;
-    top: calc(56px + env(safe-area-inset-top, 0)) !important;
+    top: 36px !important; /* Below mobile top bar */
     left: 0 !important;
     right: 0 !important;
-    bottom: calc(56px + env(safe-area-inset-bottom, 0)) !important;
+    bottom: 56px !important; /* Height of bottom bar */
     width: 100% !important;
     height: auto !important;
     display: none !important;
@@ -6132,8 +7303,19 @@ body.ios-platform .sidebar {
     overflow: auto !important;
   }
 
-  .mobile-view-active [data-mobile-view].active {
+  /* Show active mobile view */
+  [data-mobile-view].mobile-active {
     display: block !important;
+  }
+
+  /* Default: show papers list when no view is explicitly active */
+  body:not(.showing-detail) .paper-list-panel {
+    display: block !important;
+  }
+
+  /* Papers tab - only visible on mobile */
+  .tab-btn.mobile-only {
+    display: flex !important;
   }
 
   /* Touch-friendly button sizing */
@@ -6142,6 +7324,21 @@ body.ios-platform .sidebar {
   [role="button"] {
     min-height: 44px;
     min-width: 44px;
+  }
+
+  /* Smaller toolbar controls - don't need full 44px touch targets */
+  .sort-dropdown-trigger,
+  .search-shortcut-btn,
+  .list-toolbar button,
+  .mobile-tb-btn,
+  #search-input {
+    min-height: 24px;
+    min-width: auto;
+  }
+
+  .sort-dropdown-trigger,
+  .search-shortcut-btn {
+    padding: 4px 8px;
   }
 
   /* Ensure interactive elements are touch-friendly */
@@ -6283,7 +7480,6 @@ body.pdf-fullscreen {
 
 body.pdf-fullscreen .mobile-nav,
 body.pdf-fullscreen .mobile-pdf-controls,
-body.pdf-fullscreen .mobile-tab-bar,
 body.pdf-fullscreen .app-header,
 body.pdf-fullscreen .sidebar,
 body.pdf-fullscreen .paper-list-panel,
@@ -6485,6 +7681,51 @@ body.pdf-fullscreen .detail-panel {
   background: var(--bg-hover);
 }
 
+/* Info Sheet (Paper Info: BibTeX, Refs, Cites) */
+.info-sheet-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 9998;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.info-sheet-overlay.visible {
+  opacity: 1;
+}
+
+.info-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-secondary);
+  border-radius: 16px 16px 0 0;
+  z-index: 9999;
+  max-height: 60vh;
+  transform: translateY(100%);
+  transition: transform 0.3s ease;
+  padding-bottom: env(safe-area-inset-bottom, 20px);
+}
+
+.info-sheet.visible {
+  transform: translateY(0);
+}
+
+.sheet-option-count {
+  font-size: 14px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 2px 8px;
+  border-radius: 10px;
+  min-width: 24px;
+  text-align: center;
+}
+
 /* Focus Notes Mode - Split view with PDF left, Notes right */
 .focus-notes-toolbar {
   position: fixed;
@@ -6578,7 +7819,6 @@ body.focus-notes-mode .resize-handle[data-resize="list"],
 body.focus-notes-mode .bottom-bar,
 body.focus-notes-mode .info-tabs,
 body.focus-notes-mode .mobile-nav,
-body.focus-notes-mode .mobile-tab-bar,
 body.focus-notes-mode .titlebar-drag-region {
   display: none !important;
 }

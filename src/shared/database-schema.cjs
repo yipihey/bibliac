@@ -146,6 +146,16 @@ CREATE TABLE IF NOT EXISTS metadata (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS pdf_page_rotations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id INTEGER NOT NULL,
+  pdf_source TEXT,
+  page_number INTEGER NOT NULL,
+  rotation INTEGER DEFAULT 0,
+  FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+  UNIQUE(paper_id, pdf_source, page_number)
+);
 `;
 
 /**
@@ -167,7 +177,8 @@ const INDEXES_SQL = [
   'CREATE INDEX IF NOT EXISTS idx_collections_parent ON collections(parent_id)',
   'CREATE INDEX IF NOT EXISTS idx_paper_files_paper ON paper_files(paper_id)',
   'CREATE INDEX IF NOT EXISTS idx_paper_files_hash ON paper_files(file_hash)',
-  'CREATE INDEX IF NOT EXISTS idx_paper_files_status ON paper_files(status)'
+  'CREATE INDEX IF NOT EXISTS idx_paper_files_status ON paper_files(status)',
+  'CREATE INDEX IF NOT EXISTS idx_pdf_rotations_paper ON pdf_page_rotations(paper_id)'
 ];
 
 /**
