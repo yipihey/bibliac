@@ -2245,14 +2245,70 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
     }
 
     sendConsoleLog(`Downloading from: ${downloadUrl}`, 'info');
-    await pdfDownload.downloadFile(downloadUrl, destPath);
 
-    // Update paper with PDF path (use this source as the current/active one)
-    const relativePath = `papers/${filename}`;
-    database.updatePaper(paperId, { pdf_path: relativePath });
+    try {
+      await pdfDownload.downloadFile(downloadUrl, destPath);
 
-    sendConsoleLog(`Downloaded ${sourceType} PDF successfully`, 'success');
-    return { success: true, path: destPath, source: sourceType, pdf_path: relativePath };
+      // Update paper with PDF path (use this source as the current/active one)
+      const relativePath = `papers/${filename}`;
+      database.updatePaper(paperId, { pdf_path: relativePath });
+
+      sendConsoleLog(`Downloaded ${sourceType} PDF successfully`, 'success');
+      return { success: true, path: destPath, source: sourceType, pdf_path: relativePath };
+    } catch (downloadError) {
+      // If publisher download failed (auth required), try fallback sources
+      if (sourceType === 'publisher' && downloadError.message.includes('authentication')) {
+        sendConsoleLog(`Publisher requires authentication, trying fallback sources...`, 'warn');
+
+        // Try arXiv first
+        const arxivSource = esources.find(s => (s.link_type || s.type || '').includes('EPRINT_PDF'));
+        if (arxivSource && arxivSource.url) {
+          sendConsoleLog(`Trying arXiv fallback...`, 'info');
+          const arxivFilename = `${baseFilename}_EPRINT_PDF.pdf`;
+          const arxivPath = path.join(libraryPath, 'papers', arxivFilename);
+
+          try {
+            // arXiv URLs need .pdf extension
+            let arxivUrl = arxivSource.url;
+            if (!arxivUrl.endsWith('.pdf')) {
+              arxivUrl = arxivUrl.replace('/abs/', '/pdf/');
+              if (!arxivUrl.endsWith('.pdf')) arxivUrl += '.pdf';
+            }
+            await pdfDownload.downloadFile(arxivUrl, arxivPath);
+            const relativePath = `papers/${arxivFilename}`;
+            database.updatePaper(paperId, { pdf_path: relativePath });
+            sendConsoleLog(`Downloaded from arXiv (fallback)`, 'success');
+            return { success: true, path: arxivPath, source: 'arxiv', pdf_path: relativePath, fallback: true };
+          } catch (arxivError) {
+            sendConsoleLog(`arXiv fallback failed: ${arxivError.message}`, 'warn');
+          }
+        }
+
+        // Try ADS scan
+        const adsSource = esources.find(s => (s.link_type || s.type || '').includes('ADS_PDF'));
+        if (adsSource && adsSource.url) {
+          sendConsoleLog(`Trying ADS fallback...`, 'info');
+          const adsFilename = `${baseFilename}_ADS_PDF.pdf`;
+          const adsPath = path.join(libraryPath, 'papers', adsFilename);
+
+          try {
+            await pdfDownload.downloadFile(adsSource.url, adsPath);
+            const relativePath = `papers/${adsFilename}`;
+            database.updatePaper(paperId, { pdf_path: relativePath });
+            sendConsoleLog(`Downloaded from ADS (fallback)`, 'success');
+            return { success: true, path: adsPath, source: 'ads', pdf_path: relativePath, fallback: true };
+          } catch (adsError) {
+            sendConsoleLog(`ADS fallback failed: ${adsError.message}`, 'warn');
+          }
+        }
+
+        // All fallbacks failed
+        sendConsoleLog(`All download sources failed`, 'error');
+        return { success: false, error: 'Publisher requires authentication and no fallback sources available' };
+      }
+
+      throw downloadError;
+    }
   } catch (error) {
     sendConsoleLog(`Download failed: ${error.message}`, 'error');
     return { success: false, error: error.message };
@@ -3212,50 +3268,10 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
       if (paper.bibcode) {
         const existing = database.getPaperByBibcode(paper.bibcode);
         if (existing) {
-          // Paper exists - check if it already has a PDF
-          if (existing.pdf_path) {
-            // Has PDF - skip entirely
-            sendConsoleLog(`[${paper.bibcode}] Already has PDF, skipping`, 'info');
-            results.skipped.push({ paper, reason: 'Already has PDF' });
-            continue;
-          } else {
-            // No PDF - try to download PDF for existing paper
-            sendConsoleLog(`[${paper.bibcode}] Exists but missing PDF, attempting download...`, 'info');
-
-            const proxyUrl = store.get('libraryProxyUrl');
-            const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
-            const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl, pdfPriority,
-              (msg, type) => sendConsoleLog(`[${paper.bibcode}] ${msg}`, type)
-            );
-
-            if (downloadResult.success && downloadResult.path) {
-              // Extract text from downloaded PDF
-              const textFilename = path.basename(downloadResult.path, '.pdf') + '.txt';
-              const fullTextPath = path.join(libraryPath, 'text', textFilename);
-
-              // Ensure text directory exists
-              const textDir = path.join(libraryPath, 'text');
-              if (!fs.existsSync(textDir)) {
-                fs.mkdirSync(textDir, { recursive: true });
-              }
-
-              await pdfImport.extractText(downloadResult.path, fullTextPath);
-              const textPath = `text/${textFilename}`;
-
-              // Update existing paper with PDF path
-              database.updatePaper(existing.id, {
-                pdf_path: downloadResult.pdf_path,
-                text_path: textPath
-              });
-
-              sendConsoleLog(`[${paper.bibcode}] PDF downloaded for existing paper`, 'success');
-              results.imported.push({ paper, id: existing.id, hasPdf: true, pdfSource: downloadResult.source, wasUpdate: true });
-            } else {
-              sendConsoleLog(`[${paper.bibcode}] Still no PDF available`, 'warn');
-              results.skipped.push({ paper, reason: 'No PDF available (existing paper)' });
-            }
-            continue;
-          }
+          // Paper already exists in library - skip
+          sendConsoleLog(`[${paper.bibcode}] Already in library, skipping`, 'info');
+          results.skipped.push({ paper, reason: 'Already in library' });
+          continue;
         }
       }
 
@@ -3282,27 +3298,28 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
         }
       }
 
-      // Try to download PDF
-      const proxyUrl = store.get('libraryProxyUrl');
-      const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
-      const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl, pdfPriority,
-        (msg, type) => sendConsoleLog(`[${paper.bibcode}] ${msg}`, type)
-      );
-
-      let textPath = null;
-      if (downloadResult.success && downloadResult.path) {
-        // Extract text from downloaded PDF
-        const textFilename = path.basename(downloadResult.path, '.pdf') + '.txt';
-        const fullTextPath = path.join(libraryPath, 'text', textFilename);
-
-        // Ensure text directory exists
-        const textDir = path.join(libraryPath, 'text');
-        if (!fs.existsSync(textDir)) {
-          fs.mkdirSync(textDir, { recursive: true });
+      // Fetch available PDF sources (metadata only - no download)
+      let availableSources = [];
+      if (paper.bibcode) {
+        try {
+          sendConsoleLog(`[${paper.bibcode}] Fetching PDF sources...`, 'info');
+          const esources = await adsApi.getEsources(token, paper.bibcode);
+          availableSources = (esources || [])
+            .filter(e => e && ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'].some(t => (e.link_type || e.type || '').includes(t)))
+            .map(e => {
+              const linkType = (e.link_type || e.type || '').split('|').pop();
+              if (linkType === 'EPRINT_PDF') return 'arxiv';
+              if (linkType === 'PUB_PDF') return 'publisher';
+              if (linkType === 'ADS_PDF') return 'ads_scan';
+              return null;
+            })
+            .filter(Boolean);
+          if (availableSources.length > 0) {
+            sendConsoleLog(`[${paper.bibcode}] Available sources: ${availableSources.join(', ')}`, 'success');
+          }
+        } catch (e) {
+          // Esources fetch failed, not critical
         }
-
-        await pdfImport.extractText(downloadResult.path, fullTextPath);
-        textPath = `text/${textFilename}`;
       }
 
       // Get BibTeX for this paper
@@ -3315,13 +3332,7 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
         }
       }
 
-      if (downloadResult.success) {
-        sendConsoleLog(`[${paper.bibcode}] PDF downloaded`, 'success');
-      } else {
-        sendConsoleLog(`[${paper.bibcode}] No PDF available`, 'warn');
-      }
-
-      // Add paper to database
+      // Add paper to database (metadata only - no PDF)
       const paperId = database.addPaper({
         bibcode: paper.bibcode,
         doi: paper.doi,
@@ -3332,9 +3343,10 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
         journal: paper.journal,
         abstract: paper.abstract,
         keywords: paper.keywords,
-        pdf_path: downloadResult.pdf_path || null,
-        text_path: textPath,
-        bibtex: bibtexStr
+        pdf_path: null,
+        text_path: null,
+        bibtex: bibtexStr,
+        available_sources: availableSources.length > 0 ? JSON.stringify(availableSources) : null
       });
 
       // Fetch and store references/citations
@@ -3370,8 +3382,8 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
       results.imported.push({
         paper,
         id: paperId,
-        hasPdf: downloadResult.success,
-        pdfSource: downloadResult.source
+        hasPdf: false,
+        availableSources: availableSources
       });
 
     } catch (error) {
@@ -4811,27 +4823,28 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
     const paper = adsApi.adsToPaper(adsDoc);
     sendConsoleLog(`Importing: ${paper.bibcode} - "${paper.title?.substring(0, 40)}..."`, 'info');
 
-    // Try to download PDF
-    const proxyUrl = store.get('libraryProxyUrl');
-    const pdfPriority = store.get('pdfSourcePriority') || defaultPdfPriority;
-    const downloadResult = await pdfDownload.downloadPDF(paper, libraryPath, token, adsApi, proxyUrl, pdfPriority,
-      (msg, type) => sendConsoleLog(`[${paper.bibcode}] ${msg}`, type)
-    );
-
-    let textPath = null;
-    if (downloadResult.success && downloadResult.path) {
-      // Extract text from downloaded PDF
-      const textFilename = path.basename(downloadResult.path, '.pdf') + '.txt';
-      const fullTextPath = path.join(libraryPath, 'text', textFilename);
-
-      // Ensure text directory exists
-      const textDir = path.join(libraryPath, 'text');
-      if (!fs.existsSync(textDir)) {
-        fs.mkdirSync(textDir, { recursive: true });
+    // Fetch available PDF sources (metadata only - no download)
+    let availableSources = [];
+    if (paper.bibcode) {
+      try {
+        sendConsoleLog(`[${paper.bibcode}] Fetching PDF sources...`, 'info');
+        const esources = await adsApi.getEsources(token, paper.bibcode);
+        availableSources = (esources || [])
+          .filter(e => e && ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'].some(t => (e.link_type || e.type || '').includes(t)))
+          .map(e => {
+            const linkType = (e.link_type || e.type || '').split('|').pop();
+            if (linkType === 'EPRINT_PDF') return 'arxiv';
+            if (linkType === 'PUB_PDF') return 'publisher';
+            if (linkType === 'ADS_PDF') return 'ads_scan';
+            return null;
+          })
+          .filter(Boolean);
+        if (availableSources.length > 0) {
+          sendConsoleLog(`[${paper.bibcode}] Available sources: ${availableSources.join(', ')}`, 'success');
+        }
+      } catch (e) {
+        // Esources fetch failed, not critical
       }
-
-      await pdfImport.extractText(downloadResult.path, fullTextPath);
-      textPath = `text/${textFilename}`;
     }
 
     // Get BibTeX
@@ -4845,13 +4858,7 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
       }
     }
 
-    if (downloadResult.success) {
-      sendConsoleLog(`[${paper.bibcode}] PDF downloaded`, 'success');
-    } else {
-      sendConsoleLog(`[${paper.bibcode}] No PDF available`, 'warn');
-    }
-
-    // Add paper to database
+    // Add paper to database (metadata only - no PDF)
     const paperId = database.addPaper({
       bibcode: paper.bibcode,
       doi: paper.doi,
@@ -4862,9 +4869,10 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
       journal: paper.journal,
       abstract: paper.abstract,
       keywords: paper.keywords,
-      pdf_path: downloadResult.pdf_path || null,
-      text_path: textPath,
-      bibtex: bibtexStr
+      pdf_path: null,
+      text_path: null,
+      bibtex: bibtexStr,
+      available_sources: availableSources.length > 0 ? JSON.stringify(availableSources) : null
     });
 
     // Fetch and store references/citations
@@ -4908,7 +4916,8 @@ ipcMain.handle('import-single-from-ads', async (event, adsDoc) => {
     return {
       success: true,
       paperId,
-      hasPdf: !!downloadResult.pdf_path
+      hasPdf: false,
+      availableSources: availableSources
     };
   } catch (error) {
     sendConsoleLog(`Import failed: ${error.message}`, 'error');
@@ -5438,7 +5447,7 @@ function initializePaperFilesSystem(libraryPath) {
 
     // Initialize download strategies with configuration
     const adsToken = store.get('adsToken');
-    const proxyUrl = store.get('proxyUrl');
+    const proxyUrl = store.get('libraryProxyUrl');
     const pdfSourcePriority = store.get('pdfSourcePriority', ['arxiv', 'publisher', 'ads_scan']);
 
     const strategies = {
@@ -6432,7 +6441,7 @@ ipcMain.handle('temp-pdf-download', async (event, { paper }) => {
   }
 
   // Get proxy URL if configured
-  const proxyUrl = store.get('proxyUrl');
+  const proxyUrl = store.get('libraryProxyUrl');
 
   // Download with progress
   sendConsoleLog(`Downloading temp PDF for ${paper.bibcode}...`, 'info');

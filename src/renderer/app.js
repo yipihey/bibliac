@@ -3630,14 +3630,38 @@ class ADSReader {
           // Cmd+A: Select all papers
           e.preventDefault();
           this.selectAllPapers();
-        } else if (this.currentSmartSearch && this.selectedPapers.size > 0) {
-          // 'a' adds selected papers to library (from smart search)
-          this.addSelectedPapersToLibrary();
+        } else {
+          // Check if on refs/cites tab with selections
+          const activeTabA = document.querySelector('.tab-btn.active')?.dataset.tab;
+          if (activeTabA === 'refs' && this.selectedRefs?.size > 0) {
+            this.importSelectedRefs();
+          } else if (activeTabA === 'cites' && this.selectedCites?.size > 0) {
+            this.importSelectedCites();
+          } else if (this.currentSmartSearch && this.selectedPapers.size > 0) {
+            // 'a' adds selected papers to library (from smart search)
+            this.addSelectedPapersToLibrary();
+          }
         }
         break;
       case 'w':
         // 'w' opens in ADS (web)
-        if (this.selectedPaper) {
+        // Check if on refs/cites tab with a focused/selected item
+        const activeTabW = document.querySelector('.tab-btn.active')?.dataset.tab;
+        if (activeTabW === 'refs' && this.selectedRefs?.size > 0) {
+          // Open first selected ref in ADS
+          const refIndex = Array.from(this.selectedRefs)[0];
+          const ref = this.currentRefs?.[refIndex];
+          if (ref?.ref_bibcode) {
+            window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${ref.ref_bibcode}`);
+          }
+        } else if (activeTabW === 'cites' && this.selectedCites?.size > 0) {
+          // Open first selected cite in ADS
+          const citeIndex = Array.from(this.selectedCites)[0];
+          const cite = this.currentCites?.[citeIndex];
+          if (cite?.citing_bibcode) {
+            window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${cite.citing_bibcode}`);
+          }
+        } else if (this.selectedPaper) {
           this.openInADS();
         }
         break;
@@ -12307,6 +12331,23 @@ Time: ${systemInfo.timestamp}`;
 
       // Auto-scroll to bottom
       drawerLog.scrollTop = drawerLog.scrollHeight;
+    }
+
+    // Sync to download queue console (for download-related messages)
+    const queueConsole = document.getElementById('queue-console');
+    if (queueConsole) {
+      const queueEntry = document.createElement('div');
+      queueEntry.className = `queue-console-line ${type}`;
+      queueEntry.textContent = message;
+      queueConsole.appendChild(queueEntry);
+
+      // Keep only last 30 entries
+      while (queueConsole.children.length > 30) {
+        queueConsole.removeChild(queueConsole.firstChild);
+      }
+
+      // Auto-scroll to bottom
+      queueConsole.scrollTop = queueConsole.scrollHeight;
     }
   }
 
