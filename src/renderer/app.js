@@ -2900,6 +2900,9 @@ class ADSReader {
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => this.handleKeydown(e));
 
+    // Paste bibcode to search ADS
+    document.addEventListener('paste', (e) => this.handlePaste(e));
+
     // PDF container scroll for page tracking (throttled for performance)
     let scrollTicking = false;
     document.getElementById('pdf-container')?.addEventListener('scroll', () => {
@@ -3486,6 +3489,55 @@ class ADSReader {
         }
         break;
     }
+  }
+
+  // Handle paste event to detect bibcodes
+  handlePaste(e) {
+    // Only handle paste when not in an input field
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
+      return;
+    }
+
+    const text = e.clipboardData?.getData('text')?.trim();
+    if (!text) return;
+
+    // Check if it looks like a bibcode or list of bibcodes
+    const bibcodes = this.extractBibcodes(text);
+    if (bibcodes.length > 0) {
+      e.preventDefault();
+      this.searchBibcodes(bibcodes);
+    }
+  }
+
+  // Extract bibcodes from text
+  extractBibcodes(text) {
+    // Bibcode pattern: year (4 digits) + journal code + volume/page + author initial
+    // Examples: 2024ApJ...123..456A, 2020MNRAS.500.1234B, 2011A&A...527A.126P
+    const bibcodePattern = /\b(\d{4}[A-Za-z&.]{2,9}\.{0,3}\d{0,5}[A-Za-z]?\.{0,2}\d+[A-Za-z]?\.?\.?\d*[A-Za-z.]*)\b/g;
+    const matches = text.match(bibcodePattern) || [];
+    // Filter to ensure they look like real bibcodes (at least 13 chars, contain dots)
+    const filtered = matches.filter(m => m.length >= 13 && m.includes('.'));
+    return [...new Set(filtered)]; // Remove duplicates
+  }
+
+  // Search ADS for bibcodes
+  async searchBibcodes(bibcodes) {
+    // Check for ADS token
+    const token = await window.electronAPI.getAdsToken();
+    if (!token) {
+      this.showNotification('Please configure your ADS API token first', 'error');
+      return;
+    }
+
+    // Show ADS search modal with bibcode query
+    this.showAdsSearchModal();
+
+    // Build query: bibcode:"X" OR bibcode:"Y"
+    const query = bibcodes.map(b => `bibcode:"${b}"`).join(' OR ');
+    document.getElementById('ads-query-input').value = query;
+
+    // Execute the search automatically
+    await this.executeAdsSearch();
   }
 
   showSetupScreen() {
