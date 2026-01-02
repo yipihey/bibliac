@@ -60,6 +60,11 @@ class ADSReader {
     this.pendingSelectionRects = null;
     this.pendingSelectionPage = null;
 
+    // Smart ADS Searches state
+    this.smartSearches = [];           // All saved searches
+    this.currentSmartSearch = null;    // ID of currently selected search (null = local library)
+    this.editingSearchId = null;       // ID of search being edited (null = creating new)
+
     this.init();
   }
 
@@ -182,6 +187,7 @@ class ADSReader {
         this.showMainScreen(info);
         await this.loadPapers();
         await this.loadCollections();
+        await this.loadSmartSearches();
         await this.checkAdsToken();
         await this.checkProxyStatus();
         await this.checkLlmConnection();
@@ -327,6 +333,11 @@ class ADSReader {
     document.getElementById('as-add-to-collection-btn')?.addEventListener('click', () => {
       this.hideSelectionActionSheet();
       this.showCollectionsActionSheet();
+    });
+    document.getElementById('as-add-to-library-btn')?.addEventListener('click', () => {
+      this.hideSelectionActionSheet();
+      this.addSelectedPapersToLibrary();
+      this.exitSelectionMode();
     });
     document.getElementById('as-remove-from-collection-btn')?.addEventListener('click', () => {
       this.hideSelectionActionSheet();
@@ -1237,11 +1248,17 @@ class ADSReader {
           this.showMainScreen({ path: result.path });
         }
 
-        // Reload papers and collections
+        // Reset smart search state when switching libraries
+        this.currentSmartSearch = null;
+        this.exitSmartSearchView();
+
+        // Reload papers, collections, and smart searches
         console.log('[switchToLibrary] Loading papers...');
         await this.loadPapers();
         console.log('[switchToLibrary] Loading collections...');
         await this.loadCollections();
+        console.log('[switchToLibrary] Loading smart searches...');
+        await this.loadSmartSearches();
         console.log('[switchToLibrary] Updating library picker...');
         await this.updateLibraryPickerDisplay();
 
@@ -2563,6 +2580,28 @@ class ADSReader {
           case 'feedback-submit-btn':
             this.submitFeedback();
             break;
+          // Smart ADS Search buttons
+          case 'drawer-add-search-btn':
+            this.showSmartSearchModal();
+            break;
+          case 'search-refresh-btn':
+            this.refreshSmartSearch();
+            break;
+          case 'search-edit-btn':
+            if (this.currentSmartSearch) {
+              this.showSmartSearchModal(this.currentSmartSearch);
+            }
+            break;
+          case 'smart-search-close-btn':
+            this.exitSmartSearchView();
+            this.setView('all');
+            break;
+          case 'smart-search-cancel-btn':
+            this.hideSmartSearchModal();
+            break;
+          case 'smart-search-save-btn':
+            this.saveSmartSearch();
+            break;
         }
       }
 
@@ -2591,12 +2630,15 @@ class ADSReader {
         // Determine which input to use based on which modal is open
         const adsModal = document.getElementById('ads-search-modal');
         const lookupModal = document.getElementById('ads-lookup-modal');
+        const smartSearchModal = document.getElementById('smart-search-modal');
 
         let input;
         if (adsModal && !adsModal.classList.contains('hidden')) {
           input = document.getElementById('ads-query-input');
         } else if (lookupModal && !lookupModal.classList.contains('hidden')) {
           input = document.getElementById('ads-lookup-query');
+        } else if (smartSearchModal && !smartSearchModal.classList.contains('hidden')) {
+          input = document.getElementById('smart-search-query');
         }
 
         if (input) {
@@ -3036,6 +3078,10 @@ class ADSReader {
     document.getElementById('ctx-export-book')?.addEventListener('click', () => {
       this.hideContextMenu();
       this.showExportBookModal();
+    });
+    document.getElementById('ctx-add-to-library')?.addEventListener('click', () => {
+      this.hideContextMenu();
+      this.addSelectedPapersToLibrary();
     });
 
     // Keyboard shortcuts
@@ -4155,6 +4201,336 @@ class ADSReader {
     this.renderFilterCollections();
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SMART ADS SEARCHES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async loadSmartSearches() {
+    if (!window.electronAPI?.smartSearchList) return;
+    this.smartSearches = await window.electronAPI.smartSearchList();
+    this.renderSmartSearchesList();
+  }
+
+  renderSmartSearchesList() {
+    const listEl = document.getElementById('drawer-searches-list');
+    if (!listEl) return;
+
+    if (this.smartSearches.length === 0) {
+      listEl.innerHTML = '<div class="drawer-placeholder">No saved searches</div>';
+      return;
+    }
+
+    listEl.innerHTML = this.smartSearches.map(search => `
+      <div class="drawer-search-item${this.currentSmartSearch === search.id ? ' active' : ''}"
+           data-search-id="${search.id}">
+        <span class="search-icon">🔍</span>
+        <span class="search-name">${this.escapeHtml(search.name)}</span>
+        <span class="search-count">${search.result_count || '—'}</span>
+        <button class="search-delete-btn" data-delete-search="${search.id}" title="Delete search">✕</button>
+      </div>
+    `).join('');
+
+    // Attach click handlers
+    listEl.querySelectorAll('.drawer-search-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        // Don't select if clicking delete button
+        if (e.target.classList.contains('search-delete-btn')) return;
+        this.selectSmartSearch(parseInt(item.dataset.searchId));
+        this.closeDrawer();
+      });
+    });
+
+    // Delete handlers
+    listEl.querySelectorAll('.search-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const searchId = parseInt(btn.dataset.deleteSearch);
+        const search = this.smartSearches.find(s => s.id === searchId);
+        if (search && confirm(`Delete search "${search.name}"?`)) {
+          await this.deleteSmartSearch(searchId);
+        }
+      });
+    });
+  }
+
+  async selectSmartSearch(searchId) {
+    const search = this.smartSearches.find(s => s.id === searchId);
+    if (!search) return;
+
+    // Update state
+    this.currentSmartSearch = searchId;
+    this.currentView = null;
+    this.currentCollection = null;
+
+    // Clear selections
+    this.selectedPapers.clear();
+    this.selectedPaper = null;
+
+    // Update UI
+    this.updateNavActiveStates();
+    this.renderSmartSearchesList();
+
+    // Show search toolbar
+    const toolbar = document.getElementById('smart-search-toolbar');
+    if (toolbar) {
+      toolbar.classList.remove('hidden');
+      document.getElementById('search-toolbar-name').textContent = search.name;
+      this.updateSearchToolbarMeta(search);
+    }
+
+    // Load cached results
+    const result = await window.electronAPI.smartSearchGet(searchId);
+    if (result && result.results) {
+      // Convert results to paper-like objects for unified rendering
+      this.papers = result.results.map(r => ({
+        ...r,
+        id: r.bibcode, // Use bibcode as ID for ADS papers
+        isAdsSearch: true
+      }));
+      this.sortPapers();
+      this.renderPaperList();
+    } else {
+      // No cached results - show empty state
+      this.papers = [];
+      this.renderSmartSearchEmptyState(search);
+    }
+  }
+
+  updateSearchToolbarMeta(search) {
+    const metaEl = document.getElementById('search-toolbar-meta');
+    if (!metaEl) return;
+
+    let meta = `${search.result_count || 0} results`;
+    if (search.last_refresh_date) {
+      const refreshDate = new Date(search.last_refresh_date);
+      const now = new Date();
+      const diffMs = now - refreshDate;
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+
+      if (diffMins < 60) {
+        meta += ` • Updated ${diffMins}m ago`;
+      } else if (diffHours < 24) {
+        meta += ` • Updated ${diffHours}h ago`;
+      } else {
+        meta += ` • Updated ${diffDays}d ago`;
+      }
+    }
+    metaEl.textContent = meta;
+  }
+
+  renderSmartSearchEmptyState(search) {
+    const listEl = document.getElementById('paper-list');
+    listEl.innerHTML = `
+      <div class="smart-search-empty">
+        <div class="empty-icon">🔍</div>
+        <h3>${search.result_count > 0 ? 'No cached results' : 'Search not yet executed'}</h3>
+        <p>Click the refresh button to load results from ADS</p>
+        <button class="primary-button" id="refresh-search-empty-btn">Refresh Now</button>
+      </div>
+    `;
+    document.getElementById('refresh-search-empty-btn')?.addEventListener('click', () => {
+      this.refreshSmartSearch(search.id);
+    });
+  }
+
+  async refreshSmartSearch(searchId = null) {
+    const id = searchId || this.currentSmartSearch;
+    if (!id) return;
+
+    const search = this.smartSearches.find(s => s.id === id);
+    if (!search) return;
+
+    // Show loading
+    const refreshBtn = document.getElementById('search-refresh-btn');
+    refreshBtn?.classList.add('loading');
+
+    try {
+      const result = await window.electronAPI.smartSearchRefresh(id);
+
+      if (result.success) {
+        // Reload searches list
+        await this.loadSmartSearches();
+
+        // If we're viewing this search, reload results
+        if (this.currentSmartSearch === id) {
+          await this.selectSmartSearch(id);
+        }
+
+        this.showNotification(`Refreshed: ${result.resultCount} results`, 'success');
+      } else {
+        this.showNotification(`Refresh failed: ${result.error}`, 'error');
+      }
+    } finally {
+      refreshBtn?.classList.remove('loading');
+    }
+  }
+
+  async deleteSmartSearch(searchId) {
+    const result = await window.electronAPI.smartSearchDelete(searchId);
+    if (result.success) {
+      await this.loadSmartSearches();
+      // If we were viewing this search, go back to All Papers
+      if (this.currentSmartSearch === searchId) {
+        this.exitSmartSearchView();
+        this.setView('all');
+      }
+    }
+  }
+
+  exitSmartSearchView() {
+    this.currentSmartSearch = null;
+
+    // Hide search toolbar
+    const toolbar = document.getElementById('smart-search-toolbar');
+    toolbar?.classList.add('hidden');
+
+    // Update nav
+    this.renderSmartSearchesList();
+  }
+
+  showSmartSearchModal(searchId = null) {
+    this.editingSearchId = searchId;
+    const modal = document.getElementById('smart-search-modal');
+    const titleEl = document.getElementById('smart-search-modal-title');
+    const nameInput = document.getElementById('smart-search-name');
+    const queryInput = document.getElementById('smart-search-query');
+
+    if (searchId) {
+      const search = this.smartSearches.find(s => s.id === searchId);
+      if (search) {
+        titleEl.textContent = 'Edit ADS Search';
+        nameInput.value = search.name;
+        queryInput.value = search.query;
+      }
+    } else {
+      titleEl.textContent = 'New ADS Search';
+      nameInput.value = '';
+      queryInput.value = '';
+    }
+
+    modal.classList.remove('hidden');
+    nameInput.focus();
+  }
+
+  hideSmartSearchModal() {
+    const modal = document.getElementById('smart-search-modal');
+    modal.classList.add('hidden');
+    this.editingSearchId = null;
+  }
+
+  async saveSmartSearch() {
+    const nameInput = document.getElementById('smart-search-name');
+    const queryInput = document.getElementById('smart-search-query');
+
+    const name = nameInput.value.trim();
+    const query = queryInput.value.trim();
+
+    if (!name || !query) {
+      this.showNotification('Please enter both name and query', 'error');
+      return;
+    }
+
+    try {
+      if (this.editingSearchId) {
+        // Update existing
+        await window.electronAPI.smartSearchUpdate(this.editingSearchId, { name, query });
+      } else {
+        // Create new
+        const result = await window.electronAPI.smartSearchCreate(name, query);
+        if (result.success) {
+          // Auto-refresh to get results
+          await window.electronAPI.smartSearchRefresh(result.id);
+          // Select the new search
+          await this.loadSmartSearches();
+          await this.selectSmartSearch(result.id);
+        }
+      }
+
+      this.hideSmartSearchModal();
+      await this.loadSmartSearches();
+    } catch (error) {
+      this.showNotification(`Error: ${error.message}`, 'error');
+    }
+  }
+
+  async addPaperToLibraryFromSearch(paper) {
+    if (!paper.bibcode) {
+      this.showNotification('Cannot add paper without bibcode', 'error');
+      return;
+    }
+
+    if (paper.inLibrary) {
+      this.showNotification('Paper already in library', 'info');
+      return;
+    }
+
+    const result = await window.electronAPI.smartSearchAddToLibrary(paper.bibcode);
+
+    if (result.success) {
+      // Mark as in library
+      paper.inLibrary = true;
+      paper.libraryPaperId = result.paperId;
+      this.renderPaperList();
+      this.showNotification(`Added "${paper.title?.substring(0, 50)}..." to library`, 'success');
+    } else {
+      this.showNotification(`Failed to add: ${result.error}`, 'error');
+    }
+  }
+
+  /**
+   * Add all selected papers from smart search to library
+   * Used by context menu "Add to Library" and iOS action sheet
+   */
+  async addSelectedPapersToLibrary() {
+    if (!this.currentSmartSearch) return;
+
+    const papersToAdd = [];
+    for (const id of this.selectedPapers) {
+      const paper = this.papers.find(p => p.id === id);
+      if (paper && !paper.inLibrary) {
+        papersToAdd.push(paper);
+      }
+    }
+
+    if (papersToAdd.length === 0) {
+      this.showNotification('All selected papers already in library', 'info');
+      return;
+    }
+
+    let added = 0;
+    for (const paper of papersToAdd) {
+      const result = await window.electronAPI.smartSearchAddToLibrary(paper.bibcode);
+      if (result.success) {
+        paper.inLibrary = true;
+        paper.libraryPaperId = result.paperId;
+        added++;
+      }
+    }
+
+    this.renderPaperList();
+    const msg = added === 1 ? 'Added 1 paper to library' : `Added ${added} papers to library`;
+    this.showNotification(msg, 'success');
+  }
+
+  updateNavActiveStates() {
+    // Update view items
+    document.querySelectorAll('.drawer-nav-item[data-view]').forEach(item => {
+      item.classList.toggle('active', this.currentView === item.dataset.view && !this.currentSmartSearch);
+    });
+
+    // Update collection items
+    document.querySelectorAll('.collection-item').forEach(item => {
+      item.classList.toggle('active', parseInt(item.dataset.collection) === this.currentCollection && !this.currentSmartSearch);
+    });
+
+    // Update smart search items
+    document.querySelectorAll('.drawer-search-item').forEach(item => {
+      item.classList.toggle('active', parseInt(item.dataset.searchId) === this.currentSmartSearch);
+    });
+  }
+
   // Virtual scrolling configuration
   PAPER_ITEM_HEIGHT = 58; // Fixed height per paper item in pixels
   VIRTUAL_BUFFER = 5; // Extra items to render above/below visible area
@@ -4187,23 +4563,48 @@ class ADSReader {
   renderFullPaperList() {
     const listEl = document.getElementById('paper-list');
     const inCollection = !!this.currentCollection;
-    const actionIcon = inCollection ? '✕' : '🗑';
-    const actionTitle = inCollection ? 'Remove from collection' : 'Delete paper';
+    const isAdsSearchView = !!this.currentSmartSearch;
+
+    // Determine action based on context
+    let actionIcon, actionTitle, actionClass;
+    if (isAdsSearchView) {
+      actionIcon = '+';
+      actionTitle = 'Add to library';
+      actionClass = 'add';
+    } else if (inCollection) {
+      actionIcon = '✕';
+      actionTitle = 'Remove from collection';
+      actionClass = 'remove';
+    } else {
+      actionIcon = '🗑';
+      actionTitle = 'Delete paper';
+      actionClass = 'delete';
+    }
 
     listEl.innerHTML = this.papers.map((paper, index) => {
       const pos = this.pdfPagePositions[paper.id];
       const hasProgress = pos && pos.totalPages > 0 && pos.page > 1;
       const progressPct = hasProgress ? Math.round((pos.page / pos.totalPages) * 100) : 0;
 
+      // ADS search paper specific badges
+      const inLibraryBadge = (isAdsSearchView && paper.inLibrary) ?
+        '<span class="in-library-badge" title="Already in your library">In Library</span>' : '';
+
+      // For ADS papers, hide the swipe action if already in library
+      const showSwipeAction = !isAdsSearchView || !paper.inLibrary;
+
       return `
-      <div class="paper-swipe-container" data-id="${paper.id}" data-index="${index}">
-        <div class="paper-swipe-action ${inCollection ? 'remove' : 'delete'}" title="${actionTitle}">
+      <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${index}" data-bibcode="${paper.bibcode || ''}">
+        ${showSwipeAction ? `
+        <div class="paper-swipe-action ${actionClass}" title="${actionTitle}">
           <span class="swipe-action-icon">${actionIcon}</span>
         </div>
-        <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}" data-id="${paper.id}" data-index="${index}" draggable="true">
+        ` : '<div class="paper-swipe-action disabled"></div>'}
+        <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}${paper.inLibrary ? ' dimmed' : ''}" data-id="${paper.id}" data-index="${index}" draggable="${!isAdsSearchView}">
           <div class="paper-item-title">
-            <span class="paper-item-status ${paper.read_status}"></span>
+            <span class="paper-item-status ${paper.read_status || 'unread'}"></span>
             ${this.escapeHtml(paper.title || 'Untitled')}
+            ${inLibraryBadge}
           </div>
           <div class="paper-item-meta">
             <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
@@ -4259,8 +4660,23 @@ class ADSReader {
     const scrollTop = listEl.scrollTop;
     const viewportHeight = listEl.clientHeight;
     const inCollection = !!this.currentCollection;
-    const actionIcon = inCollection ? '✕' : '🗑';
-    const actionTitle = inCollection ? 'Remove from collection' : 'Delete paper';
+    const isAdsSearchView = !!this.currentSmartSearch;
+
+    // Determine action based on context
+    let actionIcon, actionTitle, actionClass;
+    if (isAdsSearchView) {
+      actionIcon = '+';
+      actionTitle = 'Add to library';
+      actionClass = 'add';
+    } else if (inCollection) {
+      actionIcon = '✕';
+      actionTitle = 'Remove from collection';
+      actionClass = 'remove';
+    } else {
+      actionIcon = '🗑';
+      actionTitle = 'Delete paper';
+      actionClass = 'delete';
+    }
 
     // Calculate visible range
     const startIndex = Math.max(0, Math.floor(scrollTop / this.PAPER_ITEM_HEIGHT) - this.VIRTUAL_BUFFER);
@@ -4278,17 +4694,27 @@ class ADSReader {
       const hasProgress = pos && pos.totalPages > 0 && pos.page > 1;
       const progressPct = hasProgress ? Math.round((pos.page / pos.totalPages) * 100) : 0;
 
+      // ADS search paper specific badges
+      const inLibraryBadge = (isAdsSearchView && paper.inLibrary) ?
+        '<span class="in-library-badge" title="Already in your library">In Library</span>' : '';
+
+      // For ADS papers, hide the swipe action if already in library
+      const showSwipeAction = !isAdsSearchView || !paper.inLibrary;
+
       html += `
-        <div class="paper-swipe-container" data-id="${paper.id}" data-index="${i}"
+        <div class="paper-swipe-container${paper.inLibrary ? ' in-library' : ''}" data-id="${paper.id}" data-index="${i}" data-bibcode="${paper.bibcode || ''}"
              style="position: absolute; top: ${top}px; left: 0; right: 0; height: ${this.PAPER_ITEM_HEIGHT}px;">
-          <div class="paper-swipe-action ${inCollection ? 'remove' : 'delete'}" title="${actionTitle}">
+          ${showSwipeAction ? `
+          <div class="paper-swipe-action ${actionClass}" title="${actionTitle}">
             <span class="swipe-action-icon">${actionIcon}</span>
           </div>
-          <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}"
-               data-id="${paper.id}" data-index="${i}" draggable="true">
+          ` : '<div class="paper-swipe-action disabled"></div>'}
+          <div class="paper-item${this.selectedPapers.has(paper.id) ? ' selected' : ''}${paper.inLibrary ? ' dimmed' : ''}"
+               data-id="${paper.id}" data-index="${i}" draggable="${!isAdsSearchView}">
             <div class="paper-item-title">
-              <span class="paper-item-status ${paper.read_status}"></span>
+              <span class="paper-item-status ${paper.read_status || 'unread'}"></span>
               ${this.escapeHtml(paper.title || 'Untitled')}
+              ${inLibraryBadge}
             </div>
             <div class="paper-item-meta">
               <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
@@ -4311,7 +4737,9 @@ class ADSReader {
     // Add click handlers with multi-select support
     container.querySelectorAll('.paper-item').forEach(item => {
       item.addEventListener('click', (e) => {
-        const id = parseInt(item.dataset.id);
+        // For ADS search papers, ID is a bibcode string; for local papers, it's a number
+        const rawId = item.dataset.id;
+        const id = this.currentSmartSearch ? rawId : parseInt(rawId);
         const index = parseInt(item.dataset.index);
         this.handlePaperClick(id, index, e);
       });
@@ -4415,25 +4843,40 @@ class ADSReader {
           currentX = 0;
         }, { passive: true });
 
-        // Handle tap on delete action area - use touchend for iOS
+        // Handle tap on action area - use touchend for iOS
         const actionArea = swipeContainer.querySelector('.paper-swipe-action');
-        const handleDeleteTap = async (e) => {
+        const handleActionTap = async (e) => {
           e.stopPropagation();
           e.preventDefault();
-          const paperId = parseInt(swipeContainer.dataset.id);
 
-          if (this.currentCollection) {
+          // Skip disabled actions (e.g., paper already in library)
+          if (actionArea.classList.contains('disabled')) return;
+
+          const rawId = swipeContainer.dataset.id;
+
+          if (this.currentSmartSearch) {
+            // Add to library from ADS search
+            const paper = this.papers.find(p => p.id === rawId);
+            if (paper && !paper.inLibrary) {
+              await this.addPaperToLibraryFromSearch(paper);
+              // Close the swipe
+              swipeContainer.classList.remove('swiped');
+              if (paperItem) paperItem.style.transform = '';
+            }
+          } else if (this.currentCollection) {
             // Remove from collection
+            const paperId = parseInt(rawId);
             await window.electronAPI.removePaperFromCollection(paperId, this.currentCollection);
             await this.loadPapersInCollection(this.currentCollection);
             this.consoleLog('Paper removed from collection', 'success');
           } else {
             // Delete paper - use custom confirmation for iOS
+            const paperId = parseInt(rawId);
             this.showDeleteConfirmation(paperId, swipeContainer, paperItem);
           }
         };
-        actionArea?.addEventListener('touchend', handleDeleteTap);
-        actionArea?.addEventListener('click', handleDeleteTap);
+        actionArea?.addEventListener('touchend', handleActionTap);
+        actionArea?.addEventListener('click', handleActionTap);
       });
 
       // Close any open swipes when tapping elsewhere
@@ -4546,7 +4989,9 @@ class ADSReader {
 
   updatePaperListSelection() {
     document.querySelectorAll('.paper-item').forEach(item => {
-      const id = parseInt(item.dataset.id);
+      // For ADS search papers, ID is a bibcode string; for local papers, it's a number
+      const rawId = item.dataset.id;
+      const id = this.currentSmartSearch ? rawId : parseInt(rawId);
       item.classList.toggle('selected', this.selectedPapers.has(id));
     });
   }
@@ -4554,9 +4999,11 @@ class ADSReader {
   updateSelectionUI() {
     const count = this.selectedPapers.size;
     const removeBtn = document.getElementById('remove-paper-btn');
-    removeBtn.disabled = count === 0;
-    removeBtn.textContent = count > 1 ? `−` : '−';
-    removeBtn.title = count > 1 ? `Remove ${count} Papers (Backspace)` : 'Remove Paper (Backspace)';
+    if (removeBtn) {
+      removeBtn.disabled = count === 0;
+      removeBtn.textContent = count > 1 ? `−` : '−';
+      removeBtn.title = count > 1 ? `Remove ${count} Papers (Backspace)` : 'Remove Paper (Backspace)';
+    }
 
     // Update attach button - disabled when multiple papers selected
     const attachBtn = document.getElementById('attach-file-btn');
@@ -4631,6 +5078,22 @@ class ADSReader {
         removeBtn.classList.add('hidden');
       }
     }
+
+    // Show/hide ADS-specific buttons
+    const addToLibraryBtn = document.getElementById('as-add-to-library-btn');
+    const deleteBtn = document.getElementById('as-delete-btn');
+    const syncBtn = document.getElementById('as-sync-btn');
+
+    if (this.currentSmartSearch) {
+      addToLibraryBtn?.classList.remove('hidden');
+      deleteBtn?.classList.add('hidden');
+      syncBtn?.classList.add('hidden');
+    } else {
+      addToLibraryBtn?.classList.add('hidden');
+      deleteBtn?.classList.remove('hidden');
+      syncBtn?.classList.remove('hidden');
+    }
+
     document.getElementById('action-sheet-overlay')?.classList.remove('hidden');
     document.getElementById('selection-action-sheet')?.classList.remove('hidden');
   }
@@ -4891,7 +5354,9 @@ class ADSReader {
 
     e.preventDefault();
 
-    const id = parseInt(paperItem.dataset.id);
+    // For smart search, ID is bibcode (string); for library, it's numeric
+    const rawId = paperItem.dataset.id;
+    const id = this.currentSmartSearch ? rawId : parseInt(rawId);
 
     // If right-clicked paper is not in selection, select only it
     if (!this.selectedPapers.has(id)) {
@@ -4929,6 +5394,27 @@ class ADSReader {
       exportBookItem.textContent = this.selectedPapers.size > 1
         ? `Export ${this.selectedPapers.size} Papers as Book`
         : 'Export as Book';
+    }
+
+    // Show/hide ADS-specific items
+    const addToLibraryItem = document.getElementById('ctx-add-to-library');
+    if (this.currentSmartSearch) {
+      addToLibraryItem?.classList.remove('hidden');
+      // Update text based on selection count
+      addToLibraryItem.textContent = this.selectedPapers.size > 1
+        ? `Add ${this.selectedPapers.size} Papers to Library`
+        : 'Add to Library';
+      // Hide non-applicable items for ADS papers
+      deleteItem.style.display = 'none';
+      document.getElementById('ctx-sync-paper')?.style.setProperty('display', 'none');
+      document.getElementById('ctx-download-pdfs')?.style.setProperty('display', 'none');
+      document.getElementById('ctx-open-publisher')?.style.setProperty('display', 'none');
+    } else {
+      addToLibraryItem?.classList.add('hidden');
+      deleteItem.style.display = 'block';
+      document.getElementById('ctx-sync-paper')?.style.setProperty('display', 'block');
+      document.getElementById('ctx-download-pdfs')?.style.setProperty('display', 'block');
+      document.getElementById('ctx-open-publisher')?.style.setProperty('display', 'block');
     }
 
     menu.classList.remove('hidden');
@@ -4991,8 +5477,33 @@ class ADSReader {
     const collection = this.collections.find(c => c.id === collectionId);
     if (!collection) return;
 
-    for (const paperId of this.selectedPapers) {
-      await window.electronAPI.addPaperToCollection(paperId, collectionId);
+    // For smart search papers, first add to library
+    if (this.currentSmartSearch) {
+      for (const bibcode of this.selectedPapers) {
+        const paper = this.papers.find(p => p.id === bibcode);
+        if (!paper) continue;
+
+        // Add to library first if not already
+        if (!paper.inLibrary) {
+          const result = await window.electronAPI.smartSearchAddToLibrary(paper.bibcode);
+          if (result.success) {
+            paper.inLibrary = true;
+            paper.libraryPaperId = result.paperId;
+          } else {
+            this.showNotification(`Failed to add: ${result.error}`, 'error');
+            continue;
+          }
+        }
+
+        // Now add to collection using library paper ID
+        await window.electronAPI.addPaperToCollection(paper.libraryPaperId, collectionId);
+      }
+      this.renderPaperList(); // Refresh to show "In Library" badges
+    } else {
+      // Existing logic for library papers
+      for (const paperId of this.selectedPapers) {
+        await window.electronAPI.addPaperToCollection(paperId, collectionId);
+      }
     }
 
     // Refresh collections to update counts
@@ -5001,7 +5512,7 @@ class ADSReader {
     // Show feedback
     const count = this.selectedPapers.size;
     const msg = count === 1 ? 'Paper added to' : `${count} papers added to`;
-    console.log(`${msg} "${collection.name}"`);
+    this.showNotification(`${msg} "${collection.name}"`, 'success');
   }
 
   async dropPapersOnCollection(collectionId) {
@@ -5297,13 +5808,18 @@ class ADSReader {
       window.electronAPI.setPdfPosition(this.selectedPaper.id, position);
     }
 
-    const paper = this.papers.find(p => p.id === id) || await window.electronAPI.getPaper(id);
-    if (!paper) return;
+    const paper = this.papers.find(p => p.id === id);
 
-    this.selectedPaper = paper;
+    // For local papers, fallback to database lookup; for ADS papers, just use the array
+    const resolvedPaper = paper || (!this.currentSmartSearch ? await window.electronAPI.getPaper(id) : null);
+    if (!resolvedPaper) return;
 
-    // Save last selected paper for session persistence
-    window.electronAPI.setLastSelectedPaper(id);
+    this.selectedPaper = resolvedPaper;
+
+    // Save last selected paper for session persistence (only for local papers)
+    if (!this.currentSmartSearch) {
+      window.electronAPI.setLastSelectedPaper(id);
+    }
 
     // Show viewer wrapper
     document.getElementById('detail-placeholder').classList.add('hidden');
@@ -5342,12 +5858,46 @@ class ADSReader {
     // Update bottom bar button states to reflect current paper state
     this.updateBottomBarButtonStates();
 
-    // Update abstract
+    // Update abstract with paper metadata header
     const abstractEl = document.getElementById('abstract-content');
+    const authorsText = this.formatAuthors(paper.authors, false);
+    const yearText = paper.year ? `(${paper.year})` : '';
+
+    // Build meta items - show journal AND arXiv if both exist
+    let metaItems = [];
+    if (paper.journal) metaItems.push(`<span class="abstract-journal">${this.escapeHtml(paper.journal)}</span>`);
+    if (paper.arxiv_id) metaItems.push(`<span class="abstract-arxiv">arXiv:${this.escapeHtml(paper.arxiv_id)}</span>`);
+    if (yearText) metaItems.push(`<span class="abstract-year">${yearText}</span>`);
+
+    let headerHtml = `
+      <div class="abstract-header">
+        <h2 class="abstract-title">${this.escapeHtml(paper.title || 'Untitled')}</h2>
+        <div class="abstract-authors">${this.escapeHtml(authorsText)}</div>
+        <div class="abstract-meta">${metaItems.join('')}</div>
+      </div>
+    `;
+
     if (paper.abstract) {
-      abstractEl.innerHTML = `<p>${this.sanitizeAbstract(paper.abstract)}</p>`;
+      abstractEl.innerHTML = headerHtml + `<p class="abstract-text">${this.sanitizeAbstract(paper.abstract)}</p>`;
     } else {
-      abstractEl.innerHTML = '<p class="no-content">No abstract available. Click "Sync" to retrieve metadata from ADS.</p>';
+      abstractEl.innerHTML = headerHtml + '<p class="no-content">No abstract available. Click "Sync" to retrieve metadata from ADS.</p>';
+    }
+
+    // For ADS search papers, add "Download & View PDF" button under abstract
+    if (this.currentSmartSearch && resolvedPaper.bibcode) {
+      const pdfBtnHtml = `
+        <div class="abstract-pdf-action">
+          <button class="primary-button abstract-view-pdf-btn" id="abstract-view-pdf-btn">
+            Download & View PDF
+          </button>
+        </div>
+      `;
+      abstractEl.insertAdjacentHTML('beforeend', pdfBtnHtml);
+
+      // Add click handler
+      document.getElementById('abstract-view-pdf-btn')?.addEventListener('click', () => {
+        this.downloadAndViewTempPDF(resolvedPaper);
+      });
     }
 
     // Update keywords
@@ -5360,31 +5910,53 @@ class ADSReader {
     }
 
     // Update BibTeX tab with full information
-    await this.displayBibtex(paper);
+    await this.displayBibtex(resolvedPaper);
 
-    // Load references and citations
-    await this.loadReferences(paper.id);
-    await this.loadCitations(paper.id);
-
-    // Load annotations
-    await this.loadAnnotations(paper.id);
+    // Load references and citations (only for local papers)
+    if (!this.currentSmartSearch && typeof resolvedPaper.id === 'number') {
+      await this.loadReferences(resolvedPaper.id);
+      await this.loadCitations(resolvedPaper.id);
+      await this.loadAnnotations(resolvedPaper.id);
+    } else {
+      // Clear refs/cites for ADS search papers (they don't have local data)
+      this.currentRefs = [];
+      this.currentCites = [];
+      this.annotations = [];
+      this.renderReferencesList([]);
+      this.renderCitationsList([]);
+    }
 
     // Check current tab - stay on info tabs if already there
     const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     const infoTabs = ['abstract', 'refs', 'cites', 'bibtex'];
 
+    // For ADS search papers, handle temp PDF viewing
+    if (this.currentSmartSearch) {
+      // Check if temp PDF is already cached
+      const hasTempPdf = await window.electronAPI.tempPdfHas(resolvedPaper.bibcode);
+
+      if (hasTempPdf && currentTab === 'pdf') {
+        // Load from cache
+        await this.loadTempPDF(resolvedPaper);
+      } else if (!infoTabs.includes(currentTab)) {
+        // No cached PDF and not on info tab - switch to abstract
+        this.switchTab('abstract');
+      }
+      return;
+    }
+
     // Check if paper has any PDF available (downloaded sources + attachments + pdf_path)
-    const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
-    const attachments = await window.electronAPI.getAttachments(paper.id);
+    const downloadedSources = await window.electronAPI.getDownloadedPdfSources(resolvedPaper.id);
+    const attachments = await window.electronAPI.getAttachments(resolvedPaper.id);
     const pdfAttachments = attachments.filter(a => a.file_type === 'pdf');
-    const hasAnyPdf = downloadedSources.length > 0 || pdfAttachments.length > 0 || !!paper.pdf_path;
+    const hasAnyPdf = downloadedSources.length > 0 || pdfAttachments.length > 0 || !!resolvedPaper.pdf_path;
 
     // Save original pdf_path from database (for legacy PDFs)
-    const originalPdfPath = paper.pdf_path;
+    const originalPdfPath = resolvedPaper.pdf_path;
 
     // If paper has PDFs, determine which one to load based on last viewed
     if (hasAnyPdf) {
-      const lastSource = this.lastPdfSources[paper.id];
+      const lastSource = this.lastPdfSources[resolvedPaper.id];
       let pdfPathSet = false;
 
       if (lastSource) {
@@ -5393,18 +5965,18 @@ class ADSReader {
           const filename = lastSource.substring('ATTACHMENT:'.length);
           const attachment = pdfAttachments.find(a => a.filename === filename);
           if (attachment) {
-            paper.pdf_path = `papers/${filename}`;
+            resolvedPaper.pdf_path = `papers/${filename}`;
             pdfPathSet = true;
           }
         } else if (lastSource === 'LEGACY' && downloadedSources.includes('LEGACY')) {
           // Legacy PDF - use original path from database
-          paper.pdf_path = originalPdfPath;
+          resolvedPaper.pdf_path = originalPdfPath;
           pdfPathSet = true;
         } else {
           // It's a source type (EPRINT_PDF, PUB_PDF, ADS_PDF)
-          if (downloadedSources.includes(lastSource) && paper.bibcode) {
-            const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-            paper.pdf_path = `papers/${baseFilename}_${lastSource}.pdf`;
+          if (downloadedSources.includes(lastSource) && resolvedPaper.bibcode) {
+            const baseFilename = resolvedPaper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+            resolvedPaper.pdf_path = `papers/${baseFilename}_${lastSource}.pdf`;
             pdfPathSet = true;
           }
         }
@@ -5415,16 +5987,16 @@ class ADSReader {
         if (downloadedSources.length > 0) {
           if (downloadedSources[0] === 'LEGACY') {
             // Legacy PDF - use the pdf_path stored in database
-            paper.pdf_path = originalPdfPath;
-          } else if (paper.bibcode) {
-            const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-            paper.pdf_path = `papers/${baseFilename}_${downloadedSources[0]}.pdf`;
+            resolvedPaper.pdf_path = originalPdfPath;
+          } else if (resolvedPaper.bibcode) {
+            const baseFilename = resolvedPaper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
+            resolvedPaper.pdf_path = `papers/${baseFilename}_${downloadedSources[0]}.pdf`;
           }
         } else if (pdfAttachments.length > 0) {
-          paper.pdf_path = `papers/${pdfAttachments[0].filename}`;
+          resolvedPaper.pdf_path = `papers/${pdfAttachments[0].filename}`;
         } else if (originalPdfPath) {
           // Fallback to original pdf_path if it exists
-          paper.pdf_path = originalPdfPath;
+          resolvedPaper.pdf_path = originalPdfPath;
         }
       }
     }
@@ -5433,7 +6005,7 @@ class ADSReader {
     if (this.isMobileView) {
       // Just load the PDF in background if available
       if (hasAnyPdf) {
-        await this.loadPDF(paper);
+        await this.loadPDF(resolvedPaper);
       }
     } else if (infoTabs.includes(currentTab)) {
       // Stay on current tab and refresh if multi-select
@@ -5442,7 +6014,7 @@ class ADSReader {
       }
       // Still load PDF in background for when user switches
       if (hasAnyPdf) {
-        await this.loadPDF(paper);
+        await this.loadPDF(resolvedPaper);
       }
     } else if (!hasAnyPdf) {
       // No PDF available, switch to BibTeX tab instead
@@ -5450,7 +6022,7 @@ class ADSReader {
     } else {
       // Switch to PDF tab
       this.switchTab('pdf');
-      await this.loadPDF(paper);
+      await this.loadPDF(resolvedPaper);
     }
   }
 
@@ -5684,6 +6256,168 @@ class ADSReader {
       if (this.isMobileView) {
         document.body.classList.remove('viewing-pdf');
       }
+    }
+  }
+
+  /**
+   * Load a temporary PDF from the in-memory cache (for ADS search papers)
+   * @param {Object} paper - Paper object with bibcode
+   */
+  async loadTempPDF(paper) {
+    const container = document.getElementById('pdf-container');
+    container.innerHTML = '<div class="pdf-loading">Loading PDF from cache...</div>';
+
+    // Cleanup previous PDF
+    if (this.pdfDoc) {
+      this.pdfDoc.destroy();
+      this.pdfDoc = null;
+    }
+
+    // Reset rotations for temp PDFs
+    this.pageRotations = {};
+
+    try {
+      // Get from cache
+      const result = await window.electronAPI.tempPdfGet(paper.bibcode);
+
+      if (!result.success) {
+        container.innerHTML = '<div class="pdf-loading">PDF not in cache. Click "View PDF" to download.</div>';
+        return;
+      }
+
+      // Load with PDF.js from Uint8Array
+      const loadingTask = pdfjsLib.getDocument({ data: result.data });
+      this.pdfDoc = await loadingTask.promise;
+      this.currentPdfSource = `TEMP:${result.source}`;
+
+      document.getElementById('total-pages').textContent = this.pdfDoc.numPages;
+      document.getElementById('current-page').textContent = '1';
+
+      // Render all pages
+      await this.renderAllPages(1, 0);
+
+      // Update mobile PDF controls if needed
+      if (this.isMobileView) {
+        this.updateMobilePdfControls();
+        document.body.classList.add('viewing-pdf');
+      }
+
+    } catch (error) {
+      console.error('Temp PDF load error:', error);
+      container.innerHTML = `<div class="pdf-loading">Failed to load PDF: ${error.message}</div>`;
+    }
+  }
+
+  /**
+   * Download and view a temporary PDF for an ADS search paper
+   * @param {Object} paper - Paper object from ADS search results
+   */
+  async downloadAndViewTempPDF(paper) {
+    if (!paper || !paper.bibcode) {
+      this.showNotification('Cannot download PDF without bibcode', 'error');
+      return;
+    }
+
+    const container = document.getElementById('pdf-container');
+    container.innerHTML = '<div class="pdf-loading">Downloading PDF...</div>';
+
+    // Switch to PDF tab
+    this.switchTab('pdf');
+
+    // Set up progress listener
+    window.electronAPI.onTempPdfProgress((data) => {
+      if (data.bibcode === paper.bibcode) {
+        const percent = data.total > 0 ? Math.round((data.received / data.total) * 100) : 0;
+        const mb = (data.received / 1024 / 1024).toFixed(1);
+        container.innerHTML = `<div class="pdf-loading">Downloading PDF... ${percent}% (${mb} MB)</div>`;
+      }
+    });
+
+    try {
+      const result = await window.electronAPI.tempPdfDownload(paper);
+
+      // Remove progress listener
+      window.electronAPI.removeTempPdfProgressListener();
+
+      if (!result.success) {
+        container.innerHTML = `<div class="pdf-loading">Download failed: ${result.error}</div>`;
+        this.showNotification(`PDF download failed: ${result.error}`, 'error');
+        return;
+      }
+
+      // Load with PDF.js
+      container.innerHTML = '<div class="pdf-loading">Loading PDF...</div>';
+
+      // Cleanup previous PDF
+      if (this.pdfDoc) {
+        this.pdfDoc.destroy();
+        this.pdfDoc = null;
+      }
+
+      const loadingTask = pdfjsLib.getDocument({ data: result.data });
+      this.pdfDoc = await loadingTask.promise;
+      this.currentPdfSource = `TEMP:${result.source}`;
+      this.pageRotations = {};
+
+      document.getElementById('total-pages').textContent = this.pdfDoc.numPages;
+      document.getElementById('current-page').textContent = '1';
+
+      await this.renderAllPages(1, 0);
+
+      if (this.isMobileView) {
+        this.updateMobilePdfControls();
+        document.body.classList.add('viewing-pdf');
+      }
+
+      this.showNotification(`PDF loaded (${result.cached ? 'cached' : result.source})`, 'success');
+
+    } catch (error) {
+      console.error('Temp PDF download error:', error);
+      window.electronAPI.removeTempPdfProgressListener();
+      container.innerHTML = `<div class="pdf-loading">Error: ${error.message}</div>`;
+      this.showNotification(`PDF error: ${error.message}`, 'error');
+    }
+  }
+
+  /**
+   * Show temp PDF prompt or load from cache
+   * @param {Object} paper - Paper from ADS search results
+   */
+  async showTempPdfPromptOrLoad(paper) {
+    const container = document.getElementById('pdf-container');
+
+    // Check if already cached
+    const hasCached = await window.electronAPI.tempPdfHas(paper.bibcode);
+
+    if (hasCached) {
+      // Load from cache
+      await this.loadTempPDF(paper);
+    } else {
+      // Show download prompt
+      const hasArxiv = !!paper.arxiv_id;
+      const hasDoi = !!paper.doi;
+      const sources = [];
+      if (hasArxiv) sources.push('arXiv');
+      if (hasDoi) sources.push('Publisher');
+      if (paper.bibcode) sources.push('ADS');
+
+      container.innerHTML = `
+        <div class="temp-pdf-prompt">
+          <div class="temp-pdf-icon">📄</div>
+          <h3>View PDF</h3>
+          <p>This paper is from ADS search results. PDF will be downloaded temporarily.</p>
+          ${sources.length > 0 ? `<p class="temp-pdf-sources">Available: ${sources.join(', ')}</p>` : ''}
+          <button class="primary-button temp-pdf-download-btn" id="temp-pdf-download-btn">
+            Download & View PDF
+          </button>
+          <p class="temp-pdf-note">PDF will not be saved to your library until you click "Add to Library"</p>
+        </div>
+      `;
+
+      // Add click handler
+      document.getElementById('temp-pdf-download-btn')?.addEventListener('click', () => {
+        this.downloadAndViewTempPDF(paper);
+      });
     }
   }
 
@@ -6503,7 +7237,12 @@ class ADSReader {
 
     // When switching to PDF tab, ensure we load the correct paper's PDF
     if (tabName === 'pdf' && this.selectedPaper) {
-      this.loadPDF(this.selectedPaper);
+      if (this.currentSmartSearch) {
+        // ADS search paper - check for cached temp PDF or show download prompt
+        this.showTempPdfPromptOrLoad(this.selectedPaper);
+      } else {
+        this.loadPDF(this.selectedPaper);
+      }
     }
 
     // Handle multi-selection for info tabs
@@ -6846,6 +7585,11 @@ class ADSReader {
     this.currentView = view;
     this.currentCollection = null;
 
+    // Exit smart search mode when selecting a built-in view
+    if (this.currentSmartSearch) {
+      this.exitSmartSearchView();
+    }
+
     document.querySelectorAll('.nav-item[data-view]').forEach(item => {
       item.classList.toggle('active', item.dataset.view === view);
     });
@@ -6860,6 +7604,11 @@ class ADSReader {
   async selectCollection(collectionId) {
     this.currentCollection = collectionId;
     this.currentView = null;
+
+    // Exit smart search mode when selecting a collection
+    if (this.currentSmartSearch) {
+      this.exitSmartSearchView();
+    }
 
     document.querySelectorAll('.nav-item[data-view]').forEach(item => {
       item.classList.remove('active');

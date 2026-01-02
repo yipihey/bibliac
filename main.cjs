@@ -5,6 +5,16 @@ const os = require('os');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
 
+// Handle EPIPE errors gracefully (occurs when terminal is closed but app keeps running)
+process.stdout.on('error', (err) => {
+  if (err.code === 'EPIPE') return; // Ignore EPIPE
+  throw err;
+});
+process.stderr.on('error', (err) => {
+  if (err.code === 'EPIPE') return; // Ignore EPIPE
+  throw err;
+});
+
 // Paper Files Container system
 const { FileManager } = require('./src/lib/files/file-manager.cjs');
 const { DownloadQueue } = require('./src/lib/files/download-queue.cjs');
@@ -148,10 +158,14 @@ function sendConsoleLog(message, type = 'info', details = null) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('console-log', { message, type, details });
   }
-  // Also log to terminal
-  console.log(`[${type.toUpperCase()}] ${message}`);
-  if (details) {
-    console.log(`  Details: ${details}`);
+  // Also log to terminal (wrapped to prevent EPIPE crashes)
+  try {
+    console.log(`[${type.toUpperCase()}] ${message}`);
+    if (details) {
+      console.log(`  Details: ${details}`);
+    }
+  } catch (e) {
+    // Ignore EPIPE errors when terminal is closed
   }
 }
 
@@ -6183,6 +6197,280 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
 
 ipcMain.handle('show-in-finder', (event, filePath) => {
   shell.showItemInFolder(filePath);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SMART ADS SEARCHES
+// ═══════════════════════════════════════════════════════════════════════════
+
+ipcMain.handle('smart-search-create', async (event, { name, query, sortOrder }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    const id = database.createSmartSearch({ name, query, sortOrder });
+    return { success: true, id };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('smart-search-list', async () => {
+  if (!dbInitialized) return [];
+  return database.getAllSmartSearches();
+});
+
+ipcMain.handle('smart-search-get', async (event, { id }) => {
+  if (!dbInitialized) return null;
+
+  const search = database.getSmartSearch(id);
+  if (!search) return null;
+
+  const results = database.getSmartSearchResultsWithLibraryStatus(id);
+  return { search, results };
+});
+
+ipcMain.handle('smart-search-refresh', async (event, { id }) => {
+  const token = store.get('adsToken');
+  if (!token) return { success: false, error: 'No ADS API token configured' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  const search = database.getSmartSearch(id);
+  if (!search) return { success: false, error: 'Smart search not found' };
+
+  try {
+    sendConsoleLog(`Refreshing smart search: ${search.name}`, 'info');
+
+    // Query ADS
+    const result = await adsApi.search(token, search.query, {
+      rows: 200,
+      sort: search.sort_order || 'date desc'
+    });
+
+    // Clear old results and insert new ones
+    database.clearSmartSearchResults(id);
+
+    const now = new Date().toISOString();
+    for (const doc of result.docs) {
+      // Extract arXiv ID from identifier array
+      let arxivId = null;
+      if (doc.identifier) {
+        for (const ident of doc.identifier) {
+          if (ident.startsWith('arXiv:')) {
+            arxivId = ident.replace('arXiv:', '');
+            break;
+          }
+          if (/^\d{4}\.\d{4,5}/.test(ident)) {
+            arxivId = ident;
+            break;
+          }
+        }
+      }
+
+      database.addSmartSearchResult(id, {
+        bibcode: doc.bibcode,
+        title: doc.title?.[0] || 'Untitled',
+        authors: doc.author || [],
+        year: doc.year ? parseInt(doc.year) : null,
+        journal: doc.pub || null,
+        abstract: doc.abstract || null,
+        doi: doc.doi?.[0] || null,
+        arxiv_id: arxivId,
+        citation_count: doc.citation_count || 0,
+        cached_date: now
+      });
+    }
+
+    // Update search metadata
+    database.updateSmartSearch(id, {
+      last_refresh_date: now,
+      result_count: result.docs.length,
+      error_message: null
+    });
+
+    sendConsoleLog(`Smart search refreshed: ${result.docs.length} results`, 'success');
+    return { success: true, resultCount: result.docs.length };
+
+  } catch (error) {
+    database.updateSmartSearch(id, {
+      error_message: error.message
+    });
+    sendConsoleLog(`Smart search refresh failed: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('smart-search-update', async (event, { id, ...updates }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    database.updateSmartSearch(id, updates);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('smart-search-delete', async (event, { id }) => {
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  try {
+    database.deleteSmartSearch(id);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('smart-search-add-to-library', async (event, { bibcode, searchResultData }) => {
+  const token = store.get('adsToken');
+  if (!token) return { success: false, error: 'No ADS API token configured' };
+  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
+
+  // Check if already in library
+  const existing = database.getPaperByBibcode(bibcode);
+  if (existing) {
+    return { success: true, paperId: existing.id, alreadyExists: true };
+  }
+
+  try {
+    sendConsoleLog(`Adding ${bibcode} to library...`, 'info');
+
+    // Fetch full metadata from ADS
+    const adsDoc = await adsApi.getByBibcode(token, bibcode);
+
+    if (!adsDoc) {
+      return { success: false, error: 'Paper not found in ADS' };
+    }
+
+    // Extract arXiv ID
+    let arxivId = null;
+    if (adsDoc.identifier) {
+      for (const ident of adsDoc.identifier) {
+        if (ident.startsWith('arXiv:')) {
+          arxivId = ident.replace('arXiv:', '');
+          break;
+        }
+        if (/^\d{4}\.\d{4,5}/.test(ident)) {
+          arxivId = ident;
+          break;
+        }
+      }
+    }
+
+    // Create paper with metadata only - NO PDF download per user requirement
+    const paperId = database.addPaper({
+      bibcode: adsDoc.bibcode,
+      doi: adsDoc.doi?.[0] || null,
+      arxiv_id: arxivId,
+      title: adsDoc.title?.[0] || 'Untitled',
+      authors: adsDoc.author || [],
+      year: adsDoc.year ? parseInt(adsDoc.year) : null,
+      journal: adsDoc.pub || null,
+      abstract: adsDoc.abstract || null,
+      keywords: adsDoc.keyword || [],
+      citation_count: adsDoc.citation_count || 0,
+      import_source: 'ads_smart_search',
+      import_source_key: bibcode
+    });
+
+    // Fetch and store BibTeX
+    try {
+      const bibtexResult = await adsApi.exportBibtex(token, bibcode);
+      if (bibtexResult) {
+        database.updatePaper(paperId, { bibtex: bibtexResult });
+      }
+    } catch (e) {
+      sendConsoleLog(`BibTeX fetch failed: ${e.message}`, 'warn');
+    }
+
+    sendConsoleLog(`Added ${bibcode} to library`, 'success');
+    return { success: true, paperId };
+
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('check-bibcodes-in-library', async (event, bibcodes) => {
+  if (!dbInitialized) return [];
+  return database.checkBibcodesInLibrary(bibcodes);
+});
+
+// =====================================================================
+// TEMPORARY PDF CACHE (for ADS search results)
+// =====================================================================
+
+const { tempPdfCache } = require('./src/lib/files/temp-pdf-cache.cjs');
+
+ipcMain.handle('temp-pdf-has', async (event, { bibcode }) => {
+  return tempPdfCache.has(bibcode);
+});
+
+ipcMain.handle('temp-pdf-get', async (event, { bibcode }) => {
+  const entry = tempPdfCache.get(bibcode);
+  if (entry) {
+    // Return as Uint8Array for PDF.js
+    return {
+      success: true,
+      data: new Uint8Array(entry.data),
+      source: entry.source
+    };
+  }
+  return { success: false, error: 'Not in cache' };
+});
+
+ipcMain.handle('temp-pdf-download', async (event, { paper }) => {
+  // Check cache first
+  if (tempPdfCache.has(paper.bibcode)) {
+    const entry = tempPdfCache.get(paper.bibcode);
+    return {
+      success: true,
+      data: new Uint8Array(entry.data),
+      source: entry.source,
+      cached: true
+    };
+  }
+
+  // Get proxy URL if configured
+  const proxyUrl = store.get('proxyUrl');
+
+  // Download with progress
+  sendConsoleLog(`Downloading temp PDF for ${paper.bibcode}...`, 'info');
+
+  try {
+    const result = await tempPdfCache.downloadForPaper(paper, proxyUrl, (received, total) => {
+      // Send progress to renderer
+      event.sender.send('temp-pdf-progress', {
+        bibcode: paper.bibcode,
+        received,
+        total
+      });
+    });
+
+    if (result.success) {
+      sendConsoleLog(`Temp PDF downloaded: ${(result.data.length / 1024 / 1024).toFixed(2)} MB`, 'success');
+      return {
+        success: true,
+        data: new Uint8Array(result.data),
+        source: result.source
+      };
+    } else {
+      sendConsoleLog(`Temp PDF failed: ${result.error}`, 'error');
+      return result;
+    }
+  } catch (error) {
+    sendConsoleLog(`Temp PDF error: ${error.message}`, 'error');
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('temp-pdf-clear', async () => {
+  tempPdfCache.clear();
+  return { success: true };
+});
+
+ipcMain.handle('temp-pdf-stats', async () => {
+  return tempPdfCache.getStats();
 });
 
 // Create application menu

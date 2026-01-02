@@ -293,6 +293,44 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // SMART ADS SEARCHES
+  // ═══════════════════════════════════════════════════════════════════════════
+  smartSearchCreate: (name, query, sortOrder) =>
+    ipcRenderer.invoke('smart-search-create', { name, query, sortOrder }),
+  smartSearchList: () =>
+    ipcRenderer.invoke('smart-search-list'),
+  smartSearchGet: (id) =>
+    ipcRenderer.invoke('smart-search-get', { id }),
+  smartSearchRefresh: (id) =>
+    ipcRenderer.invoke('smart-search-refresh', { id }),
+  smartSearchUpdate: (id, updates) =>
+    ipcRenderer.invoke('smart-search-update', { id, ...updates }),
+  smartSearchDelete: (id) =>
+    ipcRenderer.invoke('smart-search-delete', { id }),
+  smartSearchAddToLibrary: (bibcode, searchResultData) =>
+    ipcRenderer.invoke('smart-search-add-to-library', { bibcode, searchResultData }),
+  checkBibcodesInLibrary: (bibcodes) =>
+    ipcRenderer.invoke('check-bibcodes-in-library', bibcodes),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TEMPORARY PDF CACHE (for ADS search results)
+  // ═══════════════════════════════════════════════════════════════════════════
+  tempPdfHas: (bibcode) =>
+    ipcRenderer.invoke('temp-pdf-has', { bibcode }),
+  tempPdfGet: (bibcode) =>
+    ipcRenderer.invoke('temp-pdf-get', { bibcode }),
+  tempPdfDownload: (paper) =>
+    ipcRenderer.invoke('temp-pdf-download', { paper }),
+  tempPdfClear: () =>
+    ipcRenderer.invoke('temp-pdf-clear'),
+  tempPdfStats: () =>
+    ipcRenderer.invoke('temp-pdf-stats'),
+  onTempPdfProgress: (callback) =>
+    ipcRenderer.on('temp-pdf-progress', (event, data) => callback(data)),
+  removeTempPdfProgressListener: () =>
+    ipcRenderer.removeAllListeners('temp-pdf-progress'),
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // UTILITIES
   // ═══════════════════════════════════════════════════════════════════════════
   openExternal: (url) => ipcRenderer.invoke('open-external', url),

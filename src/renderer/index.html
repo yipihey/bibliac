@@ -53,6 +53,7 @@
   <div class="action-sheet-overlay hidden" id="action-sheet-overlay"></div>
   <div class="action-sheet hidden" id="selection-action-sheet">
     <div class="action-sheet-content">
+      <button class="action-sheet-btn hidden" id="as-add-to-library-btn">Add to Library</button>
       <button class="action-sheet-btn" id="as-add-to-collection-btn">Add to Collection</button>
       <button class="action-sheet-btn hidden" id="as-remove-from-collection-btn">Remove from Collection</button>
       <button class="action-sheet-btn" id="as-sync-btn">Sync with ADS</button>
@@ -117,6 +118,17 @@
             <span class="shortcut-key">m</span><span>Toggle menu</span>
             <span class="shortcut-key">Esc</span><span>Exit/Cancel</span>
           </div>
+        </div>
+      </div>
+
+      <!-- ADS Searches -->
+      <div class="drawer-section">
+        <div class="drawer-section-label">
+          ADS Searches
+          <button class="drawer-add-btn" id="drawer-add-search-btn" title="New Search">+</button>
+        </div>
+        <div class="drawer-nav-items" id="drawer-searches-list">
+          <div class="drawer-placeholder">No saved searches</div>
         </div>
       </div>
 
@@ -397,6 +409,17 @@
               <div class="download-pdf-menu hidden" id="download-pdf-menu">
                 <!-- Populated dynamically based on ADS sources -->
               </div>
+            </div>
+          </div>
+          <!-- Smart Search Toolbar (shown when viewing ADS search results) -->
+          <div class="smart-search-toolbar hidden" id="smart-search-toolbar">
+            <div class="search-toolbar-info">
+              <span class="search-toolbar-name" id="search-toolbar-name">Search Name</span>
+              <span class="search-toolbar-meta" id="search-toolbar-meta">0 results</span>
+            </div>
+            <div class="search-toolbar-actions">
+              <button class="search-toolbar-btn" id="search-refresh-btn" title="Refresh results from ADS">↻</button>
+              <button class="search-toolbar-btn" id="search-edit-btn" title="Edit search">✎</button>
             </div>
           </div>
           <div class="paper-list" id="paper-list">
@@ -921,6 +944,38 @@
     </div>
   </div>
 
+  <!-- Smart Search Modal (Create/Edit) -->
+  <div class="modal hidden" id="smart-search-modal">
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2 id="smart-search-modal-title">New ADS Search</h2>
+        <button class="modal-close-btn" id="smart-search-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="smart-search-name">Name</label>
+          <input type="text" id="smart-search-name" placeholder="e.g., Recent Cosmology Papers">
+        </div>
+        <div class="form-group">
+          <label for="smart-search-query">ADS Query</label>
+          <textarea id="smart-search-query" rows="3" placeholder="e.g., bibstem:arXiv AND arxiv_class:astro-ph.CO AND entdate:[NOW-7DAYS TO NOW]"></textarea>
+          <div class="form-hint">Use ADS query syntax. See <a href="#" id="ads-query-help-link">ADS search help</a></div>
+        </div>
+        <div class="ads-shortcuts" style="margin-top: 8px;">
+          <button class="ads-shortcut-btn" data-insert="author:" data-target="smart-search-query">author:</button>
+          <button class="ads-shortcut-btn" data-insert="year:" data-target="smart-search-query">year:</button>
+          <button class="ads-shortcut-btn" data-insert="bibstem:" data-target="smart-search-query">bibstem:</button>
+          <button class="ads-shortcut-btn" data-insert="arxiv_class:" data-target="smart-search-query">arxiv_class:</button>
+          <button class="ads-shortcut-btn" data-insert="entdate:[NOW-7DAYS TO NOW]" data-target="smart-search-query">Last 7 days</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" id="smart-search-cancel-btn">Cancel</button>
+        <button class="primary-button" id="smart-search-save-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ADS Sync Progress Modal -->
   <div class="modal hidden" id="ads-sync-modal">
     <div class="modal-content" style="max-width: 400px;">
@@ -991,6 +1046,7 @@
     <div class="context-menu-item" id="ctx-sync-paper">Sync with ADS</div>
     <div class="context-menu-item" id="ctx-download-pdfs">Download PDFs</div>
     <div class="context-menu-divider"></div>
+    <div class="context-menu-item hidden" id="ctx-add-to-library">Add to Library</div>
     <div class="context-menu-item" id="ctx-add-to-collection">
       Add to Collection
       <span class="submenu-arrow">▶</span>

@@ -1452,6 +1452,206 @@ function deletePaperFile(id) {
   saveDatabase();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SMART ADS SEARCHES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Create a new smart search
+ * @param {Object} data - Search data: name, query, sortOrder
+ * @returns {number} The ID of the newly created search
+ */
+function createSmartSearch(data) {
+  const now = new Date().toISOString();
+  const maxOrderResult = db.exec('SELECT MAX(display_order) FROM smart_searches');
+  const maxOrder = maxOrderResult[0]?.values[0][0] || 0;
+
+  db.run(`
+    INSERT INTO smart_searches (name, query, sort_order, display_order, created_date)
+    VALUES (?, ?, ?, ?, ?)
+  `, [
+    data.name,
+    data.query,
+    data.sortOrder || 'date desc',
+    maxOrder + 1,
+    now
+  ]);
+
+  const result = db.exec('SELECT last_insert_rowid()');
+  const id = result[0].values[0][0];
+  saveDatabase();
+  return id;
+}
+
+/**
+ * Get a single smart search by ID
+ * @param {number} id - Search ID
+ * @returns {Object|null} Search object or null
+ */
+function getSmartSearch(id) {
+  const stmt = db.prepare('SELECT * FROM smart_searches WHERE id = ?');
+  stmt.bind([id]);
+
+  if (stmt.step()) {
+    const obj = stmt.getAsObject();
+    stmt.free();
+    return obj;
+  }
+  stmt.free();
+  return null;
+}
+
+/**
+ * Get all smart searches
+ * @returns {Array} Array of search objects
+ */
+function getAllSmartSearches() {
+  const results = db.exec(`
+    SELECT * FROM smart_searches ORDER BY display_order ASC, created_date DESC
+  `);
+  if (results.length === 0) return [];
+
+  const columns = results[0].columns;
+  return results[0].values.map(row => {
+    const obj = {};
+    columns.forEach((col, i) => obj[col] = row[i]);
+    return obj;
+  });
+}
+
+/**
+ * Update a smart search
+ * @param {number} id - Search ID
+ * @param {Object} updates - Fields to update
+ */
+function updateSmartSearch(id, updates) {
+  const fields = [];
+  const values = [];
+
+  const allowedFields = ['name', 'query', 'sort_order', 'display_order', 'last_refresh_date', 'result_count', 'error_message'];
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (allowedFields.includes(key)) {
+      fields.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+  db.run(`UPDATE smart_searches SET ${fields.join(', ')} WHERE id = ?`, values);
+  saveDatabase();
+}
+
+/**
+ * Delete a smart search (cascade deletes results)
+ * @param {number} id - Search ID
+ */
+function deleteSmartSearch(id) {
+  // Delete results first (in case FK cascade doesn't work with sql.js)
+  db.run('DELETE FROM smart_search_results WHERE search_id = ?', [id]);
+  db.run('DELETE FROM smart_searches WHERE id = ?', [id]);
+  saveDatabase();
+}
+
+/**
+ * Clear all cached results for a search
+ * @param {number} searchId - Search ID
+ */
+function clearSmartSearchResults(searchId) {
+  db.run('DELETE FROM smart_search_results WHERE search_id = ?', [searchId]);
+}
+
+/**
+ * Add a result to a smart search
+ * @param {number} searchId - Search ID
+ * @param {Object} data - Paper data from ADS
+ */
+function addSmartSearchResult(searchId, data) {
+  db.run(`
+    INSERT OR REPLACE INTO smart_search_results
+    (search_id, bibcode, title, authors, year, journal, abstract, doi, arxiv_id, citation_count, cached_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    searchId,
+    data.bibcode,
+    data.title || null,
+    typeof data.authors === 'string' ? data.authors : JSON.stringify(data.authors || []),
+    data.year || null,
+    data.journal || null,
+    data.abstract || null,
+    data.doi || null,
+    data.arxiv_id || null,
+    data.citation_count || 0,
+    data.cached_date || new Date().toISOString()
+  ]);
+}
+
+/**
+ * Get cached results for a search with library status (inLibrary flag)
+ * @param {number} searchId - Search ID
+ * @returns {Array} Results with inLibrary and libraryPaperId fields
+ */
+function getSmartSearchResultsWithLibraryStatus(searchId) {
+  const results = db.exec(`
+    SELECT ssr.*, p.id as library_paper_id
+    FROM smart_search_results ssr
+    LEFT JOIN papers p ON ssr.bibcode = p.bibcode
+    WHERE ssr.search_id = ?
+    ORDER BY ssr.id
+  `, [searchId]);
+
+  if (results.length === 0) return [];
+
+  const columns = results[0].columns;
+  return results[0].values.map(row => {
+    const obj = {};
+    columns.forEach((col, i) => obj[col] = row[i]);
+    // Parse authors JSON
+    if (obj.authors && typeof obj.authors === 'string') {
+      try {
+        obj.authors = JSON.parse(obj.authors);
+      } catch (e) {
+        obj.authors = [];
+      }
+    }
+    // Add computed fields
+    obj.inLibrary = obj.library_paper_id !== null;
+    obj.libraryPaperId = obj.library_paper_id;
+    return obj;
+  });
+}
+
+/**
+ * Reorder smart searches
+ * @param {number[]} orderedIds - Array of search IDs in desired order
+ */
+function reorderSmartSearches(orderedIds) {
+  orderedIds.forEach((id, index) => {
+    db.run('UPDATE smart_searches SET display_order = ? WHERE id = ?', [index, id]);
+  });
+  saveDatabase();
+}
+
+/**
+ * Check which bibcodes are already in the library
+ * @param {string[]} bibcodes - Array of bibcodes to check
+ * @returns {string[]} Array of bibcodes that exist in library
+ */
+function checkBibcodesInLibrary(bibcodes) {
+  if (!bibcodes || bibcodes.length === 0) return [];
+
+  const placeholders = bibcodes.map(() => '?').join(',');
+  const results = db.exec(
+    `SELECT bibcode FROM papers WHERE bibcode IN (${placeholders})`,
+    bibcodes
+  );
+
+  if (results.length === 0) return [];
+  return results[0].values.map(row => row[0]);
+}
+
 module.exports = {
   initDatabase,
   closeDatabase,
@@ -1520,5 +1720,16 @@ module.exports = {
   getFileByHash,
   getPaperFilesByStatus,
   deletePaperFile,
-  deletePaperFiles
+  deletePaperFiles,
+  // Smart ADS Searches
+  createSmartSearch,
+  getSmartSearch,
+  getAllSmartSearches,
+  updateSmartSearch,
+  deleteSmartSearch,
+  clearSmartSearchResults,
+  addSmartSearchResult,
+  getSmartSearchResultsWithLibraryStatus,
+  reorderSmartSearches,
+  checkBibcodesInLibrary
 };

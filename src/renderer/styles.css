@@ -2872,6 +2872,51 @@ body.ios-platform .pdf-container {
   font-size: 13px;
 }
 
+.abstract-header {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.abstract-title {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 0 0 8px 0;
+  color: var(--text-primary);
+}
+
+.abstract-authors {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.abstract-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.abstract-journal {
+  color: var(--text-primary);
+}
+
+.abstract-arxiv {
+  color: var(--accent);
+}
+
+.abstract-year {
+  color: var(--text-secondary);
+}
+
+.abstract-text {
+  margin: 0;
+}
+
 /* Multi-paper selection display */
 .multi-paper-section {
   margin-bottom: 8px;
@@ -8579,4 +8624,334 @@ body.ios-platform #mobile-select-btn {
 /* Disable swipe in selection mode */
 body.selection-mode .paper-swipe-container .paper-item {
   transform: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SMART ADS SEARCHES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Smart Search Toolbar */
+.smart-search-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+
+.smart-search-toolbar.hidden {
+  display: none;
+}
+
+.search-toolbar-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-toolbar-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-toolbar-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.search-toolbar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.search-toolbar-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.search-toolbar-btn:hover {
+  background: var(--bg-hover);
+}
+
+.search-toolbar-btn.loading {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Drawer Searches Section */
+.drawer-add-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+
+.drawer-add-btn:hover {
+  background: var(--bg-hover);
+}
+
+.drawer-placeholder {
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 8px 16px;
+  font-style: italic;
+}
+
+/* Search item in drawer */
+.drawer-search-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 2px 8px;
+  gap: 8px;
+}
+
+.drawer-search-item:hover {
+  background: var(--bg-hover);
+}
+
+.drawer-search-item.active {
+  background: var(--bg-selected);
+}
+
+.drawer-search-item .search-icon {
+  font-size: 14px;
+  opacity: 0.7;
+}
+
+.drawer-search-item .search-name {
+  flex: 1;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drawer-search-item .search-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.drawer-search-item .search-delete-btn {
+  opacity: 0;
+  background: none;
+  border: none;
+  color: var(--error);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+.drawer-search-item:hover .search-delete-btn {
+  opacity: 0.6;
+}
+
+.drawer-search-item .search-delete-btn:hover {
+  opacity: 1;
+}
+
+/* In Library Badge */
+.in-library-badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  background: var(--success);
+  color: #000;
+  border-radius: 10px;
+  margin-left: 8px;
+  font-weight: 500;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Paper item styling for ADS search results */
+.paper-item.in-library {
+  opacity: 0.6;
+}
+
+.paper-item.ads-paper .paper-item-status {
+  display: none;
+}
+
+/* Swipe action for adding to library */
+.paper-swipe-action.add {
+  background: var(--accent);
+}
+
+/* Disabled swipe action (paper already in library) */
+.paper-swipe-action.disabled {
+  display: none;
+}
+
+/* Dimmed paper item for papers already in library */
+.paper-item.dimmed {
+  opacity: 0.6;
+}
+
+.paper-swipe-container.in-library .paper-item {
+  opacity: 0.7;
+}
+
+/* Smart Search Modal */
+#smart-search-modal .form-group {
+  margin-bottom: 16px;
+}
+
+#smart-search-modal label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+#smart-search-modal input,
+#smart-search-modal textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+#smart-search-modal textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+#smart-search-modal input:focus,
+#smart-search-modal textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.form-hint a {
+  color: var(--accent);
+}
+
+/* Empty state for smart search */
+.smart-search-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.smart-search-empty .empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.smart-search-empty h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.smart-search-empty p {
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TEMP PDF PROMPT (for ADS search results)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.temp-pdf-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  text-align: center;
+}
+
+.temp-pdf-prompt .temp-pdf-icon {
+  font-size: 64px;
+  margin-bottom: 20px;
+  opacity: 0.6;
+}
+
+.temp-pdf-prompt h3 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  color: var(--text-primary);
+}
+
+.temp-pdf-prompt p {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  max-width: 400px;
+}
+
+.temp-pdf-prompt .temp-pdf-sources {
+  color: var(--accent);
+  font-weight: 500;
+  margin-bottom: 20px;
+}
+
+.temp-pdf-prompt .temp-pdf-download-btn {
+  padding: 12px 32px;
+  font-size: 15px;
+  margin: 16px 0;
+}
+
+.temp-pdf-prompt .temp-pdf-note {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-top: 8px;
+}
+
+/* Abstract pane PDF button for ADS search papers */
+.abstract-pdf-action {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.abstract-pdf-action .abstract-view-pdf-btn {
+  padding: 10px 24px;
+  font-size: 14px;
 }

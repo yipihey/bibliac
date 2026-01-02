@@ -156,6 +156,35 @@ CREATE TABLE IF NOT EXISTS pdf_page_rotations (
   FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
   UNIQUE(paper_id, pdf_source, page_number)
 );
+
+CREATE TABLE IF NOT EXISTS smart_searches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  query TEXT NOT NULL,
+  sort_order TEXT DEFAULT 'date desc',
+  display_order INTEGER DEFAULT 0,
+  created_date TEXT NOT NULL,
+  last_refresh_date TEXT,
+  result_count INTEGER DEFAULT 0,
+  error_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS smart_search_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  search_id INTEGER NOT NULL,
+  bibcode TEXT NOT NULL,
+  title TEXT,
+  authors TEXT,
+  year INTEGER,
+  journal TEXT,
+  abstract TEXT,
+  doi TEXT,
+  arxiv_id TEXT,
+  citation_count INTEGER DEFAULT 0,
+  cached_date TEXT NOT NULL,
+  FOREIGN KEY (search_id) REFERENCES smart_searches(id) ON DELETE CASCADE,
+  UNIQUE(search_id, bibcode)
+);
 `;
 
 /**
@@ -178,7 +207,9 @@ const INDEXES_SQL = [
   'CREATE INDEX IF NOT EXISTS idx_paper_files_paper ON paper_files(paper_id)',
   'CREATE INDEX IF NOT EXISTS idx_paper_files_hash ON paper_files(file_hash)',
   'CREATE INDEX IF NOT EXISTS idx_paper_files_status ON paper_files(status)',
-  'CREATE INDEX IF NOT EXISTS idx_pdf_rotations_paper ON pdf_page_rotations(paper_id)'
+  'CREATE INDEX IF NOT EXISTS idx_pdf_rotations_paper ON pdf_page_rotations(paper_id)',
+  'CREATE INDEX IF NOT EXISTS idx_smart_search_results_search ON smart_search_results(search_id)',
+  'CREATE INDEX IF NOT EXISTS idx_smart_search_results_bibcode ON smart_search_results(bibcode)'
 ];
 
 /**
