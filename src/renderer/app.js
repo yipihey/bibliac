@@ -2679,6 +2679,17 @@ class ADSReader {
       // Collection item click in Library tab - filter and switch back (but not if clicking delete button)
       const collectionItemInTab = target.closest('#tab-collections-list .collection-item');
       if (collectionItemInTab && !target.closest('.collection-delete-btn')) {
+        // Check if it's a smart search item
+        if (collectionItemInTab.dataset.smartSearchId) {
+          const searchId = parseInt(collectionItemInTab.dataset.smartSearchId);
+          this.selectSmartSearch(searchId).then(() => {
+            this.renderCollectionsTab();
+            this.switchTab(this.previousTab || 'pdf');
+            this.closeMobileDrawer();
+          });
+          return;
+        }
+        // Regular collection
         const collectionId = collectionItemInTab.dataset.collectionId;
         // collectionId is empty string for "All Papers", or a number for collections
         const id = collectionId ? parseInt(collectionId) : null;
@@ -4216,6 +4227,7 @@ class ADSReader {
     if (!window.electronAPI?.smartSearchList) return;
     this.smartSearches = await window.electronAPI.smartSearchList();
     this.renderSmartSearchesList();
+    this.renderCollectionsTab(); // Update collections tab with smart searches
   }
 
   renderSmartSearchesList() {
@@ -5631,7 +5643,7 @@ class ADSReader {
 
     // Add "All Papers" option first
     let html = `
-      <div class="collection-item${!this.currentCollection ? ' active' : ''}" data-collection-id="">
+      <div class="collection-item${!this.currentCollection && !this.currentSmartSearch ? ' active' : ''}" data-collection-id="">
         <span class="collection-icon">📚</span>
         <span class="collection-name">All Papers</span>
         <span class="collection-count">${this.papers.length}</span>
@@ -5647,6 +5659,18 @@ class ADSReader {
         <button class="collection-delete-btn" title="Delete collection">×</button>
       </div>
     `).join('');
+
+    // Add smart searches section if any exist
+    if (this.smartSearches && this.smartSearches.length > 0) {
+      html += `<div class="collection-section-header">ADS Searches</div>`;
+      html += this.smartSearches.map(search => `
+        <div class="collection-item smart-search${this.currentSmartSearch === search.id ? ' active' : ''}" data-smart-search-id="${search.id}">
+          <span class="collection-icon">🔎</span>
+          <span class="collection-name">${this.escapeHtml(search.name)}</span>
+          <span class="collection-count">${search.result_count || '—'}</span>
+        </div>
+      `).join('');
+    }
 
     container.innerHTML = html;
   }
