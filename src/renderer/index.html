@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://sql.js.org; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://sql.js.org 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' file: https://sql.js.org https://api.adsabs.harvard.edu https://*.adsabs.harvard.edu https://arxiv.org https://*.arxiv.org; worker-src 'self' blob:">
   <title>ADS Reader</title>
   <link rel="stylesheet" href="styles.css">
@@ -14,9 +14,11 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
+  <!-- Floating Back Button (appears over PDF in detail view) -->
+  <button class="floating-back-btn" id="floating-back-btn" aria-label="Back to papers">←</button>
+
   <!-- Top Bar -->
   <div class="mobile-top-bar" id="mobile-top-bar">
-    <button class="back-btn" id="mobile-back-btn" aria-label="Back to papers">←</button>
     <button class="hamburger-btn" id="hamburger-btn" aria-label="Open menu">☰</button>
     <div class="mobile-toolbar-btns">
       <div class="mobile-sort-dropdown">
@@ -35,7 +37,6 @@
       </div>
       <button class="mobile-tb-btn" id="mobile-import-btn" title="Import files">+</button>
       <button class="mobile-tb-btn" id="mobile-ads-btn" title="Search ADS">ADS 🔍</button>
-      <button class="mobile-tb-btn" id="mobile-sync-btn" title="Sync with ADS">⟳</button>
       <div class="mobile-download-dropdown">
         <button class="mobile-tb-btn" id="mobile-download-btn" title="Download PDFs">⬇</button>
         <div class="mobile-download-menu hidden" id="mobile-download-menu">
@@ -74,17 +75,25 @@
         </div>
         <div class="drawer-shortcuts hidden" id="drawer-shortcuts">
           <div class="drawer-shortcuts-grid">
-            <span class="shortcut-key">/</span><span>Search</span>
+            <span class="shortcut-key">/</span><span>Search papers</span>
             <span class="shortcut-key">j/k</span><span>Next/Prev paper</span>
+            <span class="shortcut-key">⌘A</span><span>Select all</span>
+            <span class="shortcut-key">⌫</span><span>Remove paper</span>
             <span class="shortcut-key">s</span><span>Sync with ADS</span>
             <span class="shortcut-key">a</span><span>Open in ADS</span>
+            <span class="shortcut-key">1/2/3</span><span>Unread/Reading/Read</span>
+            <span class="shortcut-key">⇧1/2/3</span><span>Rating 1/2/3</span>
+            <span class="shortcut-key">0</span><span>Clear rating</span>
             <span class="shortcut-key">p</span><span>PDF tab</span>
-            <span class="shortcut-key">n</span><span>Notes panel</span>
-            <span class="shortcut-key">1-3</span><span>Read status</span>
-            <span class="shortcut-key">⇧1-4</span><span>Rating</span>
+            <span class="shortcut-key">⇧P</span><span>Open in Preview</span>
             <span class="shortcut-key">+/-</span><span>Zoom PDF</span>
             <span class="shortcut-key">r</span><span>Rotate page</span>
+            <span class="shortcut-key">f</span><span>Focus mode</span>
+            <span class="shortcut-key">n</span><span>Notes panel</span>
+            <span class="shortcut-key">⌘⇧N</span><span>Focus notes</span>
+            <span class="shortcut-key">t</span><span>Toggle sidebar</span>
             <span class="shortcut-key">m</span><span>Toggle menu</span>
+            <span class="shortcut-key">Esc</span><span>Exit/Cancel</span>
           </div>
         </div>
       </div>
@@ -361,7 +370,6 @@
           <div class="list-toolbar">
             <button id="import-btn" class="import-btn" title="Import files">+</button>
             <button id="ads-search-btn" class="ads-btn" title="Search ADS">ADS 🔍</button>
-            <button id="ads-sync-btn" class="sync-btn" title="Sync selected papers with ADS">⟳</button>
             <div class="download-pdf-dropdown">
               <button id="download-pdf-btn" class="download-btn" title="Download PDFs for selected papers">⬇</button>
               <div class="download-pdf-menu hidden" id="download-pdf-menu">
@@ -594,6 +602,14 @@
                     <div class="libraries-list" id="libraries-list">
                       <!-- Dynamically populated -->
                     </div>
+                    <div class="library-io-actions">
+                      <button class="lib-action-btn" id="export-lib-btn" title="Export library to .adslib file">
+                        ↓ Export
+                      </button>
+                      <button class="lib-action-btn" id="import-lib-btn" title="Import library from .adslib file">
+                        ↑ Import
+                      </button>
+                    </div>
                   </div>
 
                   <!-- Collections Section -->
@@ -681,14 +697,24 @@
                 <!-- Dynamically populated -->
               </optgroup>
             </select>
-            <button class="tab-btn mobile-only" data-tab="papers">Papers</button>
-            <button class="tab-btn active" data-tab="pdf">PDF</button>
-            <button class="tab-btn" data-tab="abstract">Abstract</button>
-            <button class="tab-btn" data-tab="refs">Refs</button>
-            <button class="tab-btn" data-tab="cites">Cites</button>
-            <button class="tab-btn" data-tab="bibtex">Info</button>
-            <button class="tab-btn" data-tab="ai">AI</button>
-            <button class="tab-btn" data-tab="library">Library</button>
+            <button class="tab-btn mobile-only" data-tab="papers" title="Papers">≡</button>
+            <button class="tab-btn active" data-tab="pdf" title="PDF">▤</button>
+            <button class="tab-btn" data-tab="abstract" title="Abstract">Abs</button>
+            <button class="tab-btn" data-tab="refs" title="References">→</button>
+            <button class="tab-btn" data-tab="cites" title="Citations">←</button>
+            <button class="tab-btn" data-tab="bibtex" title="Info">ⓘ</button>
+            <button class="tab-btn" data-tab="ai" title="AI">AI</button>
+            <button class="tab-btn" data-tab="library" title="Library">Lib</button>
+            <button class="tab-btn sync-tab-btn" id="sync-tab-btn" title="Sync with ADS">⟳</button>
+            <button class="tab-btn mobile-only action-tab" id="attach-tab-btn" title="Attach files">📎</button>
+            <button class="tab-btn mobile-only action-tab" id="cite-tab-btn" title="Copy cite">❝</button>
+            <button class="tab-btn mobile-only action-tab" id="ads-tab-btn" title="Open in ADS">↗</button>
+            <select id="mobile-rating-select" class="mobile-only mobile-rating-select" title="Rate paper">
+              <option value="0">--</option>
+              <option value="1">1 - Seminal</option>
+              <option value="2">2 - Important</option>
+              <option value="3">3 - Useful</option>
+            </select>
           </div>
           <span class="separator desktop-only">|</span>
           <div class="pdf-controls desktop-only">
@@ -705,15 +731,14 @@
           <span class="paper-title-bar" id="paper-title-bar" title="">Select a paper</span>
         </div>
         <div class="bottom-bar-right">
-          <select id="paper-rating-select" class="status-select rating-select" title="Rate paper (1-4 keys)">
+          <select id="paper-rating-select" class="status-select rating-select" title="Rate paper (0-3 keys)">
             <option value="0">--</option>
             <option value="1">1 - Seminal</option>
             <option value="2">2 - Important</option>
-            <option value="3">3 - Average</option>
-            <option value="4">4 - Meh</option>
+            <option value="3">3 - Useful</option>
           </select>
-          <button class="action-btn" id="attach-file-btn" title="Attach files">Attach</button>
-          <button class="action-btn" id="copy-cite-btn" title="Copy \\cite command">Cite</button>
+          <button class="action-btn" id="attach-file-btn" title="Attach files">📎</button>
+          <button class="action-btn" id="copy-cite-btn" title="Copy cite command">❝</button>
           <button class="action-btn" id="open-ads-btn" title="Open in ADS">↗</button>
         </div>
       </div>

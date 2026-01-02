@@ -246,8 +246,8 @@ class ADSReader {
       this.toggleMobileSearch();
     });
 
-    // Mobile back button - return to papers list
-    document.getElementById('mobile-back-btn')?.addEventListener('click', () => {
+    // Floating back button - return to papers list
+    document.getElementById('floating-back-btn')?.addEventListener('click', () => {
       this.showMobileView('papers');
     });
 
@@ -257,9 +257,6 @@ class ADSReader {
     });
     document.getElementById('mobile-ads-btn')?.addEventListener('click', () => {
       this.showAdsSearchModal();
-    });
-    document.getElementById('mobile-sync-btn')?.addEventListener('click', () => {
-      this.syncSelectedPapers();
     });
     document.getElementById('mobile-sort-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2554,6 +2551,18 @@ class ADSReader {
         this.showCollectionModal();
         return;
       }
+
+      // Export library button
+      if (target.id === 'export-lib-btn' || target.closest('#export-lib-btn')) {
+        this.showExportModal();
+        return;
+      }
+
+      // Import library button
+      if (target.id === 'import-lib-btn' || target.closest('#import-lib-btn')) {
+        this.showImportModal();
+        return;
+      }
     });
 
     // Console starts expanded by default
@@ -2587,6 +2596,16 @@ class ADSReader {
     document.getElementById('paper-rating-select')?.addEventListener('change', (e) => {
       if (this.selectedPaper) {
         this.updatePaperRating(this.selectedPaper.id, parseInt(e.target.value));
+      }
+    });
+
+    // Mobile rating select (in tab bar)
+    document.getElementById('mobile-rating-select')?.addEventListener('change', (e) => {
+      if (this.selectedPaper) {
+        const rating = parseInt(e.target.value);
+        this.updatePaperRating(this.selectedPaper.id, rating);
+        // Sync with desktop rating select
+        document.getElementById('paper-rating-select').value = rating;
       }
     });
 
@@ -2757,19 +2776,36 @@ class ADSReader {
 
     // Search field shortcut buttons
     document.querySelectorAll('.search-shortcut-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+      const handleShortcut = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         const searchInput = document.getElementById('search-input');
         const insertText = btn.dataset.insert;
-        const cursorPos = searchInput.selectionStart;
-        const currentValue = searchInput.value;
+        const currentValue = searchInput.value || '';
 
-        // Insert the field prefix at cursor position
-        searchInput.value = currentValue.slice(0, cursorPos) + insertText + currentValue.slice(cursorPos);
+        // On iOS, selectionStart may not be reliable - just append to end of current value
+        // Add a space before if there's existing content that doesn't end with a space
+        let newValue = currentValue;
+        if (currentValue.length > 0 && !currentValue.endsWith(' ')) {
+          newValue += ' ';
+        }
+        newValue += insertText;
+
+        searchInput.value = newValue;
         searchInput.focus();
-        // Position cursor after the inserted text
-        const newPos = cursorPos + insertText.length;
-        searchInput.setSelectionRange(newPos, newPos);
-      });
+
+        // Try to position cursor at the end
+        try {
+          const newPos = newValue.length;
+          searchInput.setSelectionRange(newPos, newPos);
+        } catch (e) {
+          // Ignore if setSelectionRange fails on some browsers
+        }
+      };
+
+      // Use both click and touchend for better iOS support
+      btn.addEventListener('click', handleShortcut);
+      btn.addEventListener('touchend', handleShortcut);
     });
 
     // ADS Search
@@ -2792,11 +2828,16 @@ class ADSReader {
     });
     document.getElementById('ads-lookup-apply-btn')?.addEventListener('click', () => this.applyAdsLookupMetadata());
 
-    // ADS Sync button
-    document.getElementById('ads-sync-btn')?.addEventListener('click', () => this.startAdsSync());
+    // ADS Sync button (in tab bar)
+    document.getElementById('sync-tab-btn')?.addEventListener('click', () => this.startAdsSync());
     document.getElementById('sync-close-btn')?.addEventListener('click', () => this.hideAdsSyncModal());
     document.getElementById('ads-sync-close-btn')?.addEventListener('click', () => this.hideAdsSyncModal());
     document.getElementById('sync-cancel-btn')?.addEventListener('click', () => this.cancelAdsSync());
+
+    // Mobile action buttons (in tab bar)
+    document.getElementById('attach-tab-btn')?.addEventListener('click', () => this.attachFiles());
+    document.getElementById('cite-tab-btn')?.addEventListener('click', () => this.copyCite());
+    document.getElementById('ads-tab-btn')?.addEventListener('click', () => this.openInADS());
 
     // Download PDF button and dropdown - dynamically populated from ADS sources
     const downloadBtn = document.getElementById('download-pdf-btn');
@@ -3353,13 +3394,8 @@ class ADSReader {
           }
         }
         break;
-      case '4':
-        if (this.selectedPaper && e.shiftKey) {
-          this.updatePaperRating(this.selectedPaper.id, 4); // Meh
-        }
-        break;
       case '0':
-        if (this.selectedPaper && e.shiftKey) {
+        if (this.selectedPaper) {
           this.updatePaperRating(this.selectedPaper.id, 0); // Clear rating
         }
         break;
@@ -4498,11 +4534,7 @@ class ADSReader {
     }
 
     await this.displayPaper(id);
-
-    // Auto-switch to detail view on mobile
-    if (this.isMobileView) {
-      this.showMobileView('detail');
-    }
+    // Stay in list view on mobile - user can use tab bar to navigate
   }
 
   // Navigate to paper info (refs/cites/bibtex)
@@ -4510,13 +4542,8 @@ class ADSReader {
     // Select the paper first
     await this.selectPaper(paperId);
 
-    // On mobile, show info sheet with options
-    if (this.isMobileView) {
-      this.showPaperInfoSheet(paperId);
-    } else {
-      // On desktop, switch to the info/bibtex tab
-      this.switchTab('bibtex');
-    }
+    // Go directly to the info/bibtex tab on both mobile and desktop
+    this.switchTab('bibtex');
   }
 
   // Show paper info sheet for mobile (BibTeX, Refs, Cites options)
@@ -4700,14 +4727,11 @@ class ADSReader {
     titleBar.title = paper.bibcode || '';
 
     document.getElementById('paper-rating-select').value = paper.rating || 0;
+    const mobileRating = document.getElementById('mobile-rating-select');
+    if (mobileRating) mobileRating.value = paper.rating || 0;
 
     // Update bottom bar button states to reflect current paper state
     this.updateBottomBarButtonStates();
-
-    // On mobile, switch to detail view when selecting a paper
-    if (this.isMobileView) {
-      this.showMobileView('detail');
-    }
 
     // Update abstract
     const abstractEl = document.getElementById('abstract-content');
@@ -4796,7 +4820,13 @@ class ADSReader {
       }
     }
 
-    if (infoTabs.includes(currentTab)) {
+    // On mobile, don't auto-switch tabs - user uses tab bar to navigate
+    if (this.isMobileView) {
+      // Just load the PDF in background if available
+      if (hasAnyPdf) {
+        await this.loadPDF(paper);
+      }
+    } else if (infoTabs.includes(currentTab)) {
       // Stay on current tab and refresh if multi-select
       if (this.selectedPapers.size > 1) {
         this.switchTab(currentTab); // This will trigger multi-display
@@ -5408,18 +5438,22 @@ class ADSReader {
             <div class="ref-title">${this.escapeHtml(ref.ref_title || 'Untitled')}</div>
             <div class="ref-meta">${this.formatAuthorsForList(ref.ref_authors)} · ${ref.ref_year || ''}${inLibrary ? '<span class="in-library-badge">In Library</span>' : ''}</div>
           </div>
-          <a class="ref-ads-link" href="#" data-bibcode="${ref.ref_bibcode}" title="Open in ADS">↗</a>
+          <div class="ref-actions">
+            <a class="ref-ads-link" href="#" data-bibcode="${ref.ref_bibcode}" title="Open in ADS">↗</a>
+            ${!inLibrary ? `<button class="ref-import-btn" data-bibcode="${ref.ref_bibcode}" title="Add to library">+</button>` : ''}
+          </div>
         </div>
       `;
     }).join('');
 
     refsEl.querySelectorAll('.ref-item').forEach(item => {
       const adsLink = item.querySelector('.ref-ads-link');
+      const importBtn = item.querySelector('.ref-import-btn');
       const index = parseInt(item.dataset.index);
       const inLibrary = item.classList.contains('in-library');
 
       item.addEventListener('click', (e) => {
-        if (e.target === adsLink) return;
+        if (e.target === adsLink || e.target === importBtn) return;
         if (inLibrary) return; // Can't select items already in library
         this.handleRefClick(index, e);
       });
@@ -5430,6 +5464,15 @@ class ADSReader {
         const bibcode = item.dataset.bibcode;
         if (bibcode) {
           window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
+        }
+      });
+
+      importBtn?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const bibcode = item.dataset.bibcode;
+        if (bibcode) {
+          this.importSingleBibcode(bibcode, 'ref');
         }
       });
     });
@@ -5507,18 +5550,22 @@ class ADSReader {
             <div class="cite-title">${this.escapeHtml(cite.citing_title || 'Untitled')}</div>
             <div class="cite-meta">${this.formatAuthorsForList(cite.citing_authors)} · ${cite.citing_year || ''}${inLibrary ? '<span class="in-library-badge">In Library</span>' : ''}</div>
           </div>
-          <a class="cite-ads-link" href="#" data-bibcode="${cite.citing_bibcode}" title="Open in ADS">↗</a>
+          <div class="cite-actions">
+            <a class="cite-ads-link" href="#" data-bibcode="${cite.citing_bibcode}" title="Open in ADS">↗</a>
+            ${!inLibrary ? `<button class="cite-import-btn" data-bibcode="${cite.citing_bibcode}" title="Add to library">+</button>` : ''}
+          </div>
         </div>
       `;
     }).join('');
 
     citesEl.querySelectorAll('.cite-item').forEach(item => {
       const adsLink = item.querySelector('.cite-ads-link');
+      const importBtn = item.querySelector('.cite-import-btn');
       const index = parseInt(item.dataset.index);
       const inLibrary = item.classList.contains('in-library');
 
       item.addEventListener('click', (e) => {
-        if (e.target === adsLink) return;
+        if (e.target === adsLink || e.target === importBtn) return;
         if (inLibrary) return; // Can't select items already in library
         this.handleCiteClick(index, e);
       });
@@ -5529,6 +5576,15 @@ class ADSReader {
         const bibcode = item.dataset.bibcode;
         if (bibcode) {
           window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
+        }
+      });
+
+      importBtn?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const bibcode = item.dataset.bibcode;
+        if (bibcode) {
+          this.importSingleBibcode(bibcode, 'cite');
         }
       });
     });
@@ -5713,6 +5769,16 @@ class ADSReader {
   }
 
   /**
+   * Import a single bibcode from refs or cites list
+   * @param {string} bibcode - The bibcode to import
+   * @param {string} source - 'ref' or 'cite' for notification message
+   */
+  async importSingleBibcode(bibcode, source) {
+    const papers = [{ bibcode }];
+    await this.importPapersFromBibcodes(papers, source === 'ref' ? 'refs' : 'cites');
+  }
+
+  /**
    * Attach a dropped PDF file to a paper
    * @param {number} paperId - The paper ID to attach the PDF to
    * @param {string} pdfPath - Path to the PDF file
@@ -5802,14 +5868,13 @@ class ADSReader {
 
     // On mobile, switch to detail view for content tabs
     if (this.isMobileView) {
-      if (['pdf', 'abstract', 'refs', 'cites', 'bibtex'].includes(tabName)) {
+      if (['pdf', 'abstract', 'refs', 'cites', 'bibtex', 'ai', 'library'].includes(tabName)) {
         this.showMobileView('detail');
-      } else if (tabName === 'ai') {
-        this.showMobileView('ai');
-      } else if (tabName === 'library') {
-        this.showMobileView('detail'); // Show library tab in detail area
       }
     }
+
+    // Toggle viewing-pdf class for PDF-specific UI (floating back button, hide top bar)
+    document.body.classList.toggle('viewing-pdf', tabName === 'pdf' && this.isMobileView);
 
     // Load library tab content when switching to it
     if (tabName === 'library') {
@@ -5885,10 +5950,8 @@ class ADSReader {
       titleEl.textContent = titles[view] || 'Papers';
     }
 
-    // Manage viewing-pdf class for mobile PDF view
-    if (view === 'pdf' && this.pdfDoc) {
-      document.body.classList.add('viewing-pdf');
-    } else {
+    // Remove viewing-pdf when going back to papers
+    if (view === 'papers') {
       document.body.classList.remove('viewing-pdf');
     }
   }
@@ -6379,6 +6442,8 @@ class ADSReader {
     if (this.selectedPaper?.id === paperId) {
       this.selectedPaper.rating = rating;
       document.getElementById('paper-rating-select').value = rating;
+      const mobileRating = document.getElementById('mobile-rating-select');
+      if (mobileRating) mobileRating.value = rating;
     }
 
     this.renderPaperList();
@@ -6415,10 +6480,6 @@ class ADSReader {
           <button class="mobile-picker-option ${paper.rating === 3 ? 'selected' : ''}" data-rating="3">
             <span class="picker-icon">&#128196;</span>
             <span class="picker-label">Useful</span>
-          </button>
-          <button class="mobile-picker-option ${paper.rating === 4 ? 'selected' : ''}" data-rating="4">
-            <span class="picker-icon">&#128164;</span>
-            <span class="picker-label">Meh</span>
           </button>
           <button class="mobile-picker-option ${!paper.rating ? 'selected' : ''}" data-rating="0">
             <span class="picker-icon">&#10060;</span>
@@ -6771,9 +6832,9 @@ class ADSReader {
     }, 1000);
 
     // Add spinning animation to button
-    const syncBtn = document.getElementById('ads-sync-btn');
-    syncBtn.classList.add('syncing');
-    syncBtn.disabled = true;
+    const syncBtn = document.getElementById('sync-tab-btn');
+    syncBtn?.classList.add('syncing');
+    if (syncBtn) syncBtn.disabled = true;
 
     // Set up progress listener
     const cancelBtn = document.getElementById('sync-cancel-btn');
@@ -6798,8 +6859,8 @@ class ADSReader {
         progressEl.style.width = '100%';
         paperEl.textContent = '';
 
-        syncBtn.classList.remove('syncing');
-        syncBtn.disabled = false;
+        syncBtn?.classList.remove('syncing');
+        if (syncBtn) syncBtn.disabled = false;
 
         // Show close button, hide cancel button
         cancelBtn.classList.add('hidden');
@@ -6823,17 +6884,22 @@ class ADSReader {
                 // Force re-select to update all panes
                 await this.selectPaper(paper.id);
 
-                // After sync, check if PDF is now available and switch to PDF tab
-                const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
-                const attachments = await window.electronAPI.getAttachments(paper.id);
-                const pdfAttachments = attachments.filter(a => a.file_type === 'pdf');
-                const hasAnyPdf = downloadedSources.length > 0 || pdfAttachments.length > 0 || !!paper.pdf_path;
+                // On desktop, check if PDF is now available and switch to PDF tab
+                // On mobile, stay in list view - user navigates via tab bar
+                if (this.isMobileView) {
+                  this.showMobileView('papers');
+                } else {
+                  const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
+                  const attachments = await window.electronAPI.getAttachments(paper.id);
+                  const pdfAttachments = attachments.filter(a => a.file_type === 'pdf');
+                  const hasAnyPdf = downloadedSources.length > 0 || pdfAttachments.length > 0 || !!paper.pdf_path;
 
-                if (hasAnyPdf) {
-                  const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-                  if (currentTab !== 'pdf') {
-                    this.switchTab('pdf');
-                    await this.loadPDF(paper);
+                  if (hasAnyPdf) {
+                    const currentTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+                    if (currentTab !== 'pdf') {
+                      this.switchTab('pdf');
+                      await this.loadPDF(paper);
+                    }
                   }
                 }
               }

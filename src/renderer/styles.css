@@ -2043,6 +2043,11 @@ body.mobile-search-active .search-section {
   font-size: 10px;
   cursor: pointer;
   transition: all 0.1s;
+  /* iOS touch support */
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .search-shortcut-btn:hover {
@@ -2691,9 +2696,14 @@ body.ios-platform .pdf-container {
   color: var(--text-primary);
 }
 
-/* Hide mobile-only tabs on desktop */
-.tab-btn.mobile-only {
+/* Hide mobile-only elements on desktop */
+.mobile-only {
   display: none;
+}
+
+/* Sync button in tab bar */
+.tab-btn.sync-tab-btn {
+  color: var(--accent);
 }
 
 .pdf-controls {
@@ -2780,17 +2790,42 @@ body.ios-platform .pdf-container {
 
   .info-tabs {
     width: 100%;
-    justify-content: space-around;
-    gap: 1px;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 2px 4px;
   }
 
   .tab-btn {
-    flex: 1;
+    flex: 0 1 auto;
     align-items: center;
     justify-content: center;
     min-height: 28px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  /* Action tab buttons in mobile tab bar */
+  .tab-btn.action-tab {
+    display: flex;
+  }
+
+  /* Mobile rating select in tab bar */
+  .mobile-rating-select {
+    display: block;
     padding: 4px 6px;
     font-size: 11px;
+    min-height: 28px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+  }
+
+  /* Compact filter dropdown on mobile */
+  #filter-select {
+    max-width: 60px;
+    padding: 2px 4px;
+    font-size: 10px;
   }
 
   /* Hide desktop-only elements on mobile */
@@ -2801,58 +2836,12 @@ body.ios-platform .pdf-container {
     display: none !important;
   }
 
-  /* Actions row above tabs */
+  /* Hide actions row on mobile - actions are integrated into tab row */
   .bottom-bar-right {
-    width: 100%;
-    order: 0; /* Above tabs row */
-    justify-content: space-around;
-    padding: 3px 4px;
-    border-bottom: 1px solid var(--border);
-    gap: 4px;
+    display: none !important;
   }
 
-  /* Hide actions row when no paper selected */
-  body:not(.has-selected-paper) .bottom-bar-right {
-    display: none;
-  }
-
-  /* Hide actions row when in detail/PDF view */
-  body.showing-detail .bottom-bar-right {
-    display: none;
-  }
-
-  /* Compact action buttons */
-  .bottom-bar-right .action-btn {
-    flex: 1;
-    min-height: 26px;
-    padding: 4px 8px;
-    font-size: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  /* Compact select dropdowns */
-  .bottom-bar-right .status-select {
-    flex: 1;
-    min-height: 26px;
-    padding: 4px 4px;
-    font-size: 10px;
-  }
-
-  /* Disabled state styling */
-  .bottom-bar-right .action-btn:disabled,
-  .bottom-bar-right .status-select:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-
-  /* Adjust main content padding for fixed bottom bar */
-  .content-split,
-  #main-screen {
-    padding-bottom: calc(70px + env(safe-area-inset-bottom));
-  }
+  /* Note: iOS handles bottom bar spacing via iOS-specific styles */
 }
 
 /* iOS safe area handling */
@@ -3070,15 +3059,45 @@ body.ios-platform .pdf-container {
   opacity: 0.6;
 }
 
+.ref-actions, .cite-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.ref-import-btn, .cite-import-btn {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0 4px;
+  border-radius: 2px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+  line-height: 1.2;
+}
+
+.ref-import-btn:hover, .cite-import-btn:hover {
+  opacity: 1;
+  background: var(--accent);
+  color: white;
+}
+
 .ref-ads-link, .cite-ads-link {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   text-decoration: none;
-  padding: 2px 6px;
-  border-radius: 3px;
+  padding: 0 4px;
+  border-radius: 2px;
   opacity: 0.5;
   transition: opacity 0.15s, background 0.15s;
+  line-height: 1.2;
 }
 
 .ref-ads-link:hover, .cite-ads-link:hover {
@@ -5630,6 +5649,14 @@ body.resizing-vertical * {
   min-width: 50px;
 }
 
+@media (max-width: 768px) {
+  .filter-select {
+    padding: 2px 4px;
+    font-size: 9px;
+    min-width: 36px;
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    LIBRARY TAB STYLES
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -5677,6 +5704,18 @@ body.resizing-vertical * {
 
 .lib-action-btn:hover {
   background: var(--bg-hover);
+}
+
+.library-io-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.library-io-actions .lib-action-btn {
+  flex: 1;
 }
 
 /* Library List Items */
@@ -5810,20 +5849,68 @@ body.ios-platform {
   overflow: hidden;
   /* Safe area insets handled by content, not body padding */
   padding: 0;
+  margin: 0;
+  position: fixed;
+  width: 100%;
+  top: 0;
+  left: 0;
 }
 
 body.ios .screen,
 body.ios-platform .screen {
   height: 100dvh;
   max-height: 100dvh;
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
+  overflow: hidden;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+body.ios #main-screen,
+body.ios-platform #main-screen {
+  flex: 1;
+  height: auto;
+  max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  padding-top: calc(36px + env(safe-area-inset-top));
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+body.ios .content-split,
+body.ios-platform .content-split {
+  flex: 1;
+  overflow: hidden;
+  padding-bottom: 0;
+  /* Leave room for fixed bottom bar */
+  max-height: calc(100% - 70px);
 }
 
 body.ios .titlebar-drag-region,
 body.ios-platform .titlebar-drag-region {
   display: none;
+}
+
+/* Prevent iOS auto-zoom on input focus - use 16px minimum for text inputs */
+body.ios input[type="text"],
+body.ios-platform input[type="text"],
+body.ios input[type="search"],
+body.ios-platform input[type="search"],
+body.ios input:not([type]),
+body.ios-platform input:not([type]),
+body.ios textarea,
+body.ios-platform textarea {
+  font-size: 16px !important;
+}
+
+/* Compact selects in tab bar on iOS */
+body.ios .mobile-rating-select,
+body.ios-platform .mobile-rating-select,
+body.ios #filter-select,
+body.ios-platform #filter-select {
+  font-size: 9px !important;
+  padding: 2px 4px;
+  min-height: 24px;
+  max-width: 50px;
 }
 
 /* iOS Library Picker */
@@ -6562,31 +6649,42 @@ body.ios-platform .sidebar {
   justify-content: center;
 }
 
+/* Back button in top bar - hidden, we use floating version */
 .mobile-top-bar .back-btn {
-  background: none;
-  border: none;
-  font-size: 22px;
-  padding: 4px;
+  display: none;
+}
+
+/* Floating back button - always on top of content */
+.floating-back-btn {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 1000;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
   cursor: pointer;
   color: var(--text-primary);
-  min-width: 32px;
-  min-height: 32px;
   display: none;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-/* Show back button and hide hamburger when in detail view */
-.mobile-top-bar.showing-detail .hamburger-btn {
-  display: none;
+.floating-back-btn:active {
+  background: var(--bg-hover);
 }
 
-.mobile-top-bar.showing-detail .back-btn {
+/* Show floating back button only in PDF view on mobile */
+body.viewing-pdf .floating-back-btn {
   display: flex;
 }
 
-/* Hide toolbar buttons when in detail view */
-.mobile-top-bar.showing-detail .mobile-toolbar-btns {
+/* Hide top bar only in PDF view */
+body.viewing-pdf .mobile-top-bar {
   display: none;
 }
 
@@ -7324,7 +7422,7 @@ body.ios-platform .sidebar {
   .paper-list-panel,
   .paper-detail {
     position: fixed !important;
-    top: 36px !important; /* Below mobile top bar */
+    top: calc(36px + env(safe-area-inset-top, 0px)) !important; /* Below mobile top bar + safe area */
     left: 0 !important;
     right: 0 !important;
     bottom: 56px !important; /* Height of bottom bar */
@@ -7346,7 +7444,11 @@ body.ios-platform .sidebar {
     display: block !important;
   }
 
-  /* Papers tab - only visible on mobile */
+  /* Show mobile-only elements on mobile */
+  .mobile-only {
+    display: block !important;
+  }
+
   .tab-btn.mobile-only {
     display: flex !important;
   }

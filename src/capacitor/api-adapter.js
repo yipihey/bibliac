@@ -1406,7 +1406,14 @@ const capacitorAPI = {
   async searchPapers(query) {
     try {
       if (!dbInitialized) await initializeDatabase();
-      return MobileDB.getAllPapers({ search: query });
+      const papers = MobileDB.getAllPapers({ search: query });
+      // Wrap in expected format: { paper, matchCount, matchSource, context }
+      return papers.map(paper => ({
+        paper,
+        matchCount: 1,
+        matchSource: 'search',
+        context: ''
+      }));
     } catch (error) {
       return [];
     }

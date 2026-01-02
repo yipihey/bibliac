@@ -814,13 +814,14 @@ export function getReferences(paperId) {
   const refs = [];
   while (stmt.step()) {
     const row = stmt.getAsObject();
+    // Return with original column names to match Electron version
     refs.push({
       id: row.id,
       paper_id: row.paper_id,
-      bibcode: row.ref_bibcode,
-      title: row.ref_title,
-      authors: row.ref_authors,
-      year: row.ref_year
+      ref_bibcode: row.ref_bibcode,
+      ref_title: row.ref_title,
+      ref_authors: row.ref_authors,
+      ref_year: row.ref_year
     });
   }
   stmt.free();
@@ -840,13 +841,14 @@ export function getCitations(paperId) {
   const cites = [];
   while (stmt.step()) {
     const row = stmt.getAsObject();
+    // Return with original column names to match Electron version
     cites.push({
       id: row.id,
       paper_id: row.paper_id,
-      bibcode: row.citing_bibcode,
-      title: row.citing_title,
-      authors: row.citing_authors,
-      year: row.citing_year
+      citing_bibcode: row.citing_bibcode,
+      citing_title: row.citing_title,
+      citing_authors: row.citing_authors,
+      citing_year: row.citing_year
     });
   }
   stmt.free();
