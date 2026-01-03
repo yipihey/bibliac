@@ -393,6 +393,34 @@ class ADSReader {
       });
     });
 
+    // ADS examples section collapsible
+    document.querySelector('.ads-examples-header.collapsible')?.addEventListener('click', (e) => {
+      const header = e.currentTarget;
+      const targetId = header.dataset.toggle;
+      const content = document.getElementById(targetId);
+      const toggle = header.querySelector('.section-toggle');
+      content?.classList.toggle('hidden');
+      header.classList.toggle('expanded');
+      if (toggle) {
+        toggle.textContent = header.classList.contains('expanded') ? '−' : '+';
+      }
+    });
+
+    // ADS example "Use" button click handlers
+    document.querySelectorAll('.ads-example-use-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const item = e.target.closest('.ads-example-item');
+        const query = item?.dataset.query;
+        if (query) {
+          const searchInput = document.getElementById('ads-pane-query-input');
+          if (searchInput) {
+            searchInput.value = query;
+            searchInput.focus();
+          }
+        }
+      });
+    });
+
     // Initialize with Papers view
     this.showMobileView('papers');
   }
@@ -4645,6 +4673,10 @@ class ADSReader {
       const inLibraryBadge = (isAdsSearchView && paper.inLibrary) ?
         '<span class="in-library-badge" title="Already in your library">In Library</span>' : '';
 
+      // Action buttons for ADS search results (not in library)
+      const actionButtons = (isAdsSearchView && !paper.inLibrary) ?
+        '<span class="paper-action-btns"><span class="paper-action-btn add-btn" title="Add to library (a)">+</span><span class="paper-action-btn link-btn" title="Open in ADS (w)">↗</span></span>' : '';
+
       // For ADS papers, hide the swipe action if already in library
       // Only render swipe action on iOS - it's not needed on macOS
       const showSwipeAction = this.isIOS && (!isAdsSearchView || !paper.inLibrary);
@@ -4663,7 +4695,7 @@ class ADSReader {
             ${this.escapeHtml(paper.title || 'Untitled')}
           </div>
           <div class="paper-item-meta">
-            ${inLibraryBadge}<span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
+            ${actionButtons}${inLibraryBadge}<span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
             <span>${paper.year || ''}</span>
             ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
             ${this.getRatingEmoji(paper.rating)}
@@ -4754,6 +4786,10 @@ class ADSReader {
       const inLibraryBadge = (isAdsSearchView && paper.inLibrary) ?
         '<span class="in-library-badge" title="Already in your library">In Library</span>' : '';
 
+      // Action buttons for ADS search results (not in library)
+      const actionButtons = (isAdsSearchView && !paper.inLibrary) ?
+        '<span class="paper-action-btns"><span class="paper-action-btn add-btn" title="Add to library (a)">+</span><span class="paper-action-btn link-btn" title="Open in ADS (w)">↗</span></span>' : '';
+
       // For ADS papers, hide the swipe action if already in library
       // Only render swipe action on iOS - it's not needed on macOS
       const showSwipeAction = this.isIOS && (!isAdsSearchView || !paper.inLibrary);
@@ -4774,7 +4810,7 @@ class ADSReader {
               ${this.escapeHtml(paper.title || 'Untitled')}
             </div>
             <div class="paper-item-meta">
-              ${inLibraryBadge}<span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
+              ${actionButtons}${inLibraryBadge}<span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
               <span>${paper.year || ''}</span>
               ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
               ${this.getRatingEmoji(paper.rating)}
@@ -4843,6 +4879,38 @@ class ADSReader {
           const pdfPath = window.electronAPI.getPathForFile(pdfFiles[0]);
           await this.attachDroppedPdf(paperId, pdfPath);
         }
+      });
+    });
+
+    // Action button handlers for ADS search results
+    container.querySelectorAll('.paper-action-btn.add-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const bibcode = btn.closest('.paper-swipe-container').dataset.bibcode;
+        if (!bibcode) return;
+
+        const paper = this.papers.find(p => p.bibcode === bibcode);
+        if (paper?.inLibrary) {
+          this.showNotification('Paper already in library', 'info');
+          return;
+        }
+
+        const result = await window.electronAPI.smartSearchAddToLibrary(bibcode);
+        if (result.success) {
+          if (paper) paper.inLibrary = true;
+          this.renderPaperList();
+          this.showNotification('Added to library', 'success');
+        } else {
+          this.showNotification(result.error || 'Failed to add', 'error');
+        }
+      });
+    });
+
+    container.querySelectorAll('.paper-action-btn.link-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const bibcode = btn.closest('.paper-swipe-container').dataset.bibcode;
+        if (bibcode) window.electronAPI.openExternal(`https://ui.adsabs.harvard.edu/abs/${bibcode}`);
       });
     });
 

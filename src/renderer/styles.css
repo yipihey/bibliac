@@ -2300,6 +2300,38 @@ body.mobile-search-active .search-section {
   max-width: 180px;
 }
 
+/* Action buttons for ADS search results */
+.paper-action-btns {
+  display: inline-flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.paper-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 3px;
+  cursor: pointer;
+  background-color: transparent;
+  color: #4a9eff;
+  border: 1px solid #4a9eff;
+  flex-shrink: 0;
+}
+
+.paper-action-btn:hover {
+  background-color: #4a9eff;
+  color: #ffffff;
+}
+
+.paper-action-btn.link-btn {
+  font-size: 12px;
+}
+
 .indexed-indicator,
 .ads-indicator,
 .rating-indicator {
@@ -6012,7 +6044,7 @@ body.resizing-vertical * {
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .ads-search-header {
@@ -6079,6 +6111,101 @@ body.resizing-vertical * {
   margin: 16px;
   color: var(--error);
   font-size: 13px;
+}
+
+/* Example Searches Section */
+.ads-examples-section {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+
+.ads-examples-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.ads-examples-header:hover {
+  color: var(--accent);
+}
+
+.ads-examples-header span:first-child {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.ads-examples-header:hover span:first-child {
+  color: var(--accent);
+}
+
+.ads-examples-header .section-toggle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  width: 16px;
+  text-align: center;
+}
+
+.ads-examples-content {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ads-example-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.ads-example-item:hover {
+  background: var(--bg-hover);
+}
+
+.ads-example-label {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  min-width: 140px;
+}
+
+.ads-example-query {
+  flex: 1;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  padding: 3px 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ads-example-use-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.ads-example-use-btn:hover {
+  background: var(--accent-hover);
 }
 
 /* Natural Language to ADS Query Translation */
