@@ -9972,12 +9972,22 @@ class ADSReader {
   // Format authors for short display in header
   formatAuthorsShort(authors) {
     if (!authors) return '';
-    const authorList = authors.split(';').map(a => a.trim());
+
+    // Handle both array (from ADS) and string (from database) formats
+    let authorList;
+    if (Array.isArray(authors)) {
+      authorList = authors;
+    } else if (typeof authors === 'string') {
+      authorList = authors.split(';').map(a => a.trim());
+    } else {
+      return '';
+    }
+
     if (authorList.length === 0) return '';
     // Extract last name only (before comma)
-    const lastName1 = authorList[0].split(',')[0];
+    const lastName1 = (authorList[0] || '').split(',')[0];
     if (authorList.length === 1) return lastName1;
-    const lastName2 = authorList[1].split(',')[0];
+    const lastName2 = (authorList[1] || '').split(',')[0];
     if (authorList.length === 2) return `${lastName1}, ${lastName2}`;
     return `${lastName1}, ${lastName2} et al.`;
   }
