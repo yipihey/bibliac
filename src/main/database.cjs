@@ -112,8 +112,8 @@ function addPaper(paper) {
   const stmt = db.prepare(`
     INSERT INTO papers (bibcode, doi, arxiv_id, title, authors, year, journal,
                         abstract, keywords, pdf_path, text_path, bibtex,
-                        read_status, added_date, modified_date, import_source, import_source_key)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        read_status, added_date, modified_date, import_source, import_source_key, citation_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   stmt.run([
@@ -133,7 +133,8 @@ function addPaper(paper) {
     now,
     now,
     paper.import_source || null,
-    paper.import_source_key || null
+    paper.import_source_key || null,
+    paper.citation_count || 0
   ]);
   stmt.free();
 
@@ -153,8 +154,8 @@ function addPapersBulk(papers, progressCallback = null) {
   const stmt = db.prepare(`
     INSERT INTO papers (bibcode, doi, arxiv_id, title, authors, year, journal,
                         abstract, keywords, pdf_path, text_path, bibtex,
-                        read_status, added_date, modified_date, import_source, import_source_key)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        read_status, added_date, modified_date, import_source, import_source_key, citation_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (let i = 0; i < papers.length; i++) {
@@ -205,7 +206,8 @@ function addPapersBulk(papers, progressCallback = null) {
           now,
           now,
           paper.import_source || null,
-          paper.import_source_key || null
+          paper.import_source_key || null,
+          paper.citation_count || 0
         ]);
         stmt.reset();
 
