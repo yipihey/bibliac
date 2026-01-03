@@ -6223,6 +6223,15 @@ function createApplicationMenu() {
           }
         },
         { type: 'separator' },
+        {
+          label: 'Settings...',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'settings');
+          }
+        },
+        { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
         { role: 'hide' },
@@ -6306,6 +6315,75 @@ function createApplicationMenu() {
     {
       label: 'View',
       submenu: [
+        // Pane navigation - paper-specific tabs
+        {
+          label: 'PDF',
+          accelerator: 'Shift+P',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'pdf');
+          }
+        },
+        {
+          label: 'Abstract',
+          accelerator: 'Shift+A',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'abstract');
+          }
+        },
+        {
+          label: 'References',
+          accelerator: 'Shift+R',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'refs');
+          }
+        },
+        {
+          label: 'Citations',
+          accelerator: 'Shift+C',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'cites');
+          }
+        },
+        {
+          label: 'Info',
+          accelerator: 'Shift+I',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'bibtex');
+          }
+        },
+        {
+          label: 'AI',
+          accelerator: 'Shift+Y',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'ai');
+          }
+        },
+        { type: 'separator' },
+        // Navigation tabs
+        {
+          label: 'Library',
+          accelerator: 'Shift+L',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'library');
+          }
+        },
+        {
+          label: 'ADS Search',
+          accelerator: 'Shift+S',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('switch-tab', 'ads-search');
+          }
+        },
+        { type: 'separator' },
+        // Standard view controls
         { role: 'reload' },
         { role: 'forceReload' },
         { role: 'toggleDevTools' },
@@ -6360,6 +6438,14 @@ function createApplicationMenu() {
           }
         },
         { type: 'separator' }] : []),
+        {
+          label: 'Keyboard Shortcuts',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('show-shortcuts-modal');
+          }
+        },
+        { type: 'separator' },
         {
           label: 'Send Feedback',
           accelerator: 'CmdOrCtrl+Shift+F',

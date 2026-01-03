@@ -31,9 +31,10 @@ class ADSReader {
     this.isRendering = false; // Prevent concurrent renders
     this.pendingRender = null; // Queue next render if one is in progress
 
-    // ADS search state
-    this.adsResults = [];
-    this.adsSelected = new Set();
+    // ADS search state (unified with smart search model)
+    this.isAdsSearchActive = false;   // Ad-hoc ADS search mode active
+    this.currentAdsQuery = null;      // Current query for "Save as Smart Search"
+    this.adsSearchResultCount = 0;    // Total results from ADS
 
     // Refs/Cites import state
     this.currentRefs = [];
@@ -263,7 +264,7 @@ class ADSReader {
     });
     // Logo tap triggers ADS search on iOS
     document.getElementById('mobile-title')?.addEventListener('click', () => {
-      this.showAdsSearchModal();
+      this.switchTab('ads-search');
     });
     document.getElementById('mobile-sort-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2492,25 +2493,9 @@ class ADSReader {
           case 'reset-summary-prompt-btn':
             this.resetSummaryPrompt();
             break;
-          // ADS Import modal buttons (iOS compatibility)
+          // ADS Search pane button (iOS compatibility)
           case 'ads-search-btn':
-            this.showAdsSearchModal();
-            break;
-          case 'ads-search-execute-btn':
-            this.executeAdsSearch();
-            break;
-          case 'ads-import-btn':
-            this.importAdsSelected();
-            break;
-          case 'ads-close-btn':
-          case 'ads-modal-close-btn':
-            this.hideAdsSearchModal();
-            break;
-          case 'ads-select-all-btn':
-            this.selectAllAdsResults();
-            break;
-          case 'ads-deselect-all-btn':
-            this.deselectAllAdsResults();
+            this.switchTab('ads-search');
             break;
           // ADS Lookup modal buttons (iOS compatibility)
           case 'ads-lookup-search-btn':
@@ -2530,6 +2515,9 @@ class ADSReader {
           case 'feedback-close-btn':
           case 'feedback-cancel-btn':
             this.hideFeedbackModal();
+            break;
+          case 'shortcuts-close-btn':
+            this.hideShortcutsModal();
             break;
           case 'feedback-submit-btn':
             this.submitFeedback();
@@ -2737,6 +2725,20 @@ class ADSReader {
     if (window.electronAPI.onShowFeedbackModal) {
       window.electronAPI.onShowFeedbackModal(() => {
         this.showFeedbackModal();
+      });
+    }
+
+    // Listen for tab switch requests from View menu
+    if (window.electronAPI.onSwitchTab) {
+      window.electronAPI.onSwitchTab((tabName) => {
+        this.switchTab(tabName);
+      });
+    }
+
+    // Listen for shortcuts modal request from Help menu
+    if (window.electronAPI.onShowShortcutsModal) {
+      window.electronAPI.onShowShortcutsModal(() => {
+        this.showShortcutsModal();
       });
     }
 
@@ -2968,24 +2970,15 @@ class ADSReader {
 
     // ADS Search - click on logo switches to ADS search tab
     document.getElementById('ads-search-btn')?.addEventListener('click', () => this.switchTab('ads-search'));
-    // Keep modal close button for legacy compatibility (modal still used for refs/cites import)
-    document.getElementById('ads-close-btn')?.addEventListener('click', () => this.hideAdsSearchModal());
-    document.getElementById('ads-search-execute-btn')?.addEventListener('click', () => this.executeAdsSearch());
-    document.getElementById('ads-query-input')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') this.executeAdsSearch();
-    });
-    document.getElementById('ads-select-all-btn')?.addEventListener('click', () => this.adsSelectAll());
-    document.getElementById('ads-select-none-btn')?.addEventListener('click', () => this.adsSelectNone());
-    document.getElementById('ads-import-btn')?.addEventListener('click', () => this.importAdsSelected());
 
-    // ADS Search Pane (fixed tab)
+    // ADS Search Pane
     document.getElementById('ads-pane-search-btn')?.addEventListener('click', () => this.executeAdsPaneSearch());
     document.getElementById('ads-pane-query-input')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.executeAdsPaneSearch();
     });
-    document.getElementById('ads-pane-select-all-btn')?.addEventListener('click', () => this.adsPaneSelectAll());
-    document.getElementById('ads-pane-select-none-btn')?.addEventListener('click', () => this.adsPaneSelectNone());
-    document.getElementById('ads-pane-import-btn')?.addEventListener('click', () => this.importAdsPaneSelected());
+
+    // Save ADS Search as Smart Search
+    document.getElementById('ads-save-search-btn')?.addEventListener('click', () => this.saveAdsSearchAsSmartSearch());
 
     // ADS Lookup Modal
     document.getElementById('ads-lookup-close-btn')?.addEventListener('click', () => this.hideAdsLookupModal());
@@ -3040,21 +3033,6 @@ class ADSReader {
 
     // ADS shortcut buttons are handled by the delegated click handler (lines ~1270-1292)
     // for iOS compatibility - no duplicate listeners needed here
-
-    // ADS import progress listeners
-    window.electronAPI.onImportProgress((data) => {
-      this.updateImportProgress(data);
-      if (this.adsPaneImportActive) {
-        this.updateAdsPaneImportProgress(data);
-      }
-    });
-    window.electronAPI.onImportComplete((data) => {
-      if (this.adsPaneImportActive) {
-        this.handleAdsPaneImportComplete(data);
-      } else {
-        this.handleImportComplete(data);
-      }
-    });
 
     // Refs/Cites selection controls
     document.getElementById('refs-select-all')?.addEventListener('click', () => this.selectAllRefs());
@@ -3747,6 +3725,10 @@ class ADSReader {
         // Shift+S: Switch to ADS Search tab
         this.switchTab('ads-search');
         break;
+      case 'Y':
+        // Shift+Y: Switch to AI tab
+        this.switchTab('ai');
+        break;
       case 'Backspace':
       case 'Delete':
         e.preventDefault();
@@ -3806,15 +3788,12 @@ class ADSReader {
       return;
     }
 
-    // Show ADS search modal with bibcode query
-    this.showAdsSearchModal();
-
     // Build query: bibcode:"X" OR bibcode:"Y"
     const query = bibcodes.map(b => `bibcode:"${b}"`).join(' OR ');
-    document.getElementById('ads-query-input').value = query;
 
-    // Execute the search automatically
-    await this.executeAdsSearch();
+    // Set query in search input and execute
+    document.getElementById('ads-pane-query-input').value = query;
+    await this.executeAdsPaneSearch();
   }
 
   showSetupScreen() {
@@ -4271,6 +4250,13 @@ class ADSReader {
   }
 
   async loadPapers() {
+    // Ad-hoc ADS search - papers already set by executeAdsPaneSearch
+    if (this.isAdsSearchActive) {
+      this.sortPapers();
+      this.renderPaperList();
+      return;
+    }
+
     let options = {};
 
     if (this.currentView !== 'all') {
@@ -4528,11 +4514,11 @@ class ADSReader {
   }
 
   /**
-   * Add all selected papers from smart search to library
+   * Add all selected papers from smart search or ad-hoc ADS search to library
    * Used by context menu "Add to Library" and iOS action sheet
    */
   async addSelectedPapersToLibrary() {
-    if (!this.currentSmartSearch) return;
+    if (!this.currentSmartSearch && !this.isAdsSearchActive) return;
 
     const papersToAdd = [];
     for (const id of this.selectedPapers) {
@@ -4565,7 +4551,7 @@ class ADSReader {
   updateNavActiveStates() {
     // Update collection items
     document.querySelectorAll('.collection-item').forEach(item => {
-      item.classList.toggle('active', parseInt(item.dataset.collection) === this.currentCollection && !this.currentSmartSearch);
+      item.classList.toggle('active', parseInt(item.dataset.collection) === this.currentCollection && !this.currentSmartSearch && !this.isAdsSearchActive);
     });
   }
 
@@ -4601,7 +4587,7 @@ class ADSReader {
   renderFullPaperList() {
     const listEl = document.getElementById('paper-list');
     const inCollection = !!this.currentCollection;
-    const isAdsSearchView = !!this.currentSmartSearch;
+    const isAdsSearchView = !!this.currentSmartSearch || this.isAdsSearchActive;
 
     // Determine action based on context
     let actionIcon, actionTitle, actionClass;
@@ -4700,7 +4686,7 @@ class ADSReader {
     const scrollTop = listEl.scrollTop;
     const viewportHeight = listEl.clientHeight;
     const inCollection = !!this.currentCollection;
-    const isAdsSearchView = !!this.currentSmartSearch;
+    const isAdsSearchView = !!this.currentSmartSearch || this.isAdsSearchActive;
 
     // Determine action based on context
     let actionIcon, actionTitle, actionClass;
@@ -4896,7 +4882,7 @@ class ADSReader {
 
           const rawId = swipeContainer.dataset.id;
 
-          if (this.currentSmartSearch) {
+          if (this.currentSmartSearch || this.isAdsSearchActive) {
             // Add to library from ADS search
             const paper = this.papers.find(p => p.id === rawId);
             if (paper && !paper.inLibrary) {
@@ -5126,7 +5112,7 @@ class ADSReader {
     const deleteBtn = document.getElementById('as-delete-btn');
     const syncBtn = document.getElementById('as-sync-btn');
 
-    if (this.currentSmartSearch) {
+    if (this.currentSmartSearch || this.isAdsSearchActive) {
       addToLibraryBtn?.classList.remove('hidden');
       deleteBtn?.classList.add('hidden');
       syncBtn?.classList.add('hidden');
@@ -5440,7 +5426,7 @@ class ADSReader {
 
     // Show/hide ADS-specific items
     const addToLibraryItem = document.getElementById('ctx-add-to-library');
-    if (this.currentSmartSearch) {
+    if (this.currentSmartSearch || this.isAdsSearchActive) {
       addToLibraryItem?.classList.remove('hidden');
       // Update text based on selection count
       addToLibraryItem.textContent = this.selectedPapers.size > 1
@@ -7250,25 +7236,43 @@ class ADSReader {
     }
   }
 
-  // Shared import method for refs/cites
+  // Shared import method for refs/cites - uses add-to-library pattern
   async importPapersFromBibcodes(papers, source) {
-    // Show the ADS search modal for progress
-    document.getElementById('ads-search-modal').classList.remove('hidden');
-    document.getElementById('ads-query-input').value = `Importing ${papers.length} ${source}...`;
-    document.getElementById('ads-search-execute-btn').disabled = true;
-    document.getElementById('ads-results-list').innerHTML = '<p class="no-content">Fetching paper metadata from ADS...</p>';
-    document.getElementById('ads-results-header').classList.add('hidden');
+    if (papers.length === 0) {
+      this.showNotification('No papers to import', 'info');
+      return;
+    }
 
-    const progressEl = document.getElementById('ads-progress');
-    progressEl.classList.remove('hidden');
+    this.showNotification(`Importing ${papers.length} ${source}...`, 'info');
 
-    try {
-      const result = await window.electronAPI.adsImportPapers(papers);
-      // Progress updates handled by onImportProgress listener
-    } catch (error) {
-      console.error('Import error:', error);
-      document.getElementById('ads-results-list').innerHTML =
-        `<p class="no-content" style="color: var(--error);">Import failed: ${error.message}</p>`;
+    let imported = 0;
+    let failed = 0;
+
+    for (const paper of papers) {
+      try {
+        const bibcode = paper.bibcode || paper;
+        const result = await window.electronAPI.smartSearchAddToLibrary(bibcode);
+        if (result.success) {
+          imported++;
+        } else {
+          failed++;
+        }
+      } catch (error) {
+        console.error('Import error for paper:', paper, error);
+        failed++;
+      }
+    }
+
+    // Reload papers list
+    await this.loadPapers();
+    const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
+    if (info) this.updateLibraryDisplay(info);
+
+    // Show result
+    if (failed > 0) {
+      this.showNotification(`Imported ${imported} papers, ${failed} failed`, imported > 0 ? 'warn' : 'error');
+    } else {
+      this.showNotification(`Imported ${imported} ${source}`, 'success');
     }
   }
 
@@ -7682,6 +7686,16 @@ class ADSReader {
       this.exitSmartSearchView();
     }
 
+    // Exit ad-hoc ADS search mode when selecting a built-in view
+    if (this.isAdsSearchActive) {
+      this.isAdsSearchActive = false;
+      this.currentAdsQuery = null;
+      this.adsSearchResultCount = 0;
+      const toolbar = document.getElementById('smart-search-toolbar');
+      toolbar?.classList.add('hidden');
+      this.hideAdsSearchToolbar();
+    }
+
     document.querySelectorAll('.nav-item[data-view]').forEach(item => {
       item.classList.toggle('active', item.dataset.view === view);
     });
@@ -7700,6 +7714,16 @@ class ADSReader {
     // Exit smart search mode when selecting a collection
     if (this.currentSmartSearch) {
       this.exitSmartSearchView();
+    }
+
+    // Exit ad-hoc ADS search mode when selecting a collection
+    if (this.isAdsSearchActive) {
+      this.isAdsSearchActive = false;
+      this.currentAdsQuery = null;
+      this.adsSearchResultCount = 0;
+      const toolbar = document.getElementById('smart-search-toolbar');
+      toolbar?.classList.add('hidden');
+      this.hideAdsSearchToolbar();
     }
 
     document.querySelectorAll('.nav-item[data-view]').forEach(item => {
@@ -10057,208 +10081,6 @@ class ADSReader {
     await this.loadCollections();
   }
 
-  // ADS Search Modal
-  showAdsSearchModal() {
-    if (!this.hasAdsToken) {
-      this.showAdsTokenModal();
-      return;
-    }
-    document.getElementById('ads-search-modal').classList.remove('hidden');
-    document.getElementById('ads-query-input').focus();
-  }
-
-  hideAdsSearchModal() {
-    document.getElementById('ads-search-modal').classList.add('hidden');
-    document.getElementById('ads-query-input').value = '';
-    this.adsResults = [];
-    this.adsSelected.clear();
-    this.renderAdsResults();
-    document.getElementById('ads-results-header').classList.add('hidden');
-    document.getElementById('ads-progress').classList.add('hidden');
-  }
-
-  async executeAdsSearch() {
-    const query = document.getElementById('ads-query-input').value.trim();
-    if (!query) return;
-
-    const searchBtn = document.getElementById('ads-search-execute-btn');
-    searchBtn.textContent = 'Searching...';
-    searchBtn.disabled = true;
-
-    console.log('[ADS Search] Executing search with query:', query);
-
-    try {
-      const result = await window.electronAPI.adsImportSearch(query, { rows: 1000 });
-      console.log('[ADS Search] Got result:', result.success, 'papers:', result.data?.papers?.length);
-
-      if (result.success) {
-        this.adsResults = result.data.papers;
-        this.adsSelected.clear();
-        document.getElementById('ads-results-count').textContent =
-          `${result.data.numFound} papers found${result.data.numFound > 1000 ? ' (showing first 1000)' : ''}`;
-        document.getElementById('ads-results-header').classList.remove('hidden');
-        this.renderAdsResults();
-      } else {
-        this.showAdsError(result.error);
-      }
-    } catch (error) {
-      this.showAdsError(error.message);
-    } finally {
-      searchBtn.textContent = 'Search';
-      searchBtn.disabled = false;
-    }
-  }
-
-  renderAdsResults() {
-    const listEl = document.getElementById('ads-results-list');
-
-    if (this.adsResults.length === 0) {
-      listEl.innerHTML = `
-        <div class="ads-empty-state">
-          <p>Enter a search query to find papers in NASA ADS</p>
-        </div>
-      `;
-      this.updateAdsSelectedCount();
-      return;
-    }
-
-    listEl.innerHTML = this.adsResults.map((paper, index) => {
-      const authorsList = paper.authors || [];
-      const authorsDisplay = this.formatAuthorsForList(authorsList);
-      const hasArxiv = !!paper.arxiv_id;
-      const isInLibrary = paper.inLibrary;
-      const isSelected = this.adsSelected.has(index);
-      const abstractPreview = paper.abstract
-        ? paper.abstract.substring(0, 200) + (paper.abstract.length > 200 ? '...' : '')
-        : null;
-
-      return `
-        <div class="ads-result-item${isSelected ? ' selected' : ''}${isInLibrary ? ' in-library' : ''}" data-index="${index}">
-          <input type="checkbox" class="ads-result-checkbox"
-            ${isSelected ? 'checked' : ''} ${isInLibrary ? 'disabled' : ''}>
-          <div class="ads-result-content">
-            <div class="ads-result-title">${this.escapeHtml(paper.title)}</div>
-            <div class="ads-result-authors">${this.escapeHtml(authorsDisplay)}</div>
-            <div class="ads-result-meta">
-              <span>${paper.year || ''}</span>
-              ${paper.journal ? `<span class="ads-result-journal">${this.escapeHtml(paper.journal)}</span>` : ''}
-              ${paper.bibcode ? `<span>${paper.bibcode}</span>` : ''}
-            </div>
-            ${abstractPreview ? `<div class="ads-result-abstract">${this.escapeHtml(abstractPreview)}</div>` : ''}
-          </div>
-          ${isInLibrary ? '<span class="ads-result-status in-library">In Library</span>' : ''}
-          ${!isInLibrary && !hasArxiv ? '<span class="ads-result-status no-pdf">No arXiv</span>' : ''}
-        </div>
-      `;
-    }).join('');
-
-    // Add click handlers
-    listEl.querySelectorAll('.ads-result-item').forEach(item => {
-      const index = parseInt(item.dataset.index);
-      const paper = this.adsResults[index];
-
-      if (!paper.inLibrary) {
-        item.addEventListener('click', (e) => {
-          if (e.target.type !== 'checkbox') {
-            this.toggleAdsSelection(index);
-          }
-        });
-
-        const checkbox = item.querySelector('.ads-result-checkbox');
-        checkbox.addEventListener('change', () => {
-          this.toggleAdsSelection(index);
-        });
-      }
-    });
-
-    this.updateAdsSelectedCount();
-  }
-
-  toggleAdsSelection(index) {
-    if (this.adsSelected.has(index)) {
-      this.adsSelected.delete(index);
-    } else {
-      this.adsSelected.add(index);
-    }
-    this.renderAdsResults();
-  }
-
-  adsSelectAll() {
-    this.adsResults.forEach((paper, index) => {
-      if (!paper.inLibrary) {
-        this.adsSelected.add(index);
-      }
-    });
-    this.renderAdsResults();
-  }
-
-  adsSelectNone() {
-    this.adsSelected.clear();
-    this.renderAdsResults();
-  }
-
-  updateAdsSelectedCount() {
-    const count = this.adsSelected.size;
-    document.getElementById('ads-selected-count').textContent = `${count} selected`;
-    document.getElementById('ads-import-btn').disabled = count === 0;
-  }
-
-  async importAdsSelected() {
-    if (this.adsSelected.size === 0) return;
-
-    const selectedPapers = Array.from(this.adsSelected).map(index => this.adsResults[index]);
-
-    // Show progress
-    document.getElementById('ads-progress').classList.remove('hidden');
-    document.getElementById('ads-progress-fill').style.width = '0%';
-    document.getElementById('ads-progress-text').textContent = 'Starting import...';
-    document.getElementById('ads-import-btn').disabled = true;
-
-    try {
-      await window.electronAPI.adsImportPapers(selectedPapers);
-      // Completion handled by onImportComplete callback
-    } catch (error) {
-      this.showAdsError(error.message);
-      document.getElementById('ads-progress').classList.add('hidden');
-      document.getElementById('ads-import-btn').disabled = false;
-    }
-  }
-
-  updateImportProgress(data) {
-    const percent = (data.current / data.total) * 100;
-    document.getElementById('ads-progress-fill').style.width = `${percent}%`;
-    document.getElementById('ads-progress-text').textContent =
-      `Importing ${data.current} of ${data.total}: ${data.paper?.substring(0, 50) || ''}...`;
-  }
-
-  async handleImportComplete(results) {
-    const imported = results.imported?.length || 0;
-    const skipped = results.skipped?.length || 0;
-    const failed = results.failed?.length || 0;
-
-    document.getElementById('ads-progress-fill').style.width = '100%';
-    document.getElementById('ads-progress-text').textContent =
-      `Done! Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed}`;
-
-    // Reload papers list
-    await this.loadPapers();
-    const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
-    if (info) this.updateLibraryDisplay(info);
-
-    // Close modal after a delay
-    setTimeout(() => {
-      this.hideAdsSearchModal();
-    }, 2000);
-  }
-
-  showAdsError(message) {
-    const listEl = document.getElementById('ads-results-list');
-    listEl.innerHTML = `
-      <div class="ads-empty-state">
-        <p style="color: var(--error)">Error: ${this.escapeHtml(message)}</p>
-      </div>
-    `;
-  }
 
   // ===== ADS Search Pane Methods =====
 
@@ -10274,12 +10096,42 @@ class ADSReader {
       const result = await window.electronAPI.adsImportSearch(query, { rows: 1000 });
 
       if (result.success) {
-        this.adsPaneResults = result.data.papers;
-        this.adsPaneSelected = new Set();
-        document.getElementById('ads-pane-results-count').textContent =
-          `${result.data.numFound} papers found${result.data.numFound > 1000 ? ' (showing first 1000)' : ''}`;
-        document.getElementById('ads-pane-results-header').classList.remove('hidden');
-        this.renderAdsPaneResults();
+        // Store query for "Save as Smart Search"
+        this.currentAdsQuery = query;
+        this.adsSearchResultCount = result.data.numFound;
+
+        // Enter ad-hoc ADS search mode
+        this.isAdsSearchActive = true;
+        this.currentSmartSearch = null;
+        this.currentView = null;
+        this.currentCollection = null;
+
+        // Clear selections
+        this.selectedPapers.clear();
+        this.selectedPaper = null;
+
+        // Convert results to paper-like objects (same as smart search)
+        this.papers = result.data.papers.map(p => ({
+          ...p,
+          id: p.bibcode, // Use bibcode as ID for ADS papers
+          isAdsSearch: true
+        }));
+
+        // Show search toolbar
+        this.showAdsSearchToolbar(query, result.data.numFound);
+
+        // Switch to library tab to show results in main list
+        this.switchTab('library');
+
+        // Update UI
+        this.updateNavActiveStates();
+        this.sortPapers();
+        this.renderPaperList();
+
+        // Switch to Abstract tab for viewing (ADS results don't have local PDFs)
+        if (!this.isIOS) {
+          this.switchTab('abstract');
+        }
       } else {
         this.showAdsPaneError(result.error);
       }
@@ -10291,167 +10143,72 @@ class ADSReader {
     }
   }
 
-  renderAdsPaneResults() {
-    const listEl = document.getElementById('ads-pane-results-list');
+  showAdsSearchToolbar(query, resultCount) {
+    const toolbar = document.getElementById('smart-search-toolbar');
+    if (toolbar) {
+      toolbar.classList.remove('hidden');
+      document.getElementById('search-toolbar-name').textContent = 'ADS Search';
+      document.getElementById('search-toolbar-meta').textContent =
+        `${resultCount} results${resultCount > 1000 ? ' (showing first 1000)' : ''} • "${query}"`;
 
-    if (!this.adsPaneResults || this.adsPaneResults.length === 0) {
-      listEl.innerHTML = `
-        <div class="ads-empty-state">
-          <p>Enter a search query to find papers in NASA ADS</p>
-        </div>
-      `;
-      this.updateAdsPaneSelectedCount();
-      return;
-    }
-
-    listEl.innerHTML = this.adsPaneResults.map((paper, index) => {
-      const authorsList = paper.authors || [];
-      const authorsDisplay = this.formatAuthorsForList(authorsList);
-      const hasArxiv = !!paper.arxiv_id;
-      const isInLibrary = paper.inLibrary;
-      const isSelected = this.adsPaneSelected?.has(index);
-      const abstractPreview = paper.abstract
-        ? paper.abstract.substring(0, 200) + (paper.abstract.length > 200 ? '...' : '')
-        : null;
-
-      return `
-        <div class="ads-result-item${isSelected ? ' selected' : ''}${isInLibrary ? ' in-library' : ''}" data-index="${index}">
-          <input type="checkbox" class="ads-result-checkbox"
-            ${isSelected ? 'checked' : ''} ${isInLibrary ? 'disabled' : ''}>
-          <div class="ads-result-content">
-            <div class="ads-result-title">${this.escapeHtml(paper.title)}</div>
-            <div class="ads-result-authors">${this.escapeHtml(authorsDisplay)}</div>
-            <div class="ads-result-meta">
-              <span>${paper.year || ''}</span>
-              ${paper.journal ? `<span class="ads-result-journal">${this.escapeHtml(paper.journal)}</span>` : ''}
-              ${paper.bibcode ? `<span>${paper.bibcode}</span>` : ''}
-            </div>
-            ${abstractPreview ? `<div class="ads-result-abstract">${this.escapeHtml(abstractPreview)}</div>` : ''}
-          </div>
-          ${isInLibrary ? '<span class="ads-result-status in-library">In Library</span>' : ''}
-          ${!isInLibrary && !hasArxiv ? '<span class="ads-result-status no-pdf">No arXiv</span>' : ''}
-        </div>
-      `;
-    }).join('');
-
-    // Add click handlers
-    listEl.querySelectorAll('.ads-result-item').forEach(item => {
-      const index = parseInt(item.dataset.index);
-      const paper = this.adsPaneResults[index];
-
-      if (!paper.inLibrary) {
-        item.addEventListener('click', (e) => {
-          if (e.target.type !== 'checkbox') {
-            this.toggleAdsPaneSelection(index);
-          }
-        });
-
-        const checkbox = item.querySelector('.ads-result-checkbox');
-        checkbox.addEventListener('change', () => {
-          this.toggleAdsPaneSelection(index);
-        });
+      // Show "Save as Smart Search" button
+      const saveBtn = document.getElementById('ads-save-search-btn');
+      if (saveBtn) {
+        saveBtn.classList.remove('hidden');
       }
-    });
-
-    this.updateAdsPaneSelectedCount();
-  }
-
-  toggleAdsPaneSelection(index) {
-    if (!this.adsPaneSelected) this.adsPaneSelected = new Set();
-    if (this.adsPaneSelected.has(index)) {
-      this.adsPaneSelected.delete(index);
-    } else {
-      this.adsPaneSelected.add(index);
-    }
-    this.renderAdsPaneResults();
-  }
-
-  adsPaneSelectAll() {
-    if (!this.adsPaneResults) return;
-    if (!this.adsPaneSelected) this.adsPaneSelected = new Set();
-    this.adsPaneResults.forEach((paper, index) => {
-      if (!paper.inLibrary) {
-        this.adsPaneSelected.add(index);
-      }
-    });
-    this.renderAdsPaneResults();
-  }
-
-  adsPaneSelectNone() {
-    this.adsPaneSelected = new Set();
-    this.renderAdsPaneResults();
-  }
-
-  updateAdsPaneSelectedCount() {
-    const count = this.adsPaneSelected?.size || 0;
-    document.getElementById('ads-pane-selected-count').textContent = `${count} selected`;
-    document.getElementById('ads-pane-import-btn').disabled = count === 0;
-  }
-
-  async importAdsPaneSelected() {
-    if (!this.adsPaneSelected || this.adsPaneSelected.size === 0) return;
-
-    const selectedPapers = Array.from(this.adsPaneSelected).map(index => this.adsPaneResults[index]);
-
-    // Show progress
-    document.getElementById('ads-pane-progress').classList.remove('hidden');
-    document.getElementById('ads-pane-progress-fill').style.width = '0%';
-    document.getElementById('ads-pane-progress-text').textContent = 'Starting import...';
-    document.getElementById('ads-pane-import-btn').disabled = true;
-
-    // Set up progress listener for pane
-    this.adsPaneImportActive = true;
-
-    try {
-      await window.electronAPI.adsImportPapers(selectedPapers);
-      // Completion handled by onImportComplete callback
-    } catch (error) {
-      this.showAdsPaneError(error.message);
-      document.getElementById('ads-pane-progress').classList.add('hidden');
-      document.getElementById('ads-pane-import-btn').disabled = false;
-      this.adsPaneImportActive = false;
     }
   }
 
-  updateAdsPaneImportProgress(data) {
-    const percent = (data.current / data.total) * 100;
-    document.getElementById('ads-pane-progress-fill').style.width = `${percent}%`;
-    document.getElementById('ads-pane-progress-text').textContent =
-      `Importing ${data.current} of ${data.total}: ${data.paper?.substring(0, 50) || ''}...`;
+  hideAdsSearchToolbar() {
+    const saveBtn = document.getElementById('ads-save-search-btn');
+    if (saveBtn) {
+      saveBtn.classList.add('hidden');
+    }
   }
 
-  async handleAdsPaneImportComplete(results) {
-    const imported = results.imported?.length || 0;
-    const skipped = results.skipped?.length || 0;
-    const failed = results.failed?.length || 0;
+  exitAdsSearchView() {
+    this.isAdsSearchActive = false;
+    this.currentAdsQuery = null;
+    this.adsSearchResultCount = 0;
 
-    document.getElementById('ads-pane-progress-fill').style.width = '100%';
-    document.getElementById('ads-pane-progress-text').textContent =
-      `Done! Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed}`;
+    // Hide search toolbar and save button
+    const toolbar = document.getElementById('smart-search-toolbar');
+    toolbar?.classList.add('hidden');
+    this.hideAdsSearchToolbar();
 
-    // Reload papers list
-    await this.loadPapers();
-    const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
-    if (info) this.updateLibraryDisplay(info);
-
-    // Hide progress after a delay and clear selection
-    setTimeout(() => {
-      document.getElementById('ads-pane-progress').classList.add('hidden');
-      document.getElementById('ads-pane-import-btn').disabled = false;
-      this.adsPaneSelected = new Set();
-      this.adsPaneImportActive = false;
-      // Re-render to show updated in-library status
-      this.executeAdsPaneSearch();
-    }, 2000);
+    // Return to All Papers
+    this.setView('all');
   }
 
   showAdsPaneError(message) {
-    const listEl = document.getElementById('ads-pane-results-list');
-    listEl.innerHTML = `
-      <div class="ads-empty-state">
-        <p style="color: var(--error)">Error: ${this.escapeHtml(message)}</p>
-      </div>
-    `;
+    const errorEl = document.getElementById('ads-pane-error');
+    const errorText = document.getElementById('ads-pane-error-text');
+    if (errorEl && errorText) {
+      errorText.textContent = `Error: ${message}`;
+      errorEl.classList.remove('hidden');
+    }
+    this.showNotification(`ADS Search error: ${message}`, 'error');
+  }
+
+  async saveAdsSearchAsSmartSearch() {
+    if (!this.isAdsSearchActive || !this.currentAdsQuery) {
+      this.showNotification('No active search to save', 'warn');
+      return;
+    }
+
+    // Show smart search modal for naming
+    this.editingSearchId = null;
+    const modal = document.getElementById('smart-search-modal');
+    const titleEl = document.getElementById('smart-search-modal-title');
+    const nameInput = document.getElementById('smart-search-name');
+    const queryInput = document.getElementById('smart-search-query');
+
+    titleEl.textContent = 'Save as Smart Search';
+    nameInput.value = '';
+    queryInput.value = this.currentAdsQuery;
+
+    modal.classList.remove('hidden');
+    nameInput.focus();
   }
 
   // ===== LLM/AI Methods =====
@@ -10678,6 +10435,20 @@ class ADSReader {
 
   hideFeedbackModal() {
     const modal = document.getElementById('feedback-modal');
+    if (modal) {
+      modal.classList.add('hidden');
+    }
+  }
+
+  showShortcutsModal() {
+    const modal = document.getElementById('shortcuts-modal');
+    if (modal) {
+      modal.classList.remove('hidden');
+    }
+  }
+
+  hideShortcutsModal() {
+    const modal = document.getElementById('shortcuts-modal');
     if (modal) {
       modal.classList.add('hidden');
     }

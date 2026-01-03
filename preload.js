@@ -335,6 +335,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onConsoleLog: (callback) => ipcRenderer.on('console-log', (event, data) => callback(data)),
   removeConsoleLogListeners: () => ipcRenderer.removeAllListeners('console-log'),
   onShowFeedbackModal: (callback) => ipcRenderer.on('show-feedback-modal', () => callback()),
+  onSwitchTab: (callback) => ipcRenderer.on('switch-tab', (event, tabName) => callback(tabName)),
+  onShowShortcutsModal: (callback) => ipcRenderer.on('show-shortcuts-modal', () => callback()),
 
   // Platform info
   platform: process.platform
