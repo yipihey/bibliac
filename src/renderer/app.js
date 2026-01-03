@@ -1758,11 +1758,11 @@ class ADSReader {
 
   // Helper to get file path for a file item
   async getFilePathForItem(paperId, fileId) {
-    if (fileId.startsWith('source-')) {
+    if (typeof fileId === 'string' && fileId.startsWith('source-')) {
       const sourceType = fileId.replace('source-', '');
       const paths = await window.electronAPI.getPaperPdfPaths?.(paperId);
       return paths?.[sourceType];
-    } else if (fileId.startsWith('att-')) {
+    } else if (typeof fileId === 'string' && fileId.startsWith('att-')) {
       const attId = fileId.replace('att-', '');
       const attachments = await window.electronAPI.getAttachments(paperId);
       const att = attachments.find(a => a.id.toString() === attId);
@@ -1770,15 +1770,22 @@ class ADSReader {
         const libraryPath = await window.electronAPI.getLibraryPath();
         return `${libraryPath}/attachments/${att.filename}`;
       }
+    } else if (window.electronAPI?.paperFiles?.getPath) {
+      // Use new paperFiles API for numeric IDs
+      try {
+        return await window.electronAPI.paperFiles.getPath(fileId);
+      } catch (e) {
+        console.warn('[getFilePathForItem] paperFiles.getPath failed:', e);
+      }
     }
     return null;
   }
 
   async setPrimaryPdf(paperId, fileId) {
     // Use new API if available
-    if (window.electronAPI?.paperFiles?.setPrimary) {
+    if (window.electronAPI?.paperFiles?.setPrimaryPdf) {
       try {
-        await window.electronAPI.paperFiles.setPrimary(paperId, fileId);
+        await window.electronAPI.paperFiles.setPrimaryPdf(paperId, fileId);
         // Refresh the panel
         const paper = this.papers.find(p => p.id === paperId);
         if (paper) await this.renderFilesPanel(paper);
@@ -1789,7 +1796,7 @@ class ADSReader {
       }
     } else {
       // No legacy equivalent - just log
-      console.warn('[setPrimaryPdf] paperFiles.setPrimary API not available');
+      console.warn('[setPrimaryPdf] paperFiles.setPrimaryPdf API not available');
     }
   }
 
@@ -1797,28 +1804,19 @@ class ADSReader {
     const paper = this.papers.find(p => p.id === paperId);
     if (!paper) return;
 
-    // If fileId starts with 'source-', it's a PDF source
-    if (fileId.startsWith('source-')) {
-      const sourceType = fileId.replace('source-', '');
-      await this.downloadFromSource(paperId, sourceType, null);
-    } else if (fileId.startsWith('att-')) {
-      // It's an attachment
-      const attId = fileId.replace('att-', '');
-      const attachments = await window.electronAPI.getAttachments(paperId);
-      const att = attachments.find(a => a.id.toString() === attId);
-      if (att && att.file_type === 'pdf') {
-        paper.pdf_path = `papers/${att.filename}`;
-        this.selectedPaper = paper;
-        this.switchTab('pdf');
-        await this.loadPDF(paper);
-      }
-    } else if (window.electronAPI?.paperFiles?.open) {
-      // Use new API
+    // Get the file path using the helper
+    const filePath = await this.getFilePathForItem(paperId, fileId);
+
+    if (filePath && window.electronAPI?.openPath) {
+      // Open with system default app (Preview on macOS)
       try {
-        await window.electronAPI.paperFiles.open(paperId, fileId);
+        await window.electronAPI.openPath(filePath);
       } catch (e) {
-        console.error('[openFileFromPanel] Failed:', e);
+        console.error('[openFileFromPanel] Failed to open:', e);
+        this.consoleLog('Failed to open file', 'error');
       }
+    } else {
+      this.consoleLog('Could not find file path', 'error');
     }
   }
 

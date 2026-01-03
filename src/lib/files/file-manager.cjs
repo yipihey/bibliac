@@ -247,16 +247,20 @@ class FileManager {
 
     const fileHash = fileRecord.file_hash;
 
-    // Check if this hash is used by other records
-    const otherFiles = this.db.getFileByHash(fileHash);
-    const otherRecords = Array.isArray(otherFiles) ? otherFiles : (otherFiles ? [otherFiles] : []);
-    const isShared = otherRecords.filter(f => f.id !== fileId).length > 0;
+    // Check if this hash is used by other records (only if we have a hash)
+    let isShared = false;
+    if (fileHash) {
+      const otherFiles = this.db.getFileByHash(fileHash);
+      const otherRecords = Array.isArray(otherFiles) ? otherFiles : (otherFiles ? [otherFiles] : []);
+      isShared = otherRecords.filter(f => f.id !== fileId).length > 0;
+    }
 
     // Delete database record first
     this.db.deletePaperFile(fileId);
 
     // If no other records use this file, delete the actual file
-    if (!isShared) {
+    // Only attempt if we have a hash (new system) or filename (legacy)
+    if (!isShared && fileHash && fileRecord.filename) {
       const storagePath = this.getStoragePath(fileRecord);
       if (fs.existsSync(storagePath)) {
         await fs.promises.unlink(storagePath);
