@@ -7295,9 +7295,20 @@ class ADSReader {
       pane.classList.toggle('active', pane.id === `tab-${tabName}`);
     });
 
+    // Show viewer-wrapper for tabs that don't require a paper to be selected
+    const nonPaperTabs = ['library', 'ads-search', 'settings'];
+    if (nonPaperTabs.includes(tabName)) {
+      document.getElementById('viewer-wrapper').classList.remove('hidden');
+      document.getElementById('detail-placeholder').classList.add('hidden');
+    } else if (!this.selectedPaper) {
+      // For paper-dependent tabs without a paper, show placeholder
+      document.getElementById('viewer-wrapper').classList.add('hidden');
+      document.getElementById('detail-placeholder').classList.remove('hidden');
+    }
+
     // On mobile, switch to detail view for content tabs
     if (this.isMobileView) {
-      if (['pdf', 'abstract', 'refs', 'cites', 'bibtex', 'ai', 'library', 'ads-search'].includes(tabName)) {
+      if (['pdf', 'abstract', 'refs', 'cites', 'bibtex', 'ai', 'library', 'ads-search', 'settings'].includes(tabName)) {
         this.showMobileView('detail');
       }
     }
