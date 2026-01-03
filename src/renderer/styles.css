@@ -2734,6 +2734,17 @@ body.ios-platform .pdf-container {
   color: var(--text-primary);
 }
 
+.tab-btn-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+
+.tab-btn:hover .tab-btn-icon,
+.tab-btn.active .tab-btn-icon {
+  opacity: 1;
+}
+
 /* Hide mobile-only elements on desktop */
 .mobile-only {
   display: none;
@@ -3779,18 +3790,24 @@ body.ios-platform .pdf-container {
 
 /* ADS Button */
 .ads-btn {
-  padding: 4px 8px;
+  padding: 4px;
   background: var(--accent);
   border: none;
   border-radius: 4px;
-  color: white;
-  font-size: 11px;
-  font-weight: 500;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ads-btn:hover {
   background: var(--accent-hover);
+}
+
+.ads-btn-icon {
+  width: 20px;
+  height: 20px;
+  filter: brightness(0) invert(1); /* Make icon white */
 }
 
 /* Sync Button */
@@ -8795,6 +8812,17 @@ body.selection-mode .paper-swipe-container .paper-item {
 
 .search-toolbar-btn.loading {
   animation: spin 1s linear infinite;
+}
+
+.search-toolbar-btn.search-close-btn {
+  color: var(--text-secondary);
+  font-weight: bold;
+  margin-left: 4px;
+}
+
+.search-toolbar-btn.search-close-btn:hover {
+  color: var(--error);
+  background: rgba(248, 113, 113, 0.1);
 }
 
 @keyframes spin {

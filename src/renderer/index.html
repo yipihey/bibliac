@@ -335,7 +335,7 @@
           <!-- Toolbar buttons -->
           <div class="list-toolbar">
             <button id="import-btn" class="import-btn" title="Import files">+</button>
-            <button id="ads-search-btn" class="ads-btn" title="Search ADS">ADS 🔍</button>
+            <button id="ads-search-btn" class="ads-btn" title="Search ADS"><img src="logo.svg" alt="Search ADS" class="ads-btn-icon"></button>
             <div class="download-pdf-dropdown">
               <button id="download-pdf-btn" class="download-btn" title="Download PDFs for selected papers">⬇</button>
               <div class="download-pdf-menu hidden" id="download-pdf-menu">
@@ -353,6 +353,7 @@
               <button class="search-toolbar-btn hidden" id="ads-save-search-btn" title="Save as Smart Search">💾 Save</button>
               <button class="search-toolbar-btn" id="search-refresh-btn" title="Refresh results from ADS">↻</button>
               <button class="search-toolbar-btn" id="search-edit-btn" title="Edit search">✎</button>
+              <button class="search-toolbar-btn search-close-btn" id="search-close-btn" title="Close and return to library">✕</button>
             </div>
           </div>
           <div class="paper-list" id="paper-list">
@@ -766,13 +767,13 @@
             </select>
             <button class="tab-btn mobile-only" data-tab="papers" title="Papers">≡</button>
             <button class="tab-btn active" data-tab="pdf" title="PDF">▤</button>
-            <button class="tab-btn" data-tab="abstract" title="Abstract">Abs</button>
+            <button class="tab-btn" data-tab="abstract" title="Abstract">Σ</button>
             <button class="tab-btn" data-tab="refs" title="References">→</button>
             <button class="tab-btn" data-tab="cites" title="Citations">←</button>
             <button class="tab-btn" data-tab="bibtex" title="Info">ⓘ</button>
-            <button class="tab-btn" data-tab="ai" title="AI">AI</button>
-            <button class="tab-btn" data-tab="library" title="Library">Lib</button>
-            <button class="tab-btn" data-tab="ads-search" title="Search ADS">ADS</button>
+            <button class="tab-btn" data-tab="ai" title="AI">✨</button>
+            <button class="tab-btn" data-tab="library" title="Library">📚</button>
+            <button class="tab-btn" data-tab="ads-search" title="Search ADS"><img src="logo.svg" alt="ADS" class="tab-btn-icon"></button>
             <button class="tab-btn" data-tab="settings" title="Settings (⌘,)">⚙️</button>
             <button class="tab-btn sync-tab-btn" id="sync-tab-btn" title="Sync with ADS">⟳</button>
             <button class="tab-btn mobile-only action-tab" id="download-tab-btn" title="Download/View PDF">⬇</button>

@@ -2537,6 +2537,15 @@ class ADSReader {
               document.getElementById('ads-nl-input').value = this.currentAdsNLQuery || '';
             }
             break;
+          case 'search-close-btn':
+            // Close search results and return to library
+            if (this.currentSmartSearch) {
+              this.exitSmartSearchView();
+            } else if (this.isAdsSearchActive) {
+              this.exitAdsSearchView();
+            }
+            this.setView('all');
+            break;
           case 'smart-search-close-btn':
             this.exitSmartSearchView();
             this.setView('all');
@@ -3553,9 +3562,17 @@ class ADSReader {
 
   handleKeydown(e) {
     // Don't trigger shortcuts when typing in inputs
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+    const activeEl = document.activeElement;
+    const isTyping = activeEl && (
+      activeEl.tagName === 'INPUT' ||
+      activeEl.tagName === 'TEXTAREA' ||
+      activeEl.isContentEditable ||
+      activeEl.closest('[contenteditable="true"]')
+    );
+
+    if (isTyping) {
       if (e.key === 'Escape') {
-        e.target.blur();
+        activeEl.blur();
       }
       return;
     }
