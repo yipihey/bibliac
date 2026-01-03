@@ -475,6 +475,20 @@ class DownloadQueue extends EventEmitter {
           size: result.size
         });
       } else {
+        // Check if browser-based download is needed (publisher auth)
+        if (result.needsBrowser) {
+          console.log(`[DownloadQueue] ${paperId} needs browser-based download`);
+          this.emit('error', {
+            paperId,
+            sourceType,
+            error: new Error(result.error || 'Authentication required'),
+            willRetry: false,
+            attempt: item.attempt,
+            needsBrowser: true
+          });
+          this._processNext();
+          return;
+        }
         throw new Error(result.error || result.reason || 'Download failed');
       }
     } catch (error) {

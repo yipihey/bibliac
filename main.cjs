@@ -5495,18 +5495,12 @@ function initializePaperFilesSystem(libraryPath) {
     downloadQueue = new DownloadQueue({
       concurrency: 2,
       downloadFn: async (paper, sourceType, onProgress, signal) => {
-        // Generate destination path for the PDF
         const libraryPath = store.get('libraryPath');
         if (!libraryPath) {
           return { success: false, error: 'No library path configured' };
         }
 
         const baseFilename = (paper.bibcode || `paper_${paper.id}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-        const sourceTypeUpper = sourceType.toUpperCase().replace(/-/g, '_');
-        const sourceMap = { 'ARXIV': 'EPRINT_PDF', 'PUBLISHER': 'PUB_PDF', 'ADS_SCAN': 'ADS_PDF' };
-        const normalizedSource = sourceMap[sourceTypeUpper] || sourceTypeUpper;
-        const filename = `${baseFilename}_${normalizedSource}.pdf`;
-        const destPath = path.join(libraryPath, 'papers', filename);
         const papersDir = path.join(libraryPath, 'papers');
 
         // Ensure papers directory exists
@@ -5514,23 +5508,36 @@ function initializePaperFilesSystem(libraryPath) {
           fs.mkdirSync(papersDir, { recursive: true });
         }
 
-        // Use the strategy manager to download the PDF
-        const result = await strategyManager.downloadForPaper(paper, destPath, sourceType, onProgress, signal);
+        // Use temporary path for download (will rename after knowing actual source)
+        const tempPath = path.join(papersDir, `${baseFilename}_downloading.pdf`);
 
-        // Add relative path to result for the renderer to use
+        // Use the strategy manager to download - it may fallback to different source
+        const result = await strategyManager.downloadForPaper(paper, tempPath, sourceType, onProgress, signal);
+
         if (result.success) {
+          // Use ACTUAL source from result, not the originally requested sourceType
+          const actualSource = result.source || sourceType;
+          const sourceMap = { 'arxiv': 'EPRINT_PDF', 'publisher': 'PUB_PDF', 'ads_scan': 'ADS_PDF' };
+          const normalizedSource = sourceMap[actualSource] || actualSource.toUpperCase().replace(/-/g, '_');
+
+          const filename = `${baseFilename}_${normalizedSource}.pdf`;
+          const destPath = path.join(papersDir, filename);
+
+          // Rename temp file to final name with correct source suffix
+          if (fs.existsSync(tempPath)) {
+            if (fs.existsSync(destPath)) {
+              fs.unlinkSync(destPath); // Remove existing if present
+            }
+            fs.renameSync(tempPath, destPath);
+          }
+
           result.path = `papers/${filename}`;
-          // Also update the database with the new pdf_path
           database.updatePaper(paper.id, { pdf_path: result.path });
 
-          // Register in paper_files table for the unified files panel
-          const sourceTypeMap = { 'arxiv': 'arxiv', 'publisher': 'publisher', 'ads_scan': 'ads_scan' };
-          const normalizedSourceType = sourceTypeMap[sourceType] || sourceType;
+          // Register in paper_files table with ACTUAL source type
           const fileSize = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0;
-
-          // Check if already registered (avoid duplicates)
           const existingFiles = database.getPaperFiles(paper.id);
-          const alreadyExists = existingFiles.some(f => f.source_type === normalizedSourceType);
+          const alreadyExists = existingFiles.some(f => f.source_type === actualSource);
 
           if (!alreadyExists) {
             database.addPaperFile(paper.id, {
@@ -5539,9 +5546,14 @@ function initializePaperFilesSystem(libraryPath) {
               mime_type: 'application/pdf',
               file_size: fileSize,
               file_role: 'pdf',
-              source_type: normalizedSourceType,
+              source_type: actualSource,
               status: 'ready'
             });
+          }
+        } else {
+          // Clean up temp file on failure
+          if (fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch (e) { /* ignore */ }
           }
         }
 

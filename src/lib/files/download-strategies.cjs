@@ -624,12 +624,15 @@ class DownloadStrategyManager {
    * @param {string} [preferredSource='auto'] - Preferred source to try first
    * @param {Function} [onProgress] - Progress callback
    * @param {AbortSignal} [signal] - Abort signal
-   * @returns {Promise<{success: boolean, source?: string, size?: number, error?: string}>}
+   * @returns {Promise<{success: boolean, source?: string, size?: number, error?: string, needsBrowser?: boolean}>}
    */
   async downloadForPaper(paper, destPath, preferredSource = 'auto', onProgress, signal) {
     // Build order: preferred first, then priority order
     const order = this._buildOrder(preferredSource);
     const errors = [];
+
+    // Check if user explicitly requested publisher - if so, don't fallback on auth failure
+    const explicitPublisher = preferredSource === 'publisher';
 
     for (const sourceType of order) {
       const strategy = this.strategies[sourceType];
@@ -654,10 +657,49 @@ class DownloadStrategyManager {
         } else {
           console.log(`[StrategyManager] ${sourceType} failed: ${result.error}`);
           errors.push({ source: sourceType, error: result.error });
+
+          // If user explicitly requested publisher and it failed with auth error,
+          // return immediately so renderer can trigger browser-based download
+          if (explicitPublisher && sourceType === 'publisher') {
+            const isAuthError = result.error && (
+              result.error.includes('authentication') ||
+              result.error.includes('login page') ||
+              result.error.includes('403') ||
+              result.error.includes('401')
+            );
+            if (isAuthError) {
+              console.log(`[StrategyManager] Publisher requires authentication, signaling for browser download`);
+              return {
+                success: false,
+                source: 'publisher',
+                error: result.error,
+                needsBrowser: true
+              };
+            }
+          }
         }
       } catch (error) {
         console.error(`[StrategyManager] ${sourceType} error:`, error.message);
         errors.push({ source: sourceType, error: error.message });
+
+        // Check for auth errors in exceptions too
+        if (explicitPublisher && sourceType === 'publisher') {
+          const isAuthError = error.message && (
+            error.message.includes('authentication') ||
+            error.message.includes('login page') ||
+            error.message.includes('403') ||
+            error.message.includes('401')
+          );
+          if (isAuthError) {
+            console.log(`[StrategyManager] Publisher requires authentication, signaling for browser download`);
+            return {
+              success: false,
+              source: 'publisher',
+              error: error.message,
+              needsBrowser: true
+            };
+          }
+        }
       }
     }
 

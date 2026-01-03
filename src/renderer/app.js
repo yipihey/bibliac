@@ -2232,12 +2232,26 @@ class ADSReader {
     }
   }
 
-  handleDownloadError(data) {
+  async handleDownloadError(data) {
     const paper = this.papers.find(p => p.id === data.paperId);
     const paperInfo = paper ? (paper.bibcode || paper.title?.substring(0, 30)) : `ID ${data.paperId}`;
     const sourceInfo = data.sourceType ? ` [${data.sourceType}]` : '';
     const retryInfo = data.willRetry ? ` (will retry, attempt ${data.attempt})` : ' (giving up)';
     const errorMsg = data.error?.message || data.error || 'Unknown error';
+
+    // Check if browser-based download is needed for publisher PDFs
+    if (data.needsBrowser && data.sourceType === 'publisher' && paper) {
+      this.consoleLog(`Publisher requires authentication, opening browser window...`, 'info');
+
+      // Trigger browser-based download via downloadFromSource
+      try {
+        await this.downloadFromSource(paper.id, 'publisher', null);
+      } catch (e) {
+        this.consoleLog(`Browser download failed: ${e.message}`, 'error');
+      }
+      this.refreshQueueList();
+      return;
+    }
 
     this.consoleLog(`Download failed: ${paperInfo}${sourceInfo} - ${errorMsg}${retryInfo}`, 'error');
     this.refreshQueueList();
@@ -3907,7 +3921,7 @@ class ADSReader {
     if (!setupContainer) return;
 
     let html = `
-      <div class="setup-icon">📚</div>
+      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
       <h1>Choose Library</h1>
       <p class="setup-subtitle">Select an existing library or create a new one</p>
 
@@ -4080,7 +4094,7 @@ class ADSReader {
 
     console.log('[iOS] Updating setup container innerHTML');
     setupContainer.innerHTML = `
-      <div class="setup-icon">📚</div>
+      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
       <h1>Welcome to ADS Reader</h1>
       <p class="setup-subtitle">Create your first library to get started</p>
 
@@ -4101,7 +4115,7 @@ class ADSReader {
     if (!setupContainer) return;
 
     setupContainer.innerHTML = `
-      <div class="setup-icon">📚</div>
+      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
       <h1>Name Your Library</h1>
       <p class="setup-subtitle">Choose a name for your paper library</p>
 
@@ -4172,7 +4186,7 @@ class ADSReader {
     }
 
     let html = `
-      <div class="setup-icon">📚</div>
+      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
       <h1>Choose Library</h1>
       <p class="setup-subtitle">Select an existing library or create a new one</p>
 
