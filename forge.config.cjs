@@ -8,6 +8,46 @@ module.exports = {
     executableName: 'ADS Reader',
     appBundleId: 'io.adsreader.app',
     icon: './assets/icon',  // Electron finds .icns/.ico automatically
+    // Exclude unnecessary files from the bundle
+    ignore: [
+      // iOS/Capacitor (not needed for desktop)
+      /^\/ios/,
+      /^\/android/,
+      /capacitor\.config/,
+
+      // Website/docs
+      /^\/docs/,
+
+      // Build artifacts
+      /^\/dist/,
+      /^\/out/,
+
+      // Dev files
+      /^\/\.github/,
+      /^\/\.conductor/,
+      /\.md$/,
+      /\.map$/,
+      /tsconfig/,
+      /\.eslintrc/,
+      /vite\.config/,
+      /vitest\.config/,
+
+      // Test files
+      /\.test\./,
+      /\.spec\./,
+      /__tests__/,
+
+      // Dev dependencies in node_modules
+      /node_modules\/typescript/,
+      /node_modules\/vitest/,
+      /node_modules\/eslint/,
+      /node_modules\/prettier/,
+      /node_modules\/@capacitor/,
+      /node_modules\/@vitest/,
+      /node_modules\/vite($|\/)/,
+      /node_modules\/@esbuild/,
+      /node_modules\/electron-winstaller/,
+    ],
     // macOS code signing configuration
     // Uses environment variables for flexibility between dev and CI environments
     osxSign: {
