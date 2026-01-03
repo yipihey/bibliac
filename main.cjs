@@ -2491,9 +2491,8 @@ ipcMain.handle('ads-sync-papers', async (event, paperIds = null) => {
       }));
       database.addCitations(paper.id, validCites, false);
 
-      if (validRefs.length > 0 || validCites.length > 0) {
-        sendConsoleLog(`[${bibcode}] Found ${validRefs.length} refs, ${validCites.length} cites`, 'success');
-      }
+      // Always log refs/cites count for debugging
+      sendConsoleLog(`[${bibcode}] Refs: ${validRefs.length}, Cites: ${validCites.length}`, validRefs.length > 0 || validCites.length > 0 ? 'success' : 'info');
 
       // Store available PDF sources as metadata (don't download during sync)
       try {

@@ -6939,15 +6939,14 @@ class ADSReader {
     refsEl.innerHTML = refs.map((ref, index) => {
       const inLibrary = libraryBibcodes.has(ref.ref_bibcode);
       const isSelected = this.selectedRefs.has(index);
+      // Action buttons before authors (only for non-library items)
+      const actionButtons = !inLibrary ?
+        `<span class="paper-action-btns"><span class="paper-action-btn ref-import-btn" data-bibcode="${ref.ref_bibcode}" title="Add to library (a)">+</span><a class="paper-action-btn ref-ads-link" href="#" data-bibcode="${ref.ref_bibcode}" title="Open in ADS (w)">↗</a></span>` : '';
       return `
         <div class="ref-item${inLibrary ? ' in-library' : ''}${isSelected ? ' selected' : ''}" data-index="${index}" data-bibcode="${ref.ref_bibcode}">
           <div class="ref-content">
             <div class="ref-title">${this.escapeHtml(ref.ref_title || 'Untitled')}</div>
-            <div class="ref-meta">${this.formatAuthorsForList(ref.ref_authors)} · ${ref.ref_year || ''}${inLibrary ? '<span class="in-library-badge">In Library</span>' : ''}</div>
-          </div>
-          <div class="ref-actions">
-            <a class="ref-ads-link" href="#" data-bibcode="${ref.ref_bibcode}" title="Open in ADS">↗</a>
-            ${!inLibrary ? `<button class="ref-import-btn" data-bibcode="${ref.ref_bibcode}" title="Add to library">+</button>` : ''}
+            <div class="ref-meta">${actionButtons}${this.formatAuthorsForList(ref.ref_authors)} · ${ref.ref_year || ''}${inLibrary ? '<span class="in-library-badge">In Library</span>' : ''}</div>
           </div>
         </div>
       `;
@@ -7057,15 +7056,14 @@ class ADSReader {
     citesEl.innerHTML = cites.map((cite, index) => {
       const inLibrary = libraryBibcodes.has(cite.citing_bibcode);
       const isSelected = this.selectedCites.has(index);
+      // Action buttons before authors (only for non-library items)
+      const actionButtons = !inLibrary ?
+        `<span class="paper-action-btns"><span class="paper-action-btn cite-import-btn" data-bibcode="${cite.citing_bibcode}" title="Add to library (a)">+</span><a class="paper-action-btn cite-ads-link" href="#" data-bibcode="${cite.citing_bibcode}" title="Open in ADS (w)">↗</a></span>` : '';
       return `
         <div class="cite-item${inLibrary ? ' in-library' : ''}${isSelected ? ' selected' : ''}" data-index="${index}" data-bibcode="${cite.citing_bibcode}">
           <div class="cite-content">
             <div class="cite-title">${this.escapeHtml(cite.citing_title || 'Untitled')}</div>
-            <div class="cite-meta">${this.formatAuthorsForList(cite.citing_authors)} · ${cite.citing_year || ''}${inLibrary ? '<span class="in-library-badge">In Library</span>' : ''}</div>
-          </div>
-          <div class="cite-actions">
-            <a class="cite-ads-link" href="#" data-bibcode="${cite.citing_bibcode}" title="Open in ADS">↗</a>
-            ${!inLibrary ? `<button class="cite-import-btn" data-bibcode="${cite.citing_bibcode}" title="Add to library">+</button>` : ''}
+            <div class="cite-meta">${actionButtons}${this.formatAuthorsForList(cite.citing_authors)} · ${cite.citing_year || ''}${inLibrary ? '<span class="in-library-badge">In Library</span>' : ''}</div>
           </div>
         </div>
       `;
@@ -7449,6 +7447,13 @@ class ADSReader {
         this.displayMultiCites();
       } else if (tabName === 'bibtex') {
         this.displayMultiBibtex();
+      }
+    } else if (this.selectedPaper && !this.currentSmartSearch) {
+      // Single paper selected - load refs/cites when switching to those tabs
+      if (tabName === 'refs') {
+        this.loadReferences(this.selectedPaper.id);
+      } else if (tabName === 'cites') {
+        this.loadCitations(this.selectedPaper.id);
       }
     }
   }
