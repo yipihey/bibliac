@@ -34,6 +34,7 @@ class ADSReader {
     // ADS search state (unified with smart search model)
     this.isAdsSearchActive = false;   // Ad-hoc ADS search mode active
     this.currentAdsQuery = null;      // Current query for "Save as Smart Search"
+    this.currentAdsNLQuery = null;    // Natural language query that generated currentAdsQuery
     this.adsSearchResultCount = 0;    // Total results from ADS
 
     // Refs/Cites import state
@@ -2529,6 +2530,11 @@ class ADSReader {
           case 'search-edit-btn':
             if (this.currentSmartSearch) {
               this.showSmartSearchModal(this.currentSmartSearch);
+            } else if (this.isAdsSearchActive) {
+              // Return to ADS search pane with current query
+              this.switchTab('ads-search');
+              document.getElementById('ads-pane-query-input').value = this.currentAdsQuery || '';
+              document.getElementById('ads-nl-input').value = this.currentAdsNLQuery || '';
             }
             break;
           case 'smart-search-close-btn':
@@ -2979,6 +2985,14 @@ class ADSReader {
 
     // Save ADS Search as Smart Search
     document.getElementById('ads-save-search-btn')?.addEventListener('click', () => this.saveAdsSearchAsSmartSearch());
+
+    // Natural language to ADS query translation
+    document.getElementById('ads-nl-translate-btn')?.addEventListener('click', () => this.translateNLToAdsQuery());
+    document.getElementById('ads-nl-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.translateNLToAdsQuery();
+    });
+    document.getElementById('ads-nl-prompt-btn')?.addEventListener('click', () => this.toggleAdsNLPromptEditor());
+    document.getElementById('ads-nl-reset-prompt-btn')?.addEventListener('click', () => this.resetAdsNLPrompt());
 
     // ADS Lookup Modal
     document.getElementById('ads-lookup-close-btn')?.addEventListener('click', () => this.hideAdsLookupModal());
@@ -3635,8 +3649,8 @@ class ADSReader {
             this.importSelectedRefs();
           } else if (activeTabA === 'cites' && this.selectedCites?.size > 0) {
             this.importSelectedCites();
-          } else if (this.currentSmartSearch && this.selectedPapers.size > 0) {
-            // 'a' adds selected papers to library (from smart search)
+          } else if ((this.currentSmartSearch || this.isAdsSearchActive) && this.selectedPapers.size > 0) {
+            // 'a' adds selected papers to library (from smart search or ADS search)
             this.addSelectedPapersToLibrary();
           }
         }
@@ -4630,10 +4644,9 @@ class ADSReader {
           <div class="paper-item-title">
             <span class="paper-item-status ${paper.read_status || 'unread'}"></span>
             ${this.escapeHtml(paper.title || 'Untitled')}
-            ${inLibraryBadge}
           </div>
           <div class="paper-item-meta">
-            <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
+            ${inLibraryBadge}<span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
             <span>${paper.year || ''}</span>
             ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
             ${this.getRatingEmoji(paper.rating)}
@@ -4742,10 +4755,9 @@ class ADSReader {
             <div class="paper-item-title">
               <span class="paper-item-status ${paper.read_status || 'unread'}"></span>
               ${this.escapeHtml(paper.title || 'Untitled')}
-              ${inLibraryBadge}
             </div>
             <div class="paper-item-meta">
-              <span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
+              ${inLibraryBadge}<span class="paper-item-authors">${this.formatAuthors(paper.authors, true)}</span>
               <span>${paper.year || ''}</span>
               ${paper.citation_count > 0 ? `<span class="citation-count" title="${paper.citation_count} citations">🔗${paper.citation_count}</span>` : ''}
               ${this.getRatingEmoji(paper.rating)}
@@ -4767,14 +4779,15 @@ class ADSReader {
       item.addEventListener('click', (e) => {
         // For ADS search papers, ID is a bibcode string; for local papers, it's a number
         const rawId = item.dataset.id;
-        const id = this.currentSmartSearch ? rawId : parseInt(rawId);
+        const id = (this.currentSmartSearch || this.isAdsSearchActive) ? rawId : parseInt(rawId);
         const index = parseInt(item.dataset.index);
         this.handlePaperClick(id, index, e);
       });
 
       // Drag support
       item.addEventListener('dragstart', (e) => {
-        const id = parseInt(item.dataset.id);
+        const rawId = item.dataset.id;
+        const id = (this.currentSmartSearch || this.isAdsSearchActive) ? rawId : parseInt(rawId);
         if (!this.selectedPapers.has(id)) {
           this.selectedPapers.clear();
           this.selectedPapers.add(id);
@@ -5019,7 +5032,7 @@ class ADSReader {
     document.querySelectorAll('.paper-item').forEach(item => {
       // For ADS search papers, ID is a bibcode string; for local papers, it's a number
       const rawId = item.dataset.id;
-      const id = this.currentSmartSearch ? rawId : parseInt(rawId);
+      const id = (this.currentSmartSearch || this.isAdsSearchActive) ? rawId : parseInt(rawId);
       item.classList.toggle('selected', this.selectedPapers.has(id));
     });
   }
@@ -5382,9 +5395,9 @@ class ADSReader {
 
     e.preventDefault();
 
-    // For smart search, ID is bibcode (string); for library, it's numeric
+    // For smart search/ADS search, ID is bibcode (string); for library, it's numeric
     const rawId = paperItem.dataset.id;
-    const id = this.currentSmartSearch ? rawId : parseInt(rawId);
+    const id = (this.currentSmartSearch || this.isAdsSearchActive) ? rawId : parseInt(rawId);
 
     // If right-clicked paper is not in selection, select only it
     if (!this.selectedPapers.has(id)) {
@@ -7690,6 +7703,7 @@ class ADSReader {
     if (this.isAdsSearchActive) {
       this.isAdsSearchActive = false;
       this.currentAdsQuery = null;
+      this.currentAdsNLQuery = null;
       this.adsSearchResultCount = 0;
       const toolbar = document.getElementById('smart-search-toolbar');
       toolbar?.classList.add('hidden');
@@ -7720,6 +7734,7 @@ class ADSReader {
     if (this.isAdsSearchActive) {
       this.isAdsSearchActive = false;
       this.currentAdsQuery = null;
+      this.currentAdsNLQuery = null;
       this.adsSearchResultCount = 0;
       const toolbar = document.getElementById('smart-search-toolbar');
       toolbar?.classList.add('hidden');
@@ -10169,6 +10184,7 @@ class ADSReader {
   exitAdsSearchView() {
     this.isAdsSearchActive = false;
     this.currentAdsQuery = null;
+    this.currentAdsNLQuery = null;
     this.adsSearchResultCount = 0;
 
     // Hide search toolbar and save button
@@ -10209,6 +10225,84 @@ class ADSReader {
 
     modal.classList.remove('hidden');
     nameInput.focus();
+  }
+
+  // ===== Natural Language to ADS Query Translation =====
+
+  async translateNLToAdsQuery() {
+    const nlInput = document.getElementById('ads-nl-input').value.trim();
+    if (!nlInput) return;
+
+    const statusEl = document.getElementById('ads-nl-status');
+    const statusText = document.getElementById('ads-nl-status-text');
+    const translateBtn = document.getElementById('ads-nl-translate-btn');
+
+    // Show loading state
+    statusEl.classList.remove('hidden', 'error');
+    statusText.textContent = 'Translating...';
+    translateBtn.disabled = true;
+
+    try {
+      // Save any pending prompt edits before translating
+      const promptEditor = document.getElementById('ads-nl-prompt-editor');
+      if (!promptEditor.classList.contains('hidden')) {
+        await this.saveAdsNLPrompt();
+      }
+      const prompt = await this.getAdsNLPrompt();
+      const result = await window.electronAPI.llmTranslateToAds(nlInput, prompt);
+
+      if (result.success && result.query) {
+        // Copy to main search input and store NL query for later editing
+        document.getElementById('ads-pane-query-input').value = result.query;
+        this.currentAdsNLQuery = nlInput;
+        statusEl.classList.add('hidden');
+        this.showNotification('Query translated - review and click Search', 'success');
+      } else {
+        throw new Error(result.error || 'Translation failed');
+      }
+    } catch (error) {
+      statusEl.classList.add('error');
+      statusText.textContent = `Error: ${error.message}`;
+    } finally {
+      translateBtn.disabled = false;
+    }
+  }
+
+  toggleAdsNLPromptEditor() {
+    const editor = document.getElementById('ads-nl-prompt-editor');
+    const wasHidden = editor.classList.contains('hidden');
+    editor.classList.toggle('hidden');
+
+    if (wasHidden) {
+      // Load current prompt into textarea
+      this.loadAdsNLPrompt();
+    } else {
+      // Save prompt when closing
+      this.saveAdsNLPrompt();
+    }
+  }
+
+  async loadAdsNLPrompt() {
+    const prompt = await window.electronAPI.getAdsNLPrompt();
+    document.getElementById('ads-nl-prompt-textarea').value = prompt;
+  }
+
+  async saveAdsNLPrompt() {
+    const prompt = document.getElementById('ads-nl-prompt-textarea').value.trim();
+    if (prompt) {
+      await window.electronAPI.setAdsNLPrompt(prompt);
+    }
+  }
+
+  async getAdsNLPrompt() {
+    return await window.electronAPI.getAdsNLPrompt();
+  }
+
+  async resetAdsNLPrompt() {
+    const result = await window.electronAPI.resetAdsNLPrompt();
+    if (result.defaultPrompt) {
+      document.getElementById('ads-nl-prompt-textarea').value = result.defaultPrompt;
+    }
   }
 
   // ===== LLM/AI Methods =====

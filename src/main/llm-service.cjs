@@ -187,6 +187,35 @@ class OllamaService {
       if (chatResult.message?.content) {
         return chatResult.message.content;
       }
+      // Handle thinking models (qwen3, etc.) where response is in thinking field
+      if (chatResult.message?.thinking) {
+        const thinking = chatResult.message.thinking;
+        // Look for lines that look like ADS queries (contain field operators)
+        const adsQueryPattern = /\b(author:|year:|title:|abs:|bibstem:|property:|doi:|arXiv:)/i;
+        const lines = thinking.split('\n').filter(l => l.trim());
+
+        // Find lines that look like actual ADS queries
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i].trim();
+          // Skip lines that are clearly reasoning/explanation
+          if (line.startsWith('-') || line.startsWith('*') || line.includes('we') ||
+              line.includes('We') || line.includes('note:') || line.includes('Note:')) {
+            continue;
+          }
+          // Check if it looks like an ADS query
+          if (adsQueryPattern.test(line)) {
+            // Clean up: remove trailing punctuation, quotes around the whole thing
+            let query = line.replace(/^["'`]|["'`]$/g, '').trim();
+            // Remove markdown code formatting if present
+            query = query.replace(/^`+|`+$/g, '').trim();
+            return query;
+          }
+        }
+        // Fallback: return last non-empty line
+        if (lines.length > 0) {
+          return lines[lines.length - 1].trim();
+        }
+      }
       // For streaming, message may be empty in final response
       if (onChunk && chatResult.done) {
         return '';
@@ -212,7 +241,34 @@ class OllamaService {
 
     const result = await this._request('/api/generate', 'POST', body, onChunk);
     console.log('Ollama generate result:', JSON.stringify(result).substring(0, 500));
-    return result.response || '';
+
+    if (result.response) {
+      return result.response;
+    }
+    // Handle thinking models where response is empty but thinking has content
+    if (result.thinking) {
+      const thinking = result.thinking;
+      const adsQueryPattern = /\b(author:|year:|title:|abs:|bibstem:|property:|doi:|arXiv:)/i;
+      const lines = thinking.split('\n').filter(l => l.trim());
+
+      // Find lines that look like actual ADS queries
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (line.startsWith('-') || line.startsWith('*') || line.includes('we') ||
+            line.includes('We') || line.includes('note:') || line.includes('Note:')) {
+          continue;
+        }
+        if (adsQueryPattern.test(line)) {
+          let query = line.replace(/^["'`]|["'`]$/g, '').trim();
+          query = query.replace(/^`+|`+$/g, '').trim();
+          return query;
+        }
+      }
+      if (lines.length > 0) {
+        return lines[lines.length - 1].trim();
+      }
+    }
+    return '';
   }
 
   // Generate embedding vector

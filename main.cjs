@@ -4216,6 +4216,88 @@ ipcMain.handle('reset-summary-prompt', async () => {
   return { success: true, defaultPrompt: PROMPTS.summarize.system };
 });
 
+// Default prompt for natural language to ADS query translation
+const DEFAULT_ADS_NL_PROMPT = `You translate a user's natural-language request about scholarly literature into one ADS search query string. Use ADS field syntax and Boolean logic.
+
+IMPORTANT: "recent papers" or "recent" ALWAYS means year:2025- (current year onward).
+
+Identify:
+- Topics/keywords → unfielded or title: / abstract: terms.
+- Authors → author:"Last, F" (multiple authors combined with AND if all required, OR if alternatives).
+- Years or time spans → year:YYYY or year:YYYY-YYYY. "Recent" means year:2025-
+- Journals/venues → bibstem: or pub: when clearly specified.
+- Constraints like "refereed", "review articles", "with data", etc. → appropriate filter fields (e.g. property:refereed).
+
+Build a single Boolean expression using:
+- Explicit AND, OR, NOT.
+- Parentheses when mixing AND and OR.
+- Quoted phrases for multi-word concepts, optionally with proximity (e.g. abs:"dark matter halo"~3 if proximity is implied).
+
+Prefer precise fields when the user's intent is clear; otherwise let ADS use unfielded search.
+Keep the query as short as possible while preserving the constraints.
+
+Output only the final ADS query string, no explanation.`;
+
+// Handler: Translate natural language to ADS query
+ipcMain.handle('llm-translate-to-ads', async (event, text, systemPrompt) => {
+  try {
+    const config = store.get('llmConfig');
+    const prompt = systemPrompt || config.adsNLPrompt || DEFAULT_ADS_NL_PROMPT;
+
+    // Get active service
+    const service = await getActiveLlmService();
+
+    // Check connection
+    const provider = config.activeProvider || 'ollama';
+    if (provider === 'ollama') {
+      const connectionCheck = await service.checkConnection();
+      if (!connectionCheck.connected) {
+        return { success: false, error: connectionCheck.error || 'Ollama not connected' };
+      }
+    } else if (!service.isConfigured()) {
+      return { success: false, error: `${provider} API key not configured` };
+    }
+
+    // Generate the ADS query (disable thinking mode for fast response)
+    const response = await service.generate(text, {
+      systemPrompt: prompt,
+      temperature: 0.3,
+      maxTokens: 256,
+      noThink: true
+    });
+
+    // Extract just the query (strip any explanation the LLM might add)
+    const query = response.trim().split('\n')[0].trim();
+
+    return { success: true, query };
+  } catch (error) {
+    console.error('Error translating NL to ADS:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Handler: Get ADS NL prompt
+ipcMain.handle('get-ads-nl-prompt', async () => {
+  const config = store.get('llmConfig');
+  return config.adsNLPrompt || DEFAULT_ADS_NL_PROMPT;
+});
+
+// Handler: Set ADS NL prompt
+ipcMain.handle('set-ads-nl-prompt', async (event, prompt) => {
+  const config = store.get('llmConfig');
+  config.adsNLPrompt = prompt;
+  store.set('llmConfig', config);
+  return { success: true };
+});
+
+// Handler: Reset ADS NL prompt
+ipcMain.handle('reset-ads-nl-prompt', async () => {
+  const config = store.get('llmConfig');
+  config.adsNLPrompt = null;
+  store.set('llmConfig', config);
+  return { success: true, defaultPrompt: DEFAULT_ADS_NL_PROMPT };
+});
+
 ipcMain.handle('llm-summarize', async (event, paperId, options = {}) => {
   if (!dbInitialized) return { success: false, error: 'Database not initialized' };
 

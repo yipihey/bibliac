@@ -622,6 +622,27 @@
                     <p>Click the <strong>+</strong> button or right-click to add papers to your library.</p>
                   </div>
 
+                  <div class="ads-nl-section">
+                    <div class="ads-nl-header">
+                      <span class="ads-nl-label">Or describe your search in plain English</span>
+                      <button class="text-button ads-nl-prompt-btn" id="ads-nl-prompt-btn">Prompt text</button>
+                    </div>
+                    <div class="ads-nl-input-row">
+                      <input type="text" id="ads-nl-input"
+                             placeholder="e.g., papers by Smith about galaxy formation in the last 5 years">
+                      <button class="primary-button" id="ads-nl-translate-btn">Translate</button>
+                    </div>
+                    <div class="ads-nl-prompt-editor hidden" id="ads-nl-prompt-editor">
+                      <textarea id="ads-nl-prompt-textarea" rows="8"></textarea>
+                      <div class="ads-nl-prompt-actions">
+                        <button class="text-button" id="ads-nl-reset-prompt-btn">Reset to default</button>
+                      </div>
+                    </div>
+                    <div class="ads-nl-status hidden" id="ads-nl-status">
+                      <span class="ads-nl-status-text" id="ads-nl-status-text">Translating...</span>
+                    </div>
+                  </div>
+
                   <div class="ads-pane-error hidden" id="ads-pane-error">
                     <p id="ads-pane-error-text"></p>
                   </div>

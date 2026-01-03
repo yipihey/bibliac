@@ -6064,6 +6064,95 @@ body.resizing-vertical * {
   font-size: 13px;
 }
 
+/* Natural Language to ADS Query Translation */
+.ads-nl-section {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+
+.ads-nl-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.ads-nl-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ads-nl-prompt-btn {
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.ads-nl-prompt-btn:hover {
+  text-decoration: underline;
+}
+
+.ads-nl-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ads-nl-input-row input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.ads-nl-input-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ads-nl-prompt-editor {
+  margin-top: 12px;
+}
+
+.ads-nl-prompt-editor textarea {
+  width: 100%;
+  padding: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: monospace;
+  resize: vertical;
+}
+
+.ads-nl-prompt-editor textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ads-nl-prompt-actions {
+  margin-top: 8px;
+  text-align: right;
+}
+
+.ads-nl-status {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ads-nl-status.error {
+  color: var(--error);
+  background: rgba(248, 113, 113, 0.1);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    SETTINGS PANE
    ═══════════════════════════════════════════════════════════════════════════ */

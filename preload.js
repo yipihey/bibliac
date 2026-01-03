@@ -232,6 +232,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setSummaryPrompt: (prompt) => ipcRenderer.invoke('set-summary-prompt', prompt),
   resetSummaryPrompt: () => ipcRenderer.invoke('reset-summary-prompt'),
 
+  // Natural language to ADS query translation
+  llmTranslateToAds: (text, prompt) => ipcRenderer.invoke('llm-translate-to-ads', text, prompt),
+  getAdsNLPrompt: () => ipcRenderer.invoke('get-ads-nl-prompt'),
+  setAdsNLPrompt: (prompt) => ipcRenderer.invoke('set-ads-nl-prompt', prompt),
+  resetAdsNLPrompt: () => ipcRenderer.invoke('reset-ads-nl-prompt'),
+
   // ═══════════════════════════════════════════════════════════════════════════
   // ANNOTATIONS
   // ═══════════════════════════════════════════════════════════════════════════
