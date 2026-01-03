@@ -127,10 +127,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   adsGetCitations: (bibcode, options) => ipcRenderer.invoke('ads-get-citations', bibcode, options),
   adsGetEsources: (bibcode) => ipcRenderer.invoke('ads-get-esources', bibcode),
   downloadPdfFromSource: (paperId, sourceType) => ipcRenderer.invoke('download-pdf-from-source', paperId, sourceType),
-  batchDownloadPdfs: (paperIds) => ipcRenderer.invoke('batch-download-pdfs', paperIds),
-  onBatchDownloadProgress: (callback) => ipcRenderer.on('batch-download-progress', (event, data) => callback(data)),
-  removeBatchDownloadListeners: () => ipcRenderer.removeAllListeners('batch-download-progress'),
-  attachPdfToPaper: (paperId, pdfPath) => ipcRenderer.invoke('attach-pdf-to-paper', paperId, pdfPath),
   adsSyncPapers: (paperIds) => ipcRenderer.invoke('ads-sync-papers', paperIds),
   adsCancelSync: () => ipcRenderer.invoke('ads-cancel-sync'),
   adsUpdateCitationCounts: (paperIds) => ipcRenderer.invoke('ads-update-citation-counts', paperIds),
@@ -241,10 +237,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ═══════════════════════════════════════════════════════════════════════════
   getAnnotations: (paperId) => ipcRenderer.invoke('get-annotations', paperId),
   getAnnotationCountsBySource: (paperId) => ipcRenderer.invoke('get-annotation-counts-by-source', paperId),
-  getDownloadedPdfSources: (paperId) => ipcRenderer.invoke('get-downloaded-pdf-sources', paperId),
-  getPdfAttachments: (paperId) => ipcRenderer.invoke('get-pdf-attachments', paperId),
-  getPaperPdfPaths: (paperId) => ipcRenderer.invoke('get-paper-pdf-paths', paperId),
-  deletePdf: (paperId, sourceType) => ipcRenderer.invoke('delete-pdf', paperId, sourceType),
   startFileDrag: (filePath) => ipcRenderer.send('start-file-drag', filePath),
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
   createAnnotation: (paperId, data) => ipcRenderer.invoke('create-annotation', paperId, data),
@@ -257,15 +249,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setPageRotation: (paperId, pageNumber, rotation, pdfSource) => ipcRenderer.invoke('set-page-rotation', paperId, pageNumber, rotation, pdfSource),
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // ATTACHMENTS (LEGACY - will be removed after migration)
-  // ═══════════════════════════════════════════════════════════════════════════
-  attachFiles: (paperId, bibcode) => ipcRenderer.invoke('attach-files', paperId, bibcode),
-  getAttachments: (paperId) => ipcRenderer.invoke('get-attachments', paperId),
-  openAttachment: (filename) => ipcRenderer.invoke('open-attachment', filename),
-  deleteAttachment: (attachmentId) => ipcRenderer.invoke('delete-attachment', attachmentId),
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PAPER FILES (New unified file management system)
+  // PAPER FILES (Unified file management system)
   // ═══════════════════════════════════════════════════════════════════════════
   paperFiles: {
     add: (paperId, filePath, options) => ipcRenderer.invoke('paper-files:add', paperId, filePath, options),

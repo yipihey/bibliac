@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS papers (
   abstract TEXT,
   keywords TEXT,
   pdf_path TEXT,
-  pdf_source TEXT,
   text_path TEXT,
   bibtex TEXT,
   read_status TEXT DEFAULT 'unread',
@@ -82,15 +81,6 @@ CREATE TABLE IF NOT EXISTS annotations (
   FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS attachments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  paper_id INTEGER NOT NULL,
-  filename TEXT NOT NULL,
-  original_name TEXT NOT NULL,
-  file_type TEXT,
-  added_date TEXT DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
-);
 
 CREATE TABLE IF NOT EXISTS paper_summaries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,8 +190,7 @@ const INDEXES_SQL = [
   'CREATE INDEX IF NOT EXISTS idx_refs_paper ON refs(paper_id)',
   'CREATE INDEX IF NOT EXISTS idx_citations_paper ON citations(paper_id)',
   'CREATE INDEX IF NOT EXISTS idx_annotations_paper ON annotations(paper_id)',
-  'CREATE INDEX IF NOT EXISTS idx_attachments_paper ON attachments(paper_id)',
-  'CREATE INDEX IF NOT EXISTS idx_embeddings_paper ON text_embeddings(paper_id)',
+    'CREATE INDEX IF NOT EXISTS idx_embeddings_paper ON text_embeddings(paper_id)',
   'CREATE INDEX IF NOT EXISTS idx_qa_paper ON paper_qa(paper_id)',
   'CREATE INDEX IF NOT EXISTS idx_collections_parent ON collections(parent_id)',
   'CREATE INDEX IF NOT EXISTS idx_paper_files_paper ON paper_files(paper_id)',
@@ -222,7 +211,8 @@ const MIGRATIONS = [
   'ALTER TABLE papers ADD COLUMN citation_count INTEGER DEFAULT 0',
   'ALTER TABLE annotations ADD COLUMN pdf_source TEXT',
   'ALTER TABLE papers ADD COLUMN pdf_source TEXT',
-  'ALTER TABLE papers ADD COLUMN available_sources TEXT'
+  'ALTER TABLE papers ADD COLUMN available_sources TEXT',
+  'ALTER TABLE papers ADD COLUMN pdf_path TEXT'
 ];
 
 /**

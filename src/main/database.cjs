@@ -1162,61 +1162,6 @@ function setPageRotations(paperId, rotations, pdfSource = null) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ATTACHMENTS
-// ═══════════════════════════════════════════════════════════════════════════
-
-function addAttachment(paperId, filename, originalName, fileType) {
-  const stmt = db.prepare(`
-    INSERT INTO attachments (paper_id, filename, original_name, file_type, added_date)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-  stmt.bind([paperId, filename, originalName, fileType, new Date().toISOString()]);
-  stmt.step();
-  stmt.free();
-
-  const result = db.exec(`SELECT last_insert_rowid() as id`);
-  const id = result[0].values[0][0];
-  saveDatabase();
-
-  return { id, paper_id: paperId, filename, original_name: originalName, file_type: fileType };
-}
-
-function getAttachments(paperId) {
-  const stmt = db.prepare(`
-    SELECT * FROM attachments
-    WHERE paper_id = ?
-    ORDER BY added_date DESC
-  `);
-  stmt.bind([paperId]);
-
-  const attachments = [];
-  while (stmt.step()) {
-    attachments.push(stmt.getAsObject());
-  }
-  stmt.free();
-
-  return attachments;
-}
-
-function getAttachment(id) {
-  const stmt = db.prepare(`SELECT * FROM attachments WHERE id = ?`);
-  stmt.bind([id]);
-
-  let attachment = null;
-  if (stmt.step()) {
-    attachment = stmt.getAsObject();
-  }
-  stmt.free();
-
-  return attachment;
-}
-
-function deleteAttachment(id) {
-  db.run(`DELETE FROM attachments WHERE id = ?`, [id]);
-  saveDatabase();
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // SCHEMA VERSION & METADATA
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1433,18 +1378,6 @@ function getPaperFilesByStatus(status) {
 function deletePaperFiles(paperId) {
   db.run(`DELETE FROM paper_files WHERE paper_id = ?`, [paperId]);
   saveDatabase();
-}
-
-function getAllAttachments() {
-  const results = db.exec(`SELECT * FROM attachments ORDER BY added_date`);
-  if (results.length === 0) return [];
-
-  const columns = results[0].columns;
-  return results[0].values.map(row => {
-    const obj = {};
-    columns.forEach((col, i) => obj[col] = row[i]);
-    return obj;
-  });
 }
 
 function deletePaperFile(id) {
@@ -1701,12 +1634,6 @@ module.exports = {
   getPageRotations,
   setPageRotation,
   setPageRotations,
-  // Attachments
-  addAttachment,
-  getAttachments,
-  getAttachment,
-  deleteAttachment,
-  getAllAttachments,
   // Schema version & metadata
   getSchemaVersion,
   setSchemaVersion,

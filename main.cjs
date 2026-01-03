@@ -116,7 +116,6 @@ const adsApi = require('./src/main/ads-api.cjs');
 const bibtex = require('./src/main/bibtex.cjs');
 const { OllamaService, PROMPTS, chunkText, cosineSimilarity, parseSummaryResponse, parseMetadataResponse } = require('./src/main/llm-service.cjs');
 const { CloudLLMService, PROVIDERS: CLOUD_PROVIDERS } = require('./src/main/cloud-llm-service.cjs');
-const { migrateToFileContainer, needsMigration } = require('./src/lib/migration/migrate-to-paper-files.cjs');
 
 /**
  * Clean a DOI by removing common garbage suffixes and malformed paths
@@ -572,26 +571,15 @@ let mainWindow;
 let dbInitialized = false;
 
 /**
- * Run database migration if needed
+ * Initialize library systems after database is ready
  * @param {string} libraryPath - Path to the library folder
  */
-async function runMigrationIfNeeded(libraryPath) {
+async function initializeLibrarySystems(libraryPath) {
   try {
-    if (needsMigration(database)) {
-      console.log('[Migration] Schema version check: migration needed');
-      const log = (msg) => {
-        console.log(msg);
-        if (mainWindow && mainWindow.webContents) {
-          mainWindow.webContents.send('console-log', { message: msg, type: 'info' });
-        }
-      };
-      await migrateToFileContainer(database, libraryPath, log);
-    }
-
-    // Initialize Paper Files system after migration
+    // Initialize Paper Files system
     initializePaperFilesSystem(libraryPath);
   } catch (error) {
-    console.error('[Migration] Migration failed:', error);
+    console.error('[Library] Initialization failed:', error);
   }
 }
 
@@ -941,7 +929,7 @@ ipcMain.handle('select-library-folder', async () => {
     store.set('libraryPath', selectedPath);
     await database.initDatabase(selectedPath);
     dbInitialized = true;
-    await runMigrationIfNeeded(selectedPath);
+    await initializeLibrarySystems(selectedPath);
     return selectedPath;
   } catch (error) {
     console.error('Failed to create library:', error);
@@ -1203,7 +1191,7 @@ ipcMain.handle('switch-library', async (event, libraryId) => {
     // Initialize new database
     await database.initDatabase(library.fullPath);
     dbInitialized = true;
-    await runMigrationIfNeeded(library.fullPath);
+    await initializeLibrarySystems(library.fullPath);
 
     // Update current library path in preferences
     store.set('libraryPath', library.fullPath);
@@ -1232,10 +1220,20 @@ ipcMain.handle('delete-library', async (event, { libraryId, deleteFiles }) => {
       return { success: false, error: 'Library not found' };
     }
 
-    // Don't allow deleting the current library
+    // Check if deleting the current library
     const currentId = store.get('currentLibraryId');
-    if (currentId === libraryId) {
-      return { success: false, error: 'Cannot delete the currently active library. Switch to another library first.' };
+    const isDeletingActive = currentId === libraryId;
+
+    // If deleting active library, close the database first
+    if (isDeletingActive) {
+      try {
+        database.closeDatabase();
+        dbInitialized = false;
+        fileManager = null;
+        downloadQueue = null;
+      } catch (e) {
+        console.error('Error closing database:', e);
+      }
     }
 
     // Delete files if requested
@@ -1278,8 +1276,14 @@ ipcMain.handle('delete-library', async (event, { libraryId, deleteFiles }) => {
       store.set('localLibraries', localLibraries.filter(l => l.id !== libraryId));
     }
 
+    // If we deleted the active library, clear the current library settings
+    if (isDeletingActive) {
+      store.delete('currentLibraryId');
+      store.delete('libraryPath');
+    }
+
     sendConsoleLog(`Library "${library.name}" deleted`, 'success');
-    return { success: true };
+    return { success: true, wasActive: isDeletingActive };
   } catch (error) {
     console.error('Failed to delete library:', error);
     return { success: false, error: error.message };
@@ -1378,7 +1382,7 @@ ipcMain.handle('check-migration-needed', async () => {
   try {
     await database.initDatabase(existingPath);
     dbInitialized = true;
-    await runMigrationIfNeeded(existingPath);
+    await initializeLibrarySystems(existingPath);
     const stats = database.getStats();
     paperCount = stats.total;
   } catch (e) {
@@ -1469,7 +1473,7 @@ ipcMain.handle('migrate-library-to-icloud', async (event, { libraryPath }) => {
     // Reinitialize database at new location
     await database.initDatabase(targetPath);
     dbInitialized = true;
-    await runMigrationIfNeeded(targetPath);
+    await initializeLibrarySystems(targetPath);
 
     sendConsoleLog(`Library migrated to iCloud: ${targetPath}`, 'success');
 
@@ -1630,7 +1634,7 @@ ipcMain.handle('resolve-library-conflict', async (event, { libraryPath, conflict
     dbInitialized = false;
     await database.initDatabase(libraryPath);
     dbInitialized = true;
-    await runMigrationIfNeeded(libraryPath);
+    await initializeLibrarySystems(libraryPath);
 
     return { success: true };
   } catch (error) {
@@ -1647,7 +1651,7 @@ ipcMain.handle('get-library-info', async (event, libraryPath) => {
     try {
       await database.initDatabase(libraryPath);
       dbInitialized = true;
-      await runMigrationIfNeeded(libraryPath);
+      await initializeLibrarySystems(libraryPath);
     } catch (error) {
       console.error('Failed to init database:', error);
     }
@@ -2340,184 +2344,6 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
     }
   } catch (error) {
     sendConsoleLog(`Download failed: ${error.message}`, 'error');
-    return { success: false, error: error.message };
-  }
-});
-
-// [LEGACY] Batch download PDFs for multiple papers
-// Use download-queue:enqueue-many instead
-ipcMain.handle('batch-download-pdfs', async (event, paperIds) => {
-  const token = store.get('adsToken');
-  const libraryPath = store.get('libraryPath');
-  const proxyUrl = store.get('libraryProxyUrl');
-  const pdfPriority = store.get('pdfPriority', ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF']);
-
-  if (!libraryPath) return { success: false, error: 'No library path configured' };
-  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
-  if (!token) return { success: false, error: 'ADS token not configured' };
-
-  const results = { success: [], failed: [], skipped: [] };
-  const total = paperIds.length;
-
-  sendConsoleLog(`Starting batch PDF download for ${total} papers...`, 'info');
-
-  for (let i = 0; i < paperIds.length; i++) {
-    const paperId = paperIds[i];
-    const paper = database.getPaper(paperId);
-
-    if (!paper) {
-      results.failed.push({ paperId, error: 'Paper not found' });
-      continue;
-    }
-
-    // Skip papers that already have a PDF
-    if (paper.pdf_path && fs.existsSync(path.join(libraryPath, paper.pdf_path))) {
-      results.skipped.push({ paperId, bibcode: paper.bibcode, reason: 'Already has PDF' });
-      event.sender.send('batch-download-progress', {
-        current: i + 1,
-        total,
-        status: 'skipped',
-        bibcode: paper.bibcode
-      });
-      continue;
-    }
-
-    if (!paper.bibcode) {
-      results.failed.push({ paperId, error: 'No bibcode' });
-      event.sender.send('batch-download-progress', {
-        current: i + 1,
-        total,
-        status: 'failed',
-        error: 'No bibcode'
-      });
-      continue;
-    }
-
-    try {
-      // Get esources
-      const esources = await adsApi.getEsources(token, paper.bibcode);
-      if (!esources || esources.length === 0) {
-        results.failed.push({ paperId, bibcode: paper.bibcode, error: 'No PDF sources' });
-        event.sender.send('batch-download-progress', {
-          current: i + 1,
-          total,
-          status: 'failed',
-          bibcode: paper.bibcode,
-          error: 'No PDF sources'
-        });
-        continue;
-      }
-
-      // Try to download PDF based on priority
-      let downloaded = false;
-      for (const sourceType of pdfPriority) {
-        let targetSource = null;
-        for (const source of esources) {
-          const linkType = source.link_type || source.type || '';
-          if (linkType.includes(sourceType) && source.url && source.url.startsWith('http')) {
-            targetSource = source;
-            break;
-          }
-        }
-
-        if (targetSource) {
-          // Generate filename
-          const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-          const filename = `${baseFilename}_${sourceType}.pdf`;
-          const destPath = path.join(libraryPath, 'papers', filename);
-
-          // Ensure papers directory exists
-          const papersDir = path.join(libraryPath, 'papers');
-          if (!fs.existsSync(papersDir)) {
-            fs.mkdirSync(papersDir, { recursive: true });
-          }
-
-          // Download
-          let downloadUrl = targetSource.url;
-          if (sourceType === 'PUB_PDF' && proxyUrl) {
-            downloadUrl = proxyUrl + encodeURIComponent(targetSource.url);
-          }
-
-          try {
-            await pdfDownload.downloadFile(downloadUrl, destPath);
-            const relativePath = `papers/${filename}`;
-            database.updatePaper(paperId, { pdf_path: relativePath });
-            results.success.push({ paperId, bibcode: paper.bibcode, source: sourceType });
-            downloaded = true;
-            break;
-          } catch (dlErr) {
-            // Try next source type
-            continue;
-          }
-        }
-      }
-
-      if (!downloaded) {
-        results.failed.push({ paperId, bibcode: paper.bibcode, error: 'All sources failed' });
-      }
-
-      event.sender.send('batch-download-progress', {
-        current: i + 1,
-        total,
-        status: downloaded ? 'success' : 'failed',
-        bibcode: paper.bibcode
-      });
-
-      // Rate limiting - delay between downloads
-      if (i < paperIds.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    } catch (error) {
-      results.failed.push({ paperId, bibcode: paper.bibcode, error: error.message });
-      event.sender.send('batch-download-progress', {
-        current: i + 1,
-        total,
-        status: 'failed',
-        bibcode: paper.bibcode,
-        error: error.message
-      });
-    }
-  }
-
-  sendConsoleLog(`Batch download complete: ${results.success.length} downloaded, ${results.skipped.length} skipped, ${results.failed.length} failed`, 'success');
-  return { success: true, results };
-});
-
-// [LEGACY] Attach a PDF file to a paper (copies file to library storage)
-// Use paper-files:add instead
-ipcMain.handle('attach-pdf-to-paper', async (event, paperId, sourcePdfPath) => {
-  const libraryPath = store.get('libraryPath');
-  if (!libraryPath) return { success: false, error: 'No library path configured' };
-  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
-
-  const paper = database.getPaper(paperId);
-  if (!paper) return { success: false, error: 'Paper not found' };
-
-  try {
-    // Ensure papers directory exists
-    const papersDir = path.join(libraryPath, 'papers');
-    if (!fs.existsSync(papersDir)) {
-      fs.mkdirSync(papersDir, { recursive: true });
-    }
-
-    // Generate filename based on bibcode or paper ID
-    const baseFilename = paper.bibcode
-      ? paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_')
-      : `paper_${paperId}`;
-    const filename = `${baseFilename}_ATTACHED.pdf`;
-    const destPath = path.join(papersDir, filename);
-
-    // Copy the file to library storage
-    fs.copyFileSync(sourcePdfPath, destPath);
-
-    // Update database with relative path and source type
-    const relativePath = `papers/${filename}`;
-    database.updatePaper(paperId, { pdf_path: relativePath, pdf_source: 'ATTACHED' });
-
-    sendConsoleLog(`Attached PDF to paper: ${paper.title?.substring(0, 40)}...`, 'success');
-    return { success: true, pdfPath: relativePath, sourceType: 'ATTACHED' };
-  } catch (error) {
-    sendConsoleLog(`Failed to attach PDF: ${error.message}`, 'error');
     return { success: false, error: error.message };
   }
 });
@@ -5044,84 +4870,6 @@ ipcMain.handle('get-annotation-counts-by-source', (event, paperId) => {
   return database.getAnnotationCountsBySource(paperId);
 });
 
-// [LEGACY] Get list of PDF sources that have been downloaded for a paper
-// Use paper-files:list instead
-ipcMain.handle('get-downloaded-pdf-sources', (event, paperId) => {
-  const libraryPath = store.get('libraryPath');
-  if (!libraryPath || !dbInitialized) return [];
-
-  const paper = database.getPaper(paperId);
-  if (!paper) return [];
-
-  const papersDir = path.join(libraryPath, 'papers');
-  const downloadedSources = [];
-
-  // If paper has bibcode, check for new naming convention: bibcode_SOURCETYPE.pdf
-  if (paper.bibcode) {
-    const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF', 'ATTACHED'];
-    for (const sourceType of sourceTypes) {
-      const filename = `${baseFilename}_${sourceType}.pdf`;
-      const filePath = path.join(papersDir, filename);
-      if (fs.existsSync(filePath)) {
-        downloadedSources.push(sourceType);
-      }
-    }
-  }
-
-  // Also check if paper has a legacy pdf_path that exists
-  if (paper.pdf_path && downloadedSources.length === 0) {
-    const legacyPath = path.join(libraryPath, paper.pdf_path);
-    if (fs.existsSync(legacyPath)) {
-      downloadedSources.push('LEGACY');
-    }
-  }
-
-  return downloadedSources;
-});
-
-// Get PDF attachments for a paper (files attached by user)
-ipcMain.handle('get-pdf-attachments', (event, paperId) => {
-  // For now, return empty array - attachments are tracked via ATTACHED source type
-  // This stub exists for API compatibility with iOS
-  return [];
-});
-
-// Get full paths to all PDFs for a paper (for drag-and-drop)
-ipcMain.handle('get-paper-pdf-paths', (event, paperId) => {
-  const libraryPath = store.get('libraryPath');
-  if (!libraryPath || !dbInitialized) return {};
-
-  const paper = database.getPaper(paperId);
-  if (!paper) return {};
-
-  const papersDir = path.join(libraryPath, 'papers');
-  const paths = {};
-
-  // Check for new naming convention: bibcode_SOURCETYPE.pdf
-  if (paper.bibcode) {
-    const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const sourceTypes = ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF', 'ATTACHED'];
-    for (const sourceType of sourceTypes) {
-      const filename = `${baseFilename}_${sourceType}.pdf`;
-      const filePath = path.join(papersDir, filename);
-      if (fs.existsSync(filePath)) {
-        paths[sourceType] = filePath;
-      }
-    }
-  }
-
-  // Also check legacy pdf_path
-  if (paper.pdf_path && Object.keys(paths).length === 0) {
-    const legacyPath = path.join(libraryPath, paper.pdf_path);
-    if (fs.existsSync(legacyPath)) {
-      paths['LEGACY'] = legacyPath;
-    }
-  }
-
-  return paths;
-});
-
 // Native file drag for dragging files to Finder, Mail, etc.
 ipcMain.on('start-file-drag', (event, filePath) => {
   if (!filePath || !fs.existsSync(filePath)) {
@@ -5151,40 +4899,6 @@ ipcMain.handle('open-path', async (event, filePath) => {
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
-  }
-});
-
-// [LEGACY] Delete a PDF file for a paper
-// Use paper-files:remove instead
-ipcMain.handle('delete-pdf', (event, paperId, sourceType) => {
-  const libraryPath = store.get('libraryPath');
-  if (!libraryPath || !dbInitialized) return false;
-
-  const paper = database.getPaper(paperId);
-  if (!paper || !paper.bibcode) return false;
-
-  const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const filename = `${baseFilename}_${sourceType}.pdf`;
-  const filePath = path.join(libraryPath, 'papers', filename);
-
-  try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      sendConsoleLog(`Deleted PDF: ${filename}`, 'info');
-
-      // Also delete associated text file if it exists
-      const textFilename = `${baseFilename}_${sourceType}.txt`;
-      const textPath = path.join(libraryPath, 'text', textFilename);
-      if (fs.existsSync(textPath)) {
-        fs.unlinkSync(textPath);
-      }
-
-      return true;
-    }
-    return false;
-  } catch (error) {
-    console.error('Failed to delete PDF:', error);
-    return false;
   }
 });
 
@@ -5404,62 +5118,6 @@ ipcMain.handle('attach-files', async (event, paperId, bibcode) => {
   }
 
   return { success: true, attachments };
-});
-
-// [LEGACY] Get attachments for a paper
-// Use paper-files:list instead
-ipcMain.handle('get-attachments', (event, paperId) => {
-  if (!dbInitialized) return [];
-  return database.getAttachments(paperId);
-});
-
-// [LEGACY] Open an attachment file
-// Use paper-files:get-path instead
-ipcMain.handle('open-attachment', async (event, filename) => {
-  const libraryPath = store.get('libraryPath');
-  if (!libraryPath) return { success: false, error: 'No library path configured' };
-
-  const fullPath = path.join(libraryPath, 'papers', filename);
-
-  if (!fs.existsSync(fullPath)) {
-    return { success: false, error: 'File not found' };
-  }
-
-  try {
-    await shell.openPath(fullPath);
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-// [LEGACY] Delete an attachment
-// Use paper-files:remove instead
-ipcMain.handle('delete-attachment', (event, attachmentId) => {
-  const libraryPath = store.get('libraryPath');
-  if (!libraryPath) return { success: false, error: 'No library path configured' };
-  if (!dbInitialized) return { success: false, error: 'Database not initialized' };
-
-  try {
-    // Get attachment info first
-    const attachment = database.getAttachment(attachmentId);
-    if (!attachment) {
-      return { success: false, error: 'Attachment not found' };
-    }
-
-    // Delete the file
-    const filePath = path.join(libraryPath, 'papers', attachment.filename);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-
-    // Delete from database
-    database.deleteAttachment(attachmentId);
-
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
 });
 
 // ============ PAPER FILES ============
@@ -5766,8 +5424,6 @@ ipcMain.handle('paper-files:rescan', async (event, paperId) => {
 
 ipcMain.handle('paper-files:get-path', async (event, fileId) => {
   // Get absolute path to file for PDF viewer
-  const libraryPath = store.get('libraryPath');
-  if (!libraryPath) return null;
   if (!dbInitialized) return null;
 
   try {
@@ -5776,9 +5432,10 @@ ipcMain.handle('paper-files:get-path', async (event, fileId) => {
     }
 
     const file = fileManager.getFile(fileId);
+    // file.path is already an absolute path from getStoragePath()
     if (!file || !file.path) return null;
 
-    return path.join(libraryPath, file.path);
+    return file.path;
   } catch (error) {
     console.error('paper-files:get-path error:', error);
     return null;

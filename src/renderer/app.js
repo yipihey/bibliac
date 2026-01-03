@@ -247,11 +247,6 @@ class ADSReader {
     // Add mobile-view-active class to body
     document.body.classList.add('mobile-view-active');
 
-    // Hamburger button
-    document.getElementById('hamburger-btn')?.addEventListener('click', () => {
-      this.openMobileDrawer();
-    });
-
     // Mobile search button - toggle search visibility
     document.getElementById('mobile-search-btn')?.addEventListener('click', () => {
       this.toggleMobileSearch();
@@ -369,101 +364,35 @@ class ADSReader {
       });
     });
 
-    // Drawer overlay click to close
-    document.getElementById('mobile-drawer-overlay')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
-    });
-
-    // Drawer close button
-    document.getElementById('drawer-close-btn')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
-    });
-
-    // Drawer view buttons (same as desktop sidebar)
-    document.querySelectorAll('.drawer-nav-item[data-view]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this.setView(btn.dataset.view);
-        // Update active state in drawer
-        document.querySelectorAll('.drawer-nav-item[data-view]').forEach(b => {
-          b.classList.toggle('active', b === btn);
-        });
-        this.closeMobileDrawer();
-      });
-    });
-
-    // Drawer settings buttons
-    document.getElementById('drawer-settings-btn')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
-      this.showPreferencesModal();
-    });
-
-    document.getElementById('drawer-ads-token-btn')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
+    // Settings pane buttons
+    document.getElementById('settings-ads-token-btn')?.addEventListener('click', () => {
       this.showAdsTokenModal();
     });
 
-    document.getElementById('drawer-proxy-btn')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
+    document.getElementById('settings-proxy-btn')?.addEventListener('click', () => {
       this.showLibraryProxyModal();
     });
 
-    document.getElementById('drawer-llm-btn')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
+    document.getElementById('settings-llm-btn')?.addEventListener('click', () => {
       this.showLlmModal();
     });
 
-    // Drawer add collection button
-    document.getElementById('drawer-add-collection-btn')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
-      this.showCollectionModal();
+    document.getElementById('settings-pdf-btn')?.addEventListener('click', () => {
+      this.showPreferencesModal();
     });
 
-    // Drawer console toggle
-    document.getElementById('drawer-console-toggle')?.addEventListener('click', (e) => {
-      e.currentTarget.classList.toggle('expanded');
-      document.getElementById('drawer-console')?.classList.toggle('hidden');
-    });
-
-    // Drawer shortcuts toggle
-    document.getElementById('drawer-shortcuts-toggle')?.addEventListener('click', (e) => {
-      e.currentTarget.classList.toggle('expanded');
-      document.getElementById('drawer-shortcuts')?.classList.toggle('hidden');
-    });
-
-    // Drawer new library buttons
-    document.getElementById('drawer-new-icloud-lib')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
-      this.createNewLibrary('icloud');
-    });
-
-    document.getElementById('drawer-new-local-lib')?.addEventListener('click', () => {
-      this.closeMobileDrawer();
-      this.createNewLibrary('local');
+    // Settings pane collapsible sections
+    document.querySelectorAll('.settings-section-header.collapsible').forEach(header => {
+      header.addEventListener('click', () => {
+        const targetId = header.dataset.toggle;
+        const content = document.getElementById(targetId);
+        content?.classList.toggle('hidden');
+        header.querySelector('.section-arrow')?.classList.toggle('expanded');
+      });
     });
 
     // Initialize with Papers view
     this.showMobileView('papers');
-  }
-
-  openMobileDrawer() {
-    document.getElementById('mobile-drawer')?.classList.add('open');
-    document.getElementById('mobile-drawer-overlay')?.classList.add('visible');
-    document.body.style.overflow = 'hidden';
-  }
-
-  closeMobileDrawer() {
-    document.getElementById('mobile-drawer')?.classList.remove('open');
-    document.getElementById('mobile-drawer-overlay')?.classList.remove('visible');
-    document.body.style.overflow = '';
-  }
-
-  toggleMobileDrawer() {
-    const drawer = document.getElementById('mobile-drawer');
-    if (drawer?.classList.contains('open')) {
-      this.closeMobileDrawer();
-    } else {
-      this.openMobileDrawer();
-    }
   }
 
   toggleMobileSearch() {
@@ -1470,7 +1399,18 @@ class ADSReader {
 
       if (result.success) {
         this.consoleLog(`Library "${libraryName}" deleted${deleteFiles ? ' with files' : ''}`, 'success');
-        await this.loadLibraryList();
+
+        // If the deleted library was the active one, show setup screen
+        if (result.wasActive) {
+          this.papers = [];
+          this.selectedPaper = null;
+          this.selectedPapers.clear();
+          this.collections = [];
+          this.renderPaperList();
+          this.showSetupScreen();
+        } else {
+          await this.loadLibraryList();
+        }
       } else {
         alert(`Failed to delete library: ${result.error}`);
       }
@@ -1554,39 +1494,8 @@ class ADSReader {
       try {
         files = await window.electronAPI.paperFiles.list(paper.id);
       } catch (e) {
-        console.warn('[renderFilesPanel] paperFiles.list failed, using legacy APIs:', e);
+        console.warn('[renderFilesPanel] paperFiles.list failed:', e);
         files = [];
-      }
-    }
-
-    // If new API not available or returned empty, build from legacy APIs
-    if (files.length === 0) {
-      const downloadedSources = await window.electronAPI.getDownloadedPdfSources(paper.id);
-      const attachments = await window.electronAPI.getAttachments(paper.id);
-
-      // Convert downloaded sources to file items
-      for (const source of downloadedSources) {
-        files.push({
-          id: `source-${source}`,
-          file_role: 'pdf',
-          source_type: source,
-          original_name: this.getSourceLabel(source),
-          is_primary: source === downloadedSources[0], // First is primary
-          file_size: null
-        });
-      }
-
-      // Convert attachments to file items
-      for (const att of attachments) {
-        files.push({
-          id: `att-${att.id}`,
-          file_role: att.file_type === 'pdf' ? 'pdf' : 'attachment',
-          source_type: 'attachment',
-          original_name: att.original_name || att.filename,
-          filename: att.filename,
-          is_primary: false,
-          file_size: att.file_size
-        });
       }
     }
 
@@ -1823,41 +1732,25 @@ class ADSReader {
   async deleteFileFromPanel(paperId, fileId) {
     if (!confirm('Delete this file?')) return;
 
-    // If fileId starts with 'source-', delete the PDF source
-    if (fileId.startsWith('source-')) {
-      const sourceType = fileId.replace('source-', '');
-      const deleted = await window.electronAPI.deletePdf(paperId, sourceType);
-      if (deleted) {
-        this.consoleLog(`Deleted ${this.getSourceLabel(sourceType)} PDF`, 'info');
-        const paper = this.papers.find(p => p.id === paperId);
-        if (paper) await this.renderFilesPanel(paper);
-      } else {
-        this.consoleLog(`Failed to delete ${this.getSourceLabel(sourceType)} PDF`, 'error');
-      }
-    } else if (fileId.startsWith('att-')) {
-      // Delete attachment
-      const attId = parseInt(fileId.replace('att-', ''));
-      const result = await window.electronAPI.deleteAttachment(attId);
+    // Use new paperFiles API for all file deletion
+    try {
+      const result = await window.electronAPI.paperFiles.remove(fileId);
       if (result.success) {
-        this.consoleLog('Deleted attachment', 'info');
         const paper = this.papers.find(p => p.id === paperId);
-        if (paper) await this.renderFilesPanel(paper);
-      }
-    } else if (window.electronAPI?.paperFiles?.remove) {
-      // Use new API
-      try {
-        const result = await window.electronAPI.paperFiles.remove(fileId);
-        if (result.success) {
-          const paper = this.papers.find(p => p.id === paperId);
-          if (paper) await this.renderFilesPanel(paper);
-          this.consoleLog('File deleted', 'info');
-        } else {
-          this.consoleLog(`Failed to delete file: ${result.error}`, 'error');
+        if (paper) {
+          await this.renderFilesPanel(paper);
+          // Also refresh the PDF display if this was the current PDF
+          if (this.selectedPaper?.id === paperId) {
+            await this.displayPaper(paperId);
+          }
         }
-      } catch (e) {
-        console.error('[deleteFileFromPanel] Failed:', e);
-        this.consoleLog('Failed to delete file', 'error');
+        this.consoleLog('File deleted', 'info');
+      } else {
+        this.consoleLog(`Failed to delete file: ${result.error}`, 'error');
       }
+    } catch (e) {
+      console.error('[deleteFileFromPanel] Failed:', e);
+      this.consoleLog('Failed to delete file', 'error');
     }
   }
 
@@ -2642,9 +2535,6 @@ class ADSReader {
             this.submitFeedback();
             break;
           // Smart ADS Search buttons
-          case 'drawer-add-search-btn':
-            this.showSmartSearchModal();
-            break;
           case 'search-refresh-btn':
             this.refreshSmartSearch();
             break;
@@ -2688,18 +2578,24 @@ class ADSReader {
       const shortcutBtn = target.closest('.ads-shortcut-btn');
       if (shortcutBtn && shortcutBtn.dataset.insert) {
         const insertText = shortcutBtn.dataset.insert;
-        // Determine which input to use based on which modal is open
-        const adsModal = document.getElementById('ads-search-modal');
-        const lookupModal = document.getElementById('ads-lookup-modal');
-        const smartSearchModal = document.getElementById('smart-search-modal');
 
+        // Check if button specifies a target input
         let input;
-        if (adsModal && !adsModal.classList.contains('hidden')) {
-          input = document.getElementById('ads-query-input');
-        } else if (lookupModal && !lookupModal.classList.contains('hidden')) {
-          input = document.getElementById('ads-lookup-query');
-        } else if (smartSearchModal && !smartSearchModal.classList.contains('hidden')) {
-          input = document.getElementById('smart-search-query');
+        if (shortcutBtn.dataset.target) {
+          input = document.getElementById(shortcutBtn.dataset.target);
+        } else {
+          // Determine which input to use based on which modal is open
+          const adsModal = document.getElementById('ads-search-modal');
+          const lookupModal = document.getElementById('ads-lookup-modal');
+          const smartSearchModal = document.getElementById('smart-search-modal');
+
+          if (adsModal && !adsModal.classList.contains('hidden')) {
+            input = document.getElementById('ads-query-input');
+          } else if (lookupModal && !lookupModal.classList.contains('hidden')) {
+            input = document.getElementById('ads-lookup-query');
+          } else if (smartSearchModal && !smartSearchModal.classList.contains('hidden')) {
+            input = document.getElementById('smart-search-query');
+          }
         }
 
         if (input) {
@@ -2743,8 +2639,6 @@ class ADSReader {
         // Check if it's a smart search item
         if (collectionItemInTab.dataset.smartSearchId) {
           const searchId = parseInt(collectionItemInTab.dataset.smartSearchId);
-          // Close drawer first, then select
-          this.closeMobileDrawer();
           this.selectSmartSearch(searchId).then(() => {
             this.renderCollectionsTab();
             // selectSmartSearch already switches to 'abs' tab on desktop
@@ -2757,8 +2651,6 @@ class ADSReader {
         const collectionId = collectionItemInTab.dataset.collectionId;
         // collectionId is empty string for "All Papers", or a number for collections
         const id = collectionId ? parseInt(collectionId) : null;
-        // Close drawer first, then select
-        this.closeMobileDrawer();
         this.selectCollection(id).then(() => {
           this.renderCollectionsTab(); // Update active state
           this.switchTab(this.previousTab || 'pdf');
@@ -2767,7 +2659,7 @@ class ADSReader {
       }
 
       // Collection delete button click in Library tab
-      if (target.closest('#tab-collections-list .collection-delete-btn')) {
+      if (target.closest('#tab-collections-list .collection-delete-btn:not(.smart-search-delete-btn)')) {
         const collectionItem = target.closest('.collection-item');
         const collectionId = collectionItem?.dataset.collectionId;
         if (collectionId) {
@@ -2775,6 +2667,24 @@ class ADSReader {
             this.renderCollectionsTab();
           });
         }
+        return;
+      }
+
+      // Smart search delete button click in Library tab
+      if (target.closest('.smart-search-delete-btn')) {
+        const searchId = parseInt(target.closest('.smart-search-delete-btn').dataset.searchId);
+        const search = this.smartSearches?.find(s => s.id === searchId);
+        if (search && confirm(`Delete search "${search.name}"?`)) {
+          this.deleteSmartSearch(searchId).then(() => {
+            this.renderCollectionsTab();
+          });
+        }
+        return;
+      }
+
+      // New smart search button
+      if (target.id === 'new-smart-search-btn' || target.closest('#new-smart-search-btn')) {
+        this.showSmartSearchModal();
         return;
       }
 
@@ -3056,8 +2966,9 @@ class ADSReader {
       btn.addEventListener('touchend', handleShortcut);
     });
 
-    // ADS Search
-    document.getElementById('ads-search-btn')?.addEventListener('click', () => this.showAdsSearchModal());
+    // ADS Search - click on logo switches to ADS search tab
+    document.getElementById('ads-search-btn')?.addEventListener('click', () => this.switchTab('ads-search'));
+    // Keep modal close button for legacy compatibility (modal still used for refs/cites import)
     document.getElementById('ads-close-btn')?.addEventListener('click', () => this.hideAdsSearchModal());
     document.getElementById('ads-search-execute-btn')?.addEventListener('click', () => this.executeAdsSearch());
     document.getElementById('ads-query-input')?.addEventListener('keydown', (e) => {
@@ -3066,6 +2977,15 @@ class ADSReader {
     document.getElementById('ads-select-all-btn')?.addEventListener('click', () => this.adsSelectAll());
     document.getElementById('ads-select-none-btn')?.addEventListener('click', () => this.adsSelectNone());
     document.getElementById('ads-import-btn')?.addEventListener('click', () => this.importAdsSelected());
+
+    // ADS Search Pane (fixed tab)
+    document.getElementById('ads-pane-search-btn')?.addEventListener('click', () => this.executeAdsPaneSearch());
+    document.getElementById('ads-pane-query-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.executeAdsPaneSearch();
+    });
+    document.getElementById('ads-pane-select-all-btn')?.addEventListener('click', () => this.adsPaneSelectAll());
+    document.getElementById('ads-pane-select-none-btn')?.addEventListener('click', () => this.adsPaneSelectNone());
+    document.getElementById('ads-pane-import-btn')?.addEventListener('click', () => this.importAdsPaneSelected());
 
     // ADS Lookup Modal
     document.getElementById('ads-lookup-close-btn')?.addEventListener('click', () => this.hideAdsLookupModal());
@@ -3122,8 +3042,19 @@ class ADSReader {
     // for iOS compatibility - no duplicate listeners needed here
 
     // ADS import progress listeners
-    window.electronAPI.onImportProgress((data) => this.updateImportProgress(data));
-    window.electronAPI.onImportComplete((data) => this.handleImportComplete(data));
+    window.electronAPI.onImportProgress((data) => {
+      this.updateImportProgress(data);
+      if (this.adsPaneImportActive) {
+        this.updateAdsPaneImportProgress(data);
+      }
+    });
+    window.electronAPI.onImportComplete((data) => {
+      if (this.adsPaneImportActive) {
+        this.handleAdsPaneImportComplete(data);
+      } else {
+        this.handleImportComplete(data);
+      }
+    });
 
     // Refs/Cites selection controls
     document.getElementById('refs-select-all')?.addEventListener('click', () => this.selectAllRefs());
@@ -3646,6 +3577,13 @@ class ADSReader {
       }
     }
 
+    // Cmd+, opens Settings
+    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      e.preventDefault();
+      this.switchTab('settings');
+      return;
+    }
+
     switch (e.key) {
       case '/':
         e.preventDefault();
@@ -3688,10 +3626,6 @@ class ADSReader {
         if (this.selectedPaper) {
           this.updatePaperRating(this.selectedPaper.id, 0); // Clear rating
         }
-        break;
-      case 'm':
-        e.preventDefault();
-        this.toggleMobileDrawer();
         break;
       case 'n':
       case 'N':
@@ -3751,8 +3685,8 @@ class ADSReader {
           this.openInADS();
         }
         break;
-      case 'f':
-        // 'f' toggles focus mode for PDF reading
+      case 'F':
+        // 'F' toggles focus mode for PDF reading
         if (this.selectedPaper) {
           if (this.isFocusNotesMode) {
             this.exitFocusNotesMode();
@@ -3808,6 +3742,10 @@ class ADSReader {
       case 'L':
         // Switch to Library tab
         this.switchTab('library');
+        break;
+      case 'S':
+        // Shift+S: Switch to ADS Search tab
+        this.switchTab('ads-search');
         break;
       case 'Backspace':
       case 'Delete':
@@ -4357,51 +4295,8 @@ class ADSReader {
   async loadSmartSearches() {
     if (!window.electronAPI?.smartSearchList) return;
     this.smartSearches = await window.electronAPI.smartSearchList();
-    this.renderSmartSearchesList();
     this.renderCollectionsTab(); // Update collections tab with smart searches
     this.renderFilterSmartSearches(); // Update action bar dropdown
-  }
-
-  renderSmartSearchesList() {
-    const listEl = document.getElementById('drawer-searches-list');
-    if (!listEl) return;
-
-    if (this.smartSearches.length === 0) {
-      listEl.innerHTML = '<div class="drawer-placeholder">No saved searches</div>';
-      return;
-    }
-
-    listEl.innerHTML = this.smartSearches.map(search => `
-      <div class="drawer-search-item${this.currentSmartSearch === search.id ? ' active' : ''}"
-           data-search-id="${search.id}">
-        <span class="search-icon">🔍</span>
-        <span class="search-name">${this.escapeHtml(search.name)}</span>
-        <span class="search-count">${search.result_count || '—'}</span>
-        <button class="search-delete-btn" data-delete-search="${search.id}" title="Delete search">✕</button>
-      </div>
-    `).join('');
-
-    // Attach click handlers
-    listEl.querySelectorAll('.drawer-search-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        // Don't select if clicking delete button
-        if (e.target.classList.contains('search-delete-btn')) return;
-        this.selectSmartSearch(parseInt(item.dataset.searchId));
-        this.closeDrawer();
-      });
-    });
-
-    // Delete handlers
-    listEl.querySelectorAll('.search-delete-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const searchId = parseInt(btn.dataset.deleteSearch);
-        const search = this.smartSearches.find(s => s.id === searchId);
-        if (search && confirm(`Delete search "${search.name}"?`)) {
-          await this.deleteSmartSearch(searchId);
-        }
-      });
-    });
   }
 
   async selectSmartSearch(searchId) {
@@ -4419,7 +4314,6 @@ class ADSReader {
 
     // Update UI
     this.updateNavActiveStates();
-    this.renderSmartSearchesList();
 
     // Switch to Abstract tab on desktop (smart search results don't have PDFs)
     if (!this.isIOS) {
@@ -4542,8 +4436,6 @@ class ADSReader {
     const toolbar = document.getElementById('smart-search-toolbar');
     toolbar?.classList.add('hidden');
 
-    // Update nav
-    this.renderSmartSearchesList();
   }
 
   showSmartSearchModal(searchId = null) {
@@ -4671,19 +4563,9 @@ class ADSReader {
   }
 
   updateNavActiveStates() {
-    // Update view items
-    document.querySelectorAll('.drawer-nav-item[data-view]').forEach(item => {
-      item.classList.toggle('active', this.currentView === item.dataset.view && !this.currentSmartSearch);
-    });
-
     // Update collection items
     document.querySelectorAll('.collection-item').forEach(item => {
       item.classList.toggle('active', parseInt(item.dataset.collection) === this.currentCollection && !this.currentSmartSearch);
-    });
-
-    // Update smart search items
-    document.querySelectorAll('.drawer-search-item').forEach(item => {
-      item.classList.toggle('active', parseInt(item.dataset.searchId) === this.currentSmartSearch);
     });
   }
 
@@ -5839,16 +5721,23 @@ class ADSReader {
       </div>
     `).join('');
 
-    // Add smart searches section if any exist
+    // Add smart searches section (always show header with + button)
+    html += `
+      <div class="collection-section-header">
+        <span>ADS Searches</span>
+        <button class="section-add-btn" id="new-smart-search-btn" title="New ADS Search">+</button>
+      </div>`;
     if (this.smartSearches && this.smartSearches.length > 0) {
-      html += `<div class="collection-section-header">ADS Searches</div>`;
       html += this.smartSearches.map(search => `
         <div class="collection-item smart-search${this.currentSmartSearch === search.id ? ' active' : ''}" data-smart-search-id="${search.id}">
           <span class="collection-icon">🔎</span>
           <span class="collection-name">${this.escapeHtml(search.name)}</span>
           <span class="collection-count">${search.result_count || '—'}</span>
+          <button class="collection-delete-btn smart-search-delete-btn" data-search-id="${search.id}" title="Delete search">×</button>
         </div>
       `).join('');
+    } else {
+      html += `<div class="collection-empty-state">No saved searches</div>`;
     }
 
     container.innerHTML = html;
@@ -6159,58 +6048,42 @@ class ADSReader {
       return;
     }
 
-    // Check if paper has any PDF available (downloaded sources + attachments + pdf_path)
-    const downloadedSources = await window.electronAPI.getDownloadedPdfSources(resolvedPaper.id);
-    const attachments = await window.electronAPI.getAttachments(resolvedPaper.id);
-    const pdfAttachments = attachments.filter(a => a.file_type === 'pdf');
-    const hasAnyPdf = downloadedSources.length > 0 || pdfAttachments.length > 0 || !!resolvedPaper.pdf_path;
+    // Get available PDF files using new paper_files API
+    let pdfFiles = [];
+    try {
+      const allFiles = await window.electronAPI.paperFiles.list(resolvedPaper.id);
+      pdfFiles = allFiles.filter(f => f.file_role === 'pdf');
+    } catch (e) {
+      console.warn('[displayPaper] Failed to get paper files:', e);
+    }
 
-    // Save original pdf_path from database (for legacy PDFs)
-    const originalPdfPath = resolvedPaper.pdf_path;
+    const hasAnyPdf = pdfFiles.length > 0;
 
-    // If paper has PDFs, determine which one to load based on last viewed
+    // If paper has PDFs, determine which one to load
     if (hasAnyPdf) {
       const lastSource = this.lastPdfSources[resolvedPaper.id];
-      let pdfPathSet = false;
+      let selectedFile = null;
 
+      // Try to find the last viewed source
       if (lastSource) {
-        // Check if last source is an attachment
-        if (lastSource.startsWith('ATTACHMENT:')) {
-          const filename = lastSource.substring('ATTACHMENT:'.length);
-          const attachment = pdfAttachments.find(a => a.filename === filename);
-          if (attachment) {
-            resolvedPaper.pdf_path = `papers/${filename}`;
-            pdfPathSet = true;
-          }
-        } else if (lastSource === 'LEGACY' && downloadedSources.includes('LEGACY')) {
-          // Legacy PDF - use original path from database
-          resolvedPaper.pdf_path = originalPdfPath;
-          pdfPathSet = true;
-        } else {
-          // It's a source type (EPRINT_PDF, PUB_PDF, ADS_PDF)
-          if (downloadedSources.includes(lastSource) && resolvedPaper.bibcode) {
-            const baseFilename = resolvedPaper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-            resolvedPaper.pdf_path = `papers/${baseFilename}_${lastSource}.pdf`;
-            pdfPathSet = true;
-          }
-        }
+        selectedFile = pdfFiles.find(f => f.source_type === lastSource);
       }
 
-      // If no last source or last source not available, use first available
-      if (!pdfPathSet) {
-        if (downloadedSources.length > 0) {
-          if (downloadedSources[0] === 'LEGACY') {
-            // Legacy PDF - use the pdf_path stored in database
-            resolvedPaper.pdf_path = originalPdfPath;
-          } else if (resolvedPaper.bibcode) {
-            const baseFilename = resolvedPaper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-            resolvedPaper.pdf_path = `papers/${baseFilename}_${downloadedSources[0]}.pdf`;
-          }
-        } else if (pdfAttachments.length > 0) {
-          resolvedPaper.pdf_path = `papers/${pdfAttachments[0].filename}`;
-        } else if (originalPdfPath) {
-          // Fallback to original pdf_path if it exists
-          resolvedPaper.pdf_path = originalPdfPath;
+      // If no last source or not found, use primary PDF or first available
+      if (!selectedFile) {
+        selectedFile = pdfFiles.find(f => f.is_primary) || pdfFiles[0];
+      }
+
+      // Get the actual file path and store it for loading
+      if (selectedFile) {
+        try {
+          const filePath = await window.electronAPI.paperFiles.getPath(selectedFile.id);
+          resolvedPaper._pdfFilePath = filePath; // Store absolute path
+          resolvedPaper._pdfFileId = selectedFile.id;
+          resolvedPaper._pdfSourceType = selectedFile.source_type;
+          this.currentPdfSource = selectedFile.source_type;
+        } catch (e) {
+          console.warn('[displayPaper] Failed to get file path:', e);
         }
       }
     }
@@ -6241,17 +6114,15 @@ class ADSReader {
   }
 
   async openPdfWithSystemViewer() {
-    if (!this.selectedPaper?.pdf_path) {
+    // Use the stored absolute path from displayPaper
+    const pdfPath = this.selectedPaper?._pdfFilePath;
+    if (!pdfPath) {
       this.showNotification('No PDF available', 'error');
       return;
     }
 
-    // Extract filename from pdf_path (e.g., "papers/filename.pdf" -> "filename.pdf")
-    const pdfPath = this.selectedPaper.pdf_path;
-    const filename = pdfPath.replace(/^papers\//, '');
-
     try {
-      const result = await window.electronAPI.openAttachment(filename);
+      const result = await window.electronAPI.openPath(pdfPath);
       if (!result.success) {
         this.showNotification(result.error || 'Failed to open PDF', 'error');
       }
@@ -6338,8 +6209,11 @@ class ADSReader {
   async loadPDF(paper) {
     const container = document.getElementById('pdf-container');
 
+    // Get the PDF file path - prefer new API path, fall back to legacy
+    const pdfFilePath = paper._pdfFilePath;
+
     // On iOS with native viewer preference, use native PDF viewer instead of PDF.js
-    if (this.isIOS && !this.isMobileView && paper.pdf_path) {
+    if (this.isIOS && !this.isMobileView && pdfFilePath) {
       // Show a button to open in native viewer
       container.innerHTML = `
         <div class="pdf-loading ios-pdf-prompt">
@@ -6354,7 +6228,7 @@ class ADSReader {
         btn.textContent = 'Opening...';
         btn.disabled = true;
         try {
-          const result = await window.electronAPI.openPdfNative(paper.pdf_path);
+          const result = await window.electronAPI.openPath(pdfFilePath);
           if (!result.success) {
             this.showNotification(result.error || 'Failed to open PDF', 'error');
           }
@@ -6389,7 +6263,7 @@ class ADSReader {
       }
     }
 
-    if (!paper.pdf_path) {
+    if (!pdfFilePath) {
       // Show helpful message with download options if available
       await this.showNoPdfMessage(container, paper);
       document.getElementById('total-pages').textContent = '0';
@@ -6408,7 +6282,7 @@ class ADSReader {
 
       // On iOS, use data loading (file:// and blob URLs don't work in WKWebView)
       if (this.isIOS) {
-        const pdfData = await window.electronAPI.getPdfAsBlob(paper.pdf_path);
+        const pdfData = await window.electronAPI.getPdfAsBlob(pdfFilePath);
         if (!pdfData) {
           // PDF file not found - show same message as desktop with download options
           await this.showNoPdfMessage(container, paper, true);
@@ -6423,17 +6297,9 @@ class ADSReader {
         });
         this.pdfDoc = await loadingTask.promise;
       } else {
-        // Desktop/Electron: use file:// URL
-        const pdfPath = await window.electronAPI.getPdfPath(paper.pdf_path);
-        if (!pdfPath) {
-          // PDF path exists in DB but file not found - show download options
-          await this.showNoPdfMessage(container, paper, true);
-          return;
-        }
-
-        // Load new PDF with cache busting to ensure fresh load
+        // Desktop/Electron: use file:// URL directly (pdfFilePath is absolute)
         loadingTask = pdfjsLib.getDocument({
-          url: `file://${pdfPath}`,
+          url: `file://${pdfFilePath}`,
           cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
           cMapPacked: true
         });
@@ -7353,16 +7219,17 @@ class ADSReader {
         return;
       }
 
-      // Call IPC to copy PDF to library and update database
-      const result = await window.electronAPI.attachPdfToPaper(paperId, pdfPath);
-      if (result.success) {
-        // Update local paper object
-        paper.pdf_path = result.pdfPath;
-        paper.pdf_source = 'ATTACHED';
+      // Use new paperFiles API to add the PDF
+      const result = await window.electronAPI.paperFiles.add(paperId, pdfPath, {
+        role: 'pdf',
+        sourceType: 'manual',
+        bibcode: paper.bibcode
+      });
 
+      if (result.success) {
         // Set as last viewed source so it shows by default
-        this.lastPdfSources[paperId] = 'ATTACHED';
-        window.electronAPI.setLastPdfSource(paperId, 'ATTACHED');
+        this.lastPdfSources[paperId] = 'manual';
+        window.electronAPI.setLastPdfSource?.(paperId, 'manual');
 
         // Re-render to show PDF button
         this.renderPaperList();
@@ -7430,7 +7297,7 @@ class ADSReader {
 
     // On mobile, switch to detail view for content tabs
     if (this.isMobileView) {
-      if (['pdf', 'abstract', 'refs', 'cites', 'bibtex', 'ai', 'library'].includes(tabName)) {
+      if (['pdf', 'abstract', 'refs', 'cites', 'bibtex', 'ai', 'library', 'ads-search'].includes(tabName)) {
         this.showMobileView('detail');
       }
     }
@@ -9559,56 +9426,38 @@ class ADSReader {
       return;
     }
 
-    // Filter to papers without PDFs
-    const papersWithoutPdfs = paperIds.filter(id => {
-      const paper = this.papers.find(p => p.id === id);
-      return paper && !paper.pdf_path;
-    });
+    // Filter to papers without PDFs using new paper_files API
+    const papersWithoutPdfs = [];
+    for (const id of paperIds) {
+      try {
+        const files = await window.electronAPI.paperFiles.list(id);
+        const hasPdf = files.some(f => f.file_role === 'pdf');
+        if (!hasPdf) {
+          papersWithoutPdfs.push(id);
+        }
+      } catch (e) {
+        papersWithoutPdfs.push(id); // Include if we can't check
+      }
+    }
 
     if (papersWithoutPdfs.length === 0) {
       this.showNotification('All selected papers already have PDFs', 'info');
       return;
     }
 
-    this.consoleLog(`Starting batch PDF download for ${papersWithoutPdfs.length} papers...`, 'info');
-
-    // Set up progress listener
-    window.electronAPI.onBatchDownloadProgress((data) => {
-      this.consoleLog(
-        `[${data.current}/${data.total}] ${data.bibcode || 'Unknown'}: ${data.status}`,
-        data.status === 'success' ? 'success' : data.status === 'skipped' ? 'info' : 'warn'
-      );
-    });
+    this.consoleLog(`Queuing ${papersWithoutPdfs.length} papers for PDF download...`, 'info');
 
     try {
-      const result = await window.electronAPI.batchDownloadPdfs(papersWithoutPdfs);
+      // Use the new download queue API
+      const result = await window.electronAPI.downloadQueue.enqueueMany(papersWithoutPdfs);
 
       if (result.success) {
-        const { success, failed, skipped } = result.results;
-        this.showNotification(
-          `Downloaded ${success.length} PDFs, ${skipped.length} skipped, ${failed.length} failed`,
-          failed.length > 0 ? 'warn' : 'success'
-        );
-
-        // Refresh paper list to show PDF icons
-        await this.loadPapers();
-        this.renderPaperList();
-
-        // Refresh current paper display if it got a PDF
-        if (this.selectedPaper && success.some(s => s.paperId === this.selectedPaper.id)) {
-          const updatedPaper = await window.electronAPI.getPaper(this.selectedPaper.id);
-          if (updatedPaper) {
-            this.selectedPaper = updatedPaper;
-            this.displayPaper(this.selectedPaper.id);
-          }
-        }
+        this.showNotification(`Queued ${result.queued} papers for download`, 'success');
       } else {
-        this.showNotification(result.error || 'Batch download failed', 'error');
+        this.showNotification(result.error || 'Failed to queue downloads', 'error');
       }
     } catch (error) {
       this.showNotification(`Batch download error: ${error.message}`, 'error');
-    } finally {
-      window.electronAPI.removeBatchDownloadListeners();
     }
   }
 
@@ -9876,16 +9725,16 @@ class ADSReader {
 
     // Update sidebar status
     document.getElementById('ads-status')?.classList.toggle('connected', this.hasAdsToken);
-    // Update drawer status
-    document.getElementById('drawer-ads-status')?.classList.toggle('connected', this.hasAdsToken);
+    // Update settings pane status
+    document.getElementById('settings-ads-status')?.classList.toggle('configured', this.hasAdsToken);
   }
 
   async checkProxyStatus() {
     const proxyUrl = await window.electronAPI.getLibraryProxy();
     // Update sidebar status
     document.getElementById('proxy-status')?.classList.toggle('connected', !!proxyUrl);
-    // Update drawer status
-    document.getElementById('drawer-proxy-status')?.classList.toggle('connected', !!proxyUrl);
+    // Update settings pane status
+    document.getElementById('settings-proxy-status')?.classList.toggle('configured', !!proxyUrl);
   }
 
   async showAdsTokenModal() {
@@ -9931,7 +9780,7 @@ class ADSReader {
     if (result.success) {
       this.hasAdsToken = true;
       document.getElementById('ads-status')?.classList.add('connected');
-      document.getElementById('drawer-ads-status')?.classList.add('connected');
+      document.getElementById('settings-ads-status')?.classList.add('configured');
       statusEl.className = 'modal-status success';
       statusEl.textContent = 'Token saved successfully!';
       setTimeout(() => this.hideAdsTokenModal(), 1000);
@@ -9966,7 +9815,7 @@ class ADSReader {
     await window.electronAPI.setLibraryProxy(proxyUrl);
 
     document.getElementById('proxy-status')?.classList.toggle('connected', !!proxyUrl);
-    document.getElementById('drawer-proxy-status')?.classList.toggle('connected', !!proxyUrl);
+    document.getElementById('settings-proxy-status')?.classList.toggle('configured', !!proxyUrl);
     statusEl.className = 'modal-status success';
     statusEl.textContent = proxyUrl ? 'Proxy saved!' : 'Proxy cleared!';
     setTimeout(() => this.hideLibraryProxyModal(), 1000);
@@ -10400,6 +10249,200 @@ class ADSReader {
     `;
   }
 
+  // ===== ADS Search Pane Methods =====
+
+  async executeAdsPaneSearch() {
+    const query = document.getElementById('ads-pane-query-input').value.trim();
+    if (!query) return;
+
+    const searchBtn = document.getElementById('ads-pane-search-btn');
+    searchBtn.textContent = 'Searching...';
+    searchBtn.disabled = true;
+
+    try {
+      const result = await window.electronAPI.adsImportSearch(query, { rows: 1000 });
+
+      if (result.success) {
+        this.adsPaneResults = result.data.papers;
+        this.adsPaneSelected = new Set();
+        document.getElementById('ads-pane-results-count').textContent =
+          `${result.data.numFound} papers found${result.data.numFound > 1000 ? ' (showing first 1000)' : ''}`;
+        document.getElementById('ads-pane-results-header').classList.remove('hidden');
+        this.renderAdsPaneResults();
+      } else {
+        this.showAdsPaneError(result.error);
+      }
+    } catch (error) {
+      this.showAdsPaneError(error.message);
+    } finally {
+      searchBtn.textContent = 'Search';
+      searchBtn.disabled = false;
+    }
+  }
+
+  renderAdsPaneResults() {
+    const listEl = document.getElementById('ads-pane-results-list');
+
+    if (!this.adsPaneResults || this.adsPaneResults.length === 0) {
+      listEl.innerHTML = `
+        <div class="ads-empty-state">
+          <p>Enter a search query to find papers in NASA ADS</p>
+        </div>
+      `;
+      this.updateAdsPaneSelectedCount();
+      return;
+    }
+
+    listEl.innerHTML = this.adsPaneResults.map((paper, index) => {
+      const authorsList = paper.authors || [];
+      const authorsDisplay = this.formatAuthorsForList(authorsList);
+      const hasArxiv = !!paper.arxiv_id;
+      const isInLibrary = paper.inLibrary;
+      const isSelected = this.adsPaneSelected?.has(index);
+      const abstractPreview = paper.abstract
+        ? paper.abstract.substring(0, 200) + (paper.abstract.length > 200 ? '...' : '')
+        : null;
+
+      return `
+        <div class="ads-result-item${isSelected ? ' selected' : ''}${isInLibrary ? ' in-library' : ''}" data-index="${index}">
+          <input type="checkbox" class="ads-result-checkbox"
+            ${isSelected ? 'checked' : ''} ${isInLibrary ? 'disabled' : ''}>
+          <div class="ads-result-content">
+            <div class="ads-result-title">${this.escapeHtml(paper.title)}</div>
+            <div class="ads-result-authors">${this.escapeHtml(authorsDisplay)}</div>
+            <div class="ads-result-meta">
+              <span>${paper.year || ''}</span>
+              ${paper.journal ? `<span class="ads-result-journal">${this.escapeHtml(paper.journal)}</span>` : ''}
+              ${paper.bibcode ? `<span>${paper.bibcode}</span>` : ''}
+            </div>
+            ${abstractPreview ? `<div class="ads-result-abstract">${this.escapeHtml(abstractPreview)}</div>` : ''}
+          </div>
+          ${isInLibrary ? '<span class="ads-result-status in-library">In Library</span>' : ''}
+          ${!isInLibrary && !hasArxiv ? '<span class="ads-result-status no-pdf">No arXiv</span>' : ''}
+        </div>
+      `;
+    }).join('');
+
+    // Add click handlers
+    listEl.querySelectorAll('.ads-result-item').forEach(item => {
+      const index = parseInt(item.dataset.index);
+      const paper = this.adsPaneResults[index];
+
+      if (!paper.inLibrary) {
+        item.addEventListener('click', (e) => {
+          if (e.target.type !== 'checkbox') {
+            this.toggleAdsPaneSelection(index);
+          }
+        });
+
+        const checkbox = item.querySelector('.ads-result-checkbox');
+        checkbox.addEventListener('change', () => {
+          this.toggleAdsPaneSelection(index);
+        });
+      }
+    });
+
+    this.updateAdsPaneSelectedCount();
+  }
+
+  toggleAdsPaneSelection(index) {
+    if (!this.adsPaneSelected) this.adsPaneSelected = new Set();
+    if (this.adsPaneSelected.has(index)) {
+      this.adsPaneSelected.delete(index);
+    } else {
+      this.adsPaneSelected.add(index);
+    }
+    this.renderAdsPaneResults();
+  }
+
+  adsPaneSelectAll() {
+    if (!this.adsPaneResults) return;
+    if (!this.adsPaneSelected) this.adsPaneSelected = new Set();
+    this.adsPaneResults.forEach((paper, index) => {
+      if (!paper.inLibrary) {
+        this.adsPaneSelected.add(index);
+      }
+    });
+    this.renderAdsPaneResults();
+  }
+
+  adsPaneSelectNone() {
+    this.adsPaneSelected = new Set();
+    this.renderAdsPaneResults();
+  }
+
+  updateAdsPaneSelectedCount() {
+    const count = this.adsPaneSelected?.size || 0;
+    document.getElementById('ads-pane-selected-count').textContent = `${count} selected`;
+    document.getElementById('ads-pane-import-btn').disabled = count === 0;
+  }
+
+  async importAdsPaneSelected() {
+    if (!this.adsPaneSelected || this.adsPaneSelected.size === 0) return;
+
+    const selectedPapers = Array.from(this.adsPaneSelected).map(index => this.adsPaneResults[index]);
+
+    // Show progress
+    document.getElementById('ads-pane-progress').classList.remove('hidden');
+    document.getElementById('ads-pane-progress-fill').style.width = '0%';
+    document.getElementById('ads-pane-progress-text').textContent = 'Starting import...';
+    document.getElementById('ads-pane-import-btn').disabled = true;
+
+    // Set up progress listener for pane
+    this.adsPaneImportActive = true;
+
+    try {
+      await window.electronAPI.adsImportPapers(selectedPapers);
+      // Completion handled by onImportComplete callback
+    } catch (error) {
+      this.showAdsPaneError(error.message);
+      document.getElementById('ads-pane-progress').classList.add('hidden');
+      document.getElementById('ads-pane-import-btn').disabled = false;
+      this.adsPaneImportActive = false;
+    }
+  }
+
+  updateAdsPaneImportProgress(data) {
+    const percent = (data.current / data.total) * 100;
+    document.getElementById('ads-pane-progress-fill').style.width = `${percent}%`;
+    document.getElementById('ads-pane-progress-text').textContent =
+      `Importing ${data.current} of ${data.total}: ${data.paper?.substring(0, 50) || ''}...`;
+  }
+
+  async handleAdsPaneImportComplete(results) {
+    const imported = results.imported?.length || 0;
+    const skipped = results.skipped?.length || 0;
+    const failed = results.failed?.length || 0;
+
+    document.getElementById('ads-pane-progress-fill').style.width = '100%';
+    document.getElementById('ads-pane-progress-text').textContent =
+      `Done! Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed}`;
+
+    // Reload papers list
+    await this.loadPapers();
+    const info = await window.electronAPI.getLibraryInfo(this.libraryPath);
+    if (info) this.updateLibraryDisplay(info);
+
+    // Hide progress after a delay and clear selection
+    setTimeout(() => {
+      document.getElementById('ads-pane-progress').classList.add('hidden');
+      document.getElementById('ads-pane-import-btn').disabled = false;
+      this.adsPaneSelected = new Set();
+      this.adsPaneImportActive = false;
+      // Re-render to show updated in-library status
+      this.executeAdsPaneSearch();
+    }, 2000);
+  }
+
+  showAdsPaneError(message) {
+    const listEl = document.getElementById('ads-pane-results-list');
+    listEl.innerHTML = `
+      <div class="ads-empty-state">
+        <p style="color: var(--error)">Error: ${this.escapeHtml(message)}</p>
+      </div>
+    `;
+  }
+
   // ===== LLM/AI Methods =====
 
   async checkLlmConnection() {
@@ -10516,10 +10559,10 @@ class ADSReader {
       sidebarStatus.classList.toggle('connected', status === 'connected');
     }
 
-    // Drawer status
-    const drawerStatus = document.getElementById('drawer-llm-status');
-    if (drawerStatus) {
-      drawerStatus.classList.toggle('connected', status === 'connected');
+    // Settings pane status
+    const settingsStatus = document.getElementById('settings-llm-status');
+    if (settingsStatus) {
+      settingsStatus.classList.toggle('configured', status === 'connected');
     }
 
     // AI panel status bar
@@ -12471,21 +12514,21 @@ Time: ${systemInfo.timestamp}`;
       logEl.removeChild(logEl.firstChild);
     }
 
-    // Sync to drawer console
-    const drawerLog = document.getElementById('drawer-console-log');
-    if (drawerLog) {
-      const drawerEntry = document.createElement('div');
-      drawerEntry.className = `console-line console-${type}`;
-      drawerEntry.textContent = `${time} ${message}`;
-      drawerLog.appendChild(drawerEntry);
+    // Sync to settings console
+    const settingsLog = document.getElementById('settings-console-log');
+    if (settingsLog) {
+      const settingsEntry = document.createElement('div');
+      settingsEntry.className = `console-line console-${type}`;
+      settingsEntry.textContent = `${time} ${message}`;
+      settingsLog.appendChild(settingsEntry);
 
-      // Keep only last 50 entries in drawer
-      while (drawerLog.children.length > 50) {
-        drawerLog.removeChild(drawerLog.firstChild);
+      // Keep only last 50 entries in settings
+      while (settingsLog.children.length > 50) {
+        settingsLog.removeChild(settingsLog.firstChild);
       }
 
       // Auto-scroll to bottom
-      drawerLog.scrollTop = drawerLog.scrollHeight;
+      settingsLog.scrollTop = settingsLog.scrollHeight;
     }
 
     // Sync to download queue console (for download-related messages)

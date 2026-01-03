@@ -19,7 +19,6 @@
 
   <!-- Top Bar -->
   <div class="mobile-top-bar" id="mobile-top-bar">
-    <button class="hamburger-btn" id="hamburger-btn" aria-label="Open menu">☰</button>
     <div class="mobile-toolbar-btns">
       <div class="mobile-sort-dropdown">
         <button class="mobile-tb-btn mobile-sort-btn" id="mobile-sort-btn" title="Sort papers">
@@ -82,105 +81,6 @@
     </div>
     <button class="action-sheet-cancel" id="read-status-cancel-btn">Cancel</button>
   </div>
-
-  <!-- Mobile Drawer -->
-  <div class="mobile-drawer-overlay" id="mobile-drawer-overlay"></div>
-  <aside class="mobile-drawer" id="mobile-drawer">
-    <div class="drawer-header">
-      <span class="drawer-title">Menu</span>
-      <button class="drawer-close" id="drawer-close-btn">✕</button>
-    </div>
-    <div class="drawer-content">
-      <!-- Console (Activity Log) -->
-      <div class="drawer-section">
-        <div class="drawer-section-label drawer-toggle" id="drawer-console-toggle">
-          Console
-          <span class="drawer-section-arrow">▶</span>
-        </div>
-        <div class="drawer-console hidden" id="drawer-console">
-          <div class="drawer-console-log" id="drawer-console-log"></div>
-        </div>
-      </div>
-
-      <!-- Keyboard Shortcuts -->
-      <div class="drawer-section">
-        <div class="drawer-section-label drawer-toggle" id="drawer-shortcuts-toggle">
-          Shortcuts
-          <span class="drawer-section-arrow">▶</span>
-        </div>
-        <div class="drawer-shortcuts hidden" id="drawer-shortcuts">
-          <div class="shortcuts-section-label">Navigate Tabs (Capital)</div>
-          <div class="drawer-shortcuts-grid">
-            <span class="shortcut-key">P</span><span>PDF</span>
-            <span class="shortcut-key">A</span><span>Abstract</span>
-            <span class="shortcut-key">R</span><span>Refs</span>
-            <span class="shortcut-key">C</span><span>Cites</span>
-            <span class="shortcut-key">I</span><span>Info</span>
-            <span class="shortcut-key">L</span><span>Library</span>
-          </div>
-          <div class="shortcuts-section-label">Actions (lowercase)</div>
-          <div class="drawer-shortcuts-grid">
-            <span class="shortcut-key">w</span><span>Open in ADS</span>
-            <span class="shortcut-key">a</span><span>Add to library</span>
-            <span class="shortcut-key">s</span><span>Sync with ADS</span>
-            <span class="shortcut-key">r</span><span>Cycle read status</span>
-            <span class="shortcut-key">p</span><span>Open in Preview</span>
-            <span class="shortcut-key">n</span><span>Notes panel</span>
-            <span class="shortcut-key">f</span><span>Focus mode</span>
-            <span class="shortcut-key">m</span><span>Toggle menu</span>
-          </div>
-          <div class="shortcuts-section-label">Paper Status</div>
-          <div class="drawer-shortcuts-grid">
-            <span class="shortcut-key">1/2/3</span><span>Unread/Reading/Read</span>
-            <span class="shortcut-key">⇧1/2/3</span><span>Rating 1/2/3</span>
-            <span class="shortcut-key">0</span><span>Clear rating</span>
-          </div>
-          <div class="shortcuts-section-label">Navigation & Other</div>
-          <div class="drawer-shortcuts-grid">
-            <span class="shortcut-key">/</span><span>Search papers</span>
-            <span class="shortcut-key">j/k</span><span>Next/Prev paper</span>
-            <span class="shortcut-key">⌘A</span><span>Select all</span>
-            <span class="shortcut-key">⌫</span><span>Delete paper</span>
-            <span class="shortcut-key">+/-</span><span>Zoom PDF</span>
-            <span class="shortcut-key">Esc</span><span>Exit/Cancel</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- ADS Searches -->
-      <div class="drawer-section">
-        <div class="drawer-section-label">
-          ADS Searches
-          <button class="drawer-add-btn" id="drawer-add-search-btn" title="New Search">+</button>
-        </div>
-        <div class="drawer-nav-items" id="drawer-searches-list">
-          <div class="drawer-placeholder">No saved searches</div>
-        </div>
-      </div>
-
-      <!-- Settings -->
-      <div class="drawer-section drawer-section-bottom">
-        <div class="drawer-section-label">Settings</div>
-        <div class="drawer-nav-items">
-          <button class="drawer-nav-item" id="drawer-ads-token-btn">
-            🔑 ADS API Token
-            <span class="nav-status" id="drawer-ads-status">●</span>
-          </button>
-          <button class="drawer-nav-item" id="drawer-proxy-btn">
-            🏛️ Library Proxy
-            <span class="nav-status" id="drawer-proxy-status">●</span>
-          </button>
-          <button class="drawer-nav-item" id="drawer-llm-btn">
-            🤖 AI Integration
-            <span class="nav-status" id="drawer-llm-status">●</span>
-          </button>
-          <button class="drawer-nav-item" id="drawer-settings-btn">
-            ⚙️ PDF Preferences
-          </button>
-        </div>
-      </div>
-    </div>
-  </aside>
 
   <!-- Loading Screen (shown while checking for existing library) -->
   <div id="loading-screen" class="screen">
@@ -352,6 +252,7 @@
           <span class="shortcut-key">C</span><span>Cites tab</span>
           <span class="shortcut-key">I</span><span>Info tab</span>
           <span class="shortcut-key">L</span><span>Library tab</span>
+          <span class="shortcut-key">S</span><span>ADS Search</span>
           <span class="shortcut-key">p</span><span>Open Preview</span>
           <span class="shortcut-key">n</span><span>Notes Panel</span>
           <span class="shortcut-key">⌘⇧N</span><span>Focus Mode</span>
@@ -693,6 +594,142 @@
                 </div>
               </div>
 
+              <!-- ADS Search Tab -->
+              <div class="tab-pane hidden" id="tab-ads-search">
+                <div class="ads-search-content">
+                  <div class="ads-search-header">
+                    <h3>Search NASA ADS</h3>
+                  </div>
+
+                  <div class="ads-search-bar">
+                    <input type="text" id="ads-pane-query-input" placeholder="e.g., author:smith year:2020-2024 galaxy">
+                    <button class="primary-button" id="ads-pane-search-btn">Search</button>
+                  </div>
+
+                  <div class="ads-shortcuts">
+                    <button class="ads-shortcut-btn" data-insert="author:" data-target="ads-pane-query-input">author:</button>
+                    <button class="ads-shortcut-btn" data-insert="year:" data-target="ads-pane-query-input">year:</button>
+                    <button class="ads-shortcut-btn" data-insert="title:" data-target="ads-pane-query-input">title:</button>
+                    <button class="ads-shortcut-btn" data-insert="abs:" data-target="ads-pane-query-input">abs:</button>
+                    <button class="ads-shortcut-btn" data-insert="bibcode:" data-target="ads-pane-query-input">bibcode:</button>
+                    <button class="ads-shortcut-btn" data-insert="arXiv:" data-target="ads-pane-query-input">arXiv:</button>
+                    <button class="ads-shortcut-btn" data-insert="doi:" data-target="ads-pane-query-input">doi:</button>
+                  </div>
+
+                  <div class="ads-results-header hidden" id="ads-pane-results-header">
+                    <span id="ads-pane-results-count">0 papers found</span>
+                    <div class="ads-select-buttons">
+                      <button class="text-button" id="ads-pane-select-all-btn">Select All</button>
+                      <button class="text-button" id="ads-pane-select-none-btn">None</button>
+                    </div>
+                  </div>
+
+                  <div class="ads-results-list" id="ads-pane-results-list">
+                    <div class="ads-empty-state">
+                      <p>Enter a search query to find papers in NASA ADS</p>
+                    </div>
+                  </div>
+
+                  <div class="ads-progress hidden" id="ads-pane-progress">
+                    <div class="progress-bar">
+                      <div class="progress-fill" id="ads-pane-progress-fill"></div>
+                    </div>
+                    <div class="progress-text" id="ads-pane-progress-text">Importing...</div>
+                  </div>
+
+                  <div class="ads-pane-footer">
+                    <span class="ads-selected-count" id="ads-pane-selected-count">0 selected</span>
+                    <button class="primary-button" id="ads-pane-import-btn" disabled>Import Selected</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Settings Tab -->
+              <div class="tab-pane hidden" id="tab-settings">
+                <div class="settings-pane">
+                  <!-- Console Section -->
+                  <div class="settings-section">
+                    <div class="settings-section-header collapsible" data-toggle="settings-console">
+                      <span>Console</span>
+                      <span class="section-arrow">▶</span>
+                    </div>
+                    <div class="settings-section-content hidden" id="settings-console">
+                      <div class="settings-console-log" id="settings-console-log"></div>
+                    </div>
+                  </div>
+
+                  <!-- Keyboard Shortcuts Section -->
+                  <div class="settings-section">
+                    <div class="settings-section-header collapsible" data-toggle="settings-shortcuts">
+                      <span>Keyboard Shortcuts</span>
+                      <span class="section-arrow">▶</span>
+                    </div>
+                    <div class="settings-section-content hidden" id="settings-shortcuts">
+                      <div class="shortcuts-section-label">Navigate Tabs (Capital)</div>
+                      <div class="settings-shortcuts-grid">
+                        <span class="shortcut-key">P</span><span>PDF</span>
+                        <span class="shortcut-key">A</span><span>Abstract</span>
+                        <span class="shortcut-key">R</span><span>Refs</span>
+                        <span class="shortcut-key">C</span><span>Cites</span>
+                        <span class="shortcut-key">I</span><span>Info</span>
+                        <span class="shortcut-key">L</span><span>Library</span>
+                        <span class="shortcut-key">S</span><span>ADS Search</span>
+                        <span class="shortcut-key">⌘,</span><span>Settings</span>
+                      </div>
+                      <div class="shortcuts-section-label">Actions (lowercase)</div>
+                      <div class="settings-shortcuts-grid">
+                        <span class="shortcut-key">w</span><span>Open in ADS</span>
+                        <span class="shortcut-key">a</span><span>Add to library</span>
+                        <span class="shortcut-key">s</span><span>Sync with ADS</span>
+                        <span class="shortcut-key">r</span><span>Cycle read status</span>
+                        <span class="shortcut-key">p</span><span>Open in Preview</span>
+                        <span class="shortcut-key">n</span><span>Notes panel</span>
+                        <span class="shortcut-key">F</span><span>Focus mode</span>
+                      </div>
+                      <div class="shortcuts-section-label">Paper Status</div>
+                      <div class="settings-shortcuts-grid">
+                        <span class="shortcut-key">1/2/3</span><span>Unread/Reading/Read</span>
+                        <span class="shortcut-key">⇧1/2/3</span><span>Rating 1/2/3</span>
+                        <span class="shortcut-key">0</span><span>Clear rating</span>
+                      </div>
+                      <div class="shortcuts-section-label">Navigation & Other</div>
+                      <div class="settings-shortcuts-grid">
+                        <span class="shortcut-key">/</span><span>Search papers</span>
+                        <span class="shortcut-key">j/k</span><span>Next/Prev paper</span>
+                        <span class="shortcut-key">⌘A</span><span>Select all</span>
+                        <span class="shortcut-key">⌫</span><span>Delete paper</span>
+                        <span class="shortcut-key">+/-</span><span>Zoom PDF</span>
+                        <span class="shortcut-key">Esc</span><span>Exit/Cancel</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Configuration Section -->
+                  <div class="settings-section">
+                    <div class="settings-section-header">
+                      <span>Configuration</span>
+                    </div>
+                    <div class="settings-section-content">
+                      <button class="settings-item" id="settings-ads-token-btn">
+                        🔑 ADS API Token
+                        <span class="settings-status" id="settings-ads-status">●</span>
+                      </button>
+                      <button class="settings-item" id="settings-proxy-btn">
+                        🏛️ Library Proxy
+                        <span class="settings-status" id="settings-proxy-status">●</span>
+                      </button>
+                      <button class="settings-item" id="settings-llm-btn">
+                        🤖 AI Integration
+                        <span class="settings-status" id="settings-llm-status">●</span>
+                      </button>
+                      <button class="settings-item" id="settings-pdf-btn">
+                        ⚙️ PDF Preferences
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <!-- Semantic Search Info Popup -->
               <div class="info-popup hidden" id="semantic-search-info-popup">
                 <div class="info-popup-content">
@@ -776,6 +813,8 @@
             <button class="tab-btn" data-tab="bibtex" title="Info">ⓘ</button>
             <button class="tab-btn" data-tab="ai" title="AI">AI</button>
             <button class="tab-btn" data-tab="library" title="Library">Lib</button>
+            <button class="tab-btn" data-tab="ads-search" title="Search ADS">ADS</button>
+            <button class="tab-btn" data-tab="settings" title="Settings (⌘,)">⚙️</button>
             <button class="tab-btn sync-tab-btn" id="sync-tab-btn" title="Sync with ADS">⟳</button>
             <button class="tab-btn mobile-only action-tab" id="download-tab-btn" title="Download/View PDF">⬇</button>
             <button class="tab-btn mobile-only action-tab" id="attach-tab-btn" title="Attach files">📎</button>

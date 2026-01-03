@@ -259,23 +259,26 @@ class FileManager {
     this.db.deletePaperFile(fileId);
 
     // If no other records use this file, delete the actual file
-    // Only attempt if we have a hash (new system) or filename (legacy)
-    if (!isShared && fileHash && fileRecord.filename) {
-      const storagePath = this.getStoragePath(fileRecord);
-      if (fs.existsSync(storagePath)) {
-        await fs.promises.unlink(storagePath);
+    if (!isShared) {
+      // Try new content-addressed storage location first
+      if (fileHash && fileRecord.filename) {
+        const storagePath = this.getStoragePath(fileRecord);
+        if (fs.existsSync(storagePath)) {
+          await fs.promises.unlink(storagePath);
 
-        // Try to remove the prefix directory if empty
-        const prefixDir = path.dirname(storagePath);
-        try {
-          const files = await fs.promises.readdir(prefixDir);
-          if (files.length === 0) {
-            await fs.promises.rmdir(prefixDir);
+          // Try to remove the prefix directory if empty
+          const prefixDir = path.dirname(storagePath);
+          try {
+            const files = await fs.promises.readdir(prefixDir);
+            if (files.length === 0) {
+              await fs.promises.rmdir(prefixDir);
+            }
+          } catch (err) {
+            // Ignore - directory may not be empty or already removed
           }
-        } catch (err) {
-          // Ignore - directory may not be empty or already removed
         }
       }
+
     }
 
     // Note: Symlink cleanup would require tracking which paper/bibcode
@@ -324,6 +327,35 @@ class FileManager {
   }
 
   /**
+   * Set a file as the primary PDF for a paper
+   * This updates the source_type to 'publisher' (highest priority) to make it primary
+   * @param {number} paperId - Paper ID
+   * @param {number} fileId - File ID to set as primary
+   * @returns {Promise<void>}
+   */
+  async setPrimaryPdf(paperId, fileId) {
+    // Get all PDF files for this paper
+    const files = await this.getFilesForPaper(paperId, { role: FILE_ROLES.PDF });
+
+    // Find the file to set as primary
+    const targetFile = files.find(f => f.id === fileId);
+    if (!targetFile) {
+      throw new Error(`File ${fileId} not found for paper ${paperId}`);
+    }
+
+    // If already the highest priority source type, nothing to do
+    if (targetFile.source_type === 'publisher') {
+      return;
+    }
+
+    // Update the source_type to 'publisher' to make it highest priority
+    // This is a simple approach - a more sophisticated one would add a is_primary flag
+    this.db.updatePaperFile(fileId, {
+      source_type: 'publisher'
+    });
+  }
+
+  /**
    * Update file status (for download tracking)
    * @param {number} fileId - File ID
    * @param {string} status - New status
@@ -357,6 +389,25 @@ class FileManager {
    */
   async findByHash(hash) {
     return this.db.getFileByHash(hash);
+  }
+
+  /**
+   * Get a file record by ID
+   * @param {number} fileId - File ID
+   * @returns {Object|null} File record or null if not found
+   */
+  getFile(fileId) {
+    const fileRecord = this.db.getPaperFile(fileId);
+    if (!fileRecord) return null;
+
+    // Add the computed path for convenience
+    // Handle legacy files without file_hash
+    if (fileRecord.file_hash && fileRecord.filename) {
+      fileRecord.path = this.getStoragePath(fileRecord);
+    } else {
+      fileRecord.path = null;
+    }
+    return fileRecord;
   }
 
   /**
