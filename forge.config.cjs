@@ -51,17 +51,12 @@ module.exports = {
     // macOS code signing configuration
     // Uses environment variables for flexibility between dev and CI environments
     osxSign: {
-      identity: 'Developer ID Application: THOMAS G ABEL (QG3MEYVHMS)',
-      hardenedRuntime: true,
-      entitlements: 'entitlements.mac.plist',
-      'entitlements-inherit': 'entitlements.mac.plist',
-      'gatekeeper-assess': false,
-      strictVerify: false
+      identity: 'Developer ID Application: THOMAS G ABEL (QG3MEYVHMS)'
     },
-    // macOS notarization (using keychain profile)
-    osxNotarize: {
-      keychainProfile: 'ADS-Reader-Notarize'
-    },
+    // macOS notarization - disabled during make, done manually after
+    // osxNotarize: {
+    //   keychainProfile: 'ADS-Reader-Notarize'
+    // },
     // Extra resources to include
     extraResource: [
       './entitlements.mac.plist',
