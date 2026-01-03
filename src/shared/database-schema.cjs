@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS papers (
   modified_date TEXT,
   import_source TEXT,
   import_source_key TEXT,
-  citation_count INTEGER DEFAULT 0
+  citation_count INTEGER DEFAULT 0,
+  available_sources TEXT
 );
 
 CREATE TABLE IF NOT EXISTS collections (

@@ -5912,6 +5912,19 @@ ipcMain.handle('smart-search-add-to-library', async (event, { bibcode, searchRes
       }
     }
 
+    // Fetch available PDF sources from ADS
+    let availableSources = [];
+    try {
+      const esources = await adsApi.getEsources(token, bibcode);
+      if (esources) {
+        if (esources.includes('EPRINT_PDF')) availableSources.push('arxiv');
+        if (esources.includes('PUB_PDF')) availableSources.push('publisher');
+        if (esources.includes('ADS_PDF')) availableSources.push('ads_scan');
+      }
+    } catch (e) {
+      // eSources fetch failed, continue without it
+    }
+
     // Create paper with metadata only - NO PDF download per user requirement
     const paperId = database.addPaper({
       bibcode: adsDoc.bibcode,
@@ -5925,7 +5938,8 @@ ipcMain.handle('smart-search-add-to-library', async (event, { bibcode, searchRes
       keywords: adsDoc.keyword || [],
       citation_count: adsDoc.citation_count || 0,
       import_source: 'ads_smart_search',
-      import_source_key: bibcode
+      import_source_key: bibcode,
+      available_sources: availableSources.length > 0 ? JSON.stringify(availableSources) : null
     });
 
     // Fetch and store BibTeX
