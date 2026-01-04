@@ -3287,36 +3287,82 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
     failed: []
   };
 
-  for (let i = 0; i < selectedPapers.length; i++) {
-    let paper = selectedPapers[i];
+  // Phase 1: Filter out duplicates (quick, no network calls)
+  const papersToImport = [];
+  for (const paper of selectedPapers) {
+    if (paper.bibcode) {
+      const existing = database.getPaperByBibcode(paper.bibcode);
+      if (existing) {
+        sendConsoleLog(`[${paper.bibcode}] Already in library, skipping`, 'info');
+        results.skipped.push({ paper, reason: 'Already in library' });
+        continue;
+      }
+    }
+    papersToImport.push(paper);
+  }
 
-    // Send progress update
-    mainWindow.webContents.send('import-progress', {
-      current: i + 1,
-      total: selectedPapers.length,
-      paper: paper.title || paper.bibcode || 'Unknown'
-    });
+  if (papersToImport.length === 0) {
+    mainWindow.webContents.send('import-complete', results);
+    return { success: true, results };
+  }
 
+  sendConsoleLog(`Importing ${papersToImport.length} new papers...`, 'info');
+
+  // Phase 2: Batch fetch all BibTeX entries in one call (much faster)
+  const bibcodes = papersToImport.filter(p => p.bibcode).map(p => p.bibcode);
+  let bibtexMap = new Map();
+
+  if (bibcodes.length > 0) {
     try {
-      // Check if already in library - improved duplicate detection
-      if (paper.bibcode) {
-        const existing = database.getPaperByBibcode(paper.bibcode);
-        if (existing) {
-          // Paper already exists in library - skip
-          sendConsoleLog(`[${paper.bibcode}] Already in library, skipping`, 'info');
-          results.skipped.push({ paper, reason: 'Already in library' });
-          continue;
+      sendConsoleLog(`Batch fetching BibTeX for ${bibcodes.length} papers...`, 'info');
+      const bibtexStr = await adsApi.exportBibtex(token, bibcodes);
+      if (bibtexStr) {
+        // Parse the combined bibtex to map by bibcode
+        const entries = bibtexStr.split(/(?=@)/);
+        for (const entry of entries) {
+          if (!entry.trim()) continue;
+          // Try to extract bibcode from adsurl field
+          const adsurlMatch = entry.match(/adsurl\s*=\s*\{[^}]*\/abs\/([^}\/]+)/i);
+          if (adsurlMatch) {
+            const extractedBibcode = adsurlMatch[1];
+            const matchingBibcode = bibcodes.find(b =>
+              b === extractedBibcode ||
+              b.replace(/\./g, '') === extractedBibcode.replace(/\./g, '')
+            );
+            if (matchingBibcode) {
+              bibtexMap.set(matchingBibcode, '@' + entry.replace(/^@/, '').trim());
+              continue;
+            }
+          }
+          // Fallback: check if entry contains any of our bibcodes
+          for (const bibcode of bibcodes) {
+            if (entry.includes(bibcode) || entry.includes(bibcode.replace(/\./g, ''))) {
+              bibtexMap.set(bibcode, '@' + entry.replace(/^@/, '').trim());
+              break;
+            }
+          }
         }
       }
+      sendConsoleLog(`Got BibTeX for ${bibtexMap.size} papers`, 'success');
+    } catch (e) {
+      sendConsoleLog(`Batch BibTeX fetch failed: ${e.message}`, 'warn');
+    }
+  }
 
-      sendConsoleLog(`[${paper.bibcode || 'unknown'}] Importing...`, 'info');
+  // Phase 3: Process papers in parallel batches (10 at a time)
+  const CONCURRENCY = 10;
+  sendConsoleLog(`Processing ${papersToImport.length} papers (${CONCURRENCY} at a time)...`, 'info');
+
+  // Helper to process a single paper
+  const processPaper = async (paper, index) => {
+    try {
+      let processedPaper = { ...paper };
 
       // If we only have bibcode, fetch full metadata from ADS
       if (paper.bibcode && !paper.title) {
-        sendConsoleLog(`[${paper.bibcode}] Fetching metadata...`, 'info');
         const metadata = await adsApi.getByBibcode(token, paper.bibcode);
         if (metadata) {
-          paper = {
+          processedPaper = {
             bibcode: metadata.bibcode,
             doi: metadata.doi?.[0],
             arxiv_id: extractArxivId(metadata.identifier),
@@ -3327,17 +3373,14 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
             abstract: metadata.abstract,
             keywords: metadata.keyword
           };
-        } else {
-          sendConsoleLog(`[${paper.bibcode}] Could not fetch metadata`, 'warn');
         }
       }
 
-      // Fetch available PDF sources (metadata only - no download)
+      // Fetch available PDF sources
       let availableSources = [];
-      if (paper.bibcode) {
+      if (processedPaper.bibcode) {
         try {
-          sendConsoleLog(`[${paper.bibcode}] Fetching PDF sources...`, 'info');
-          const esources = await adsApi.getEsources(token, paper.bibcode);
+          const esources = await adsApi.getEsources(token, processedPaper.bibcode);
           availableSources = (esources || [])
             .filter(e => e && ['EPRINT_PDF', 'PUB_PDF', 'ADS_PDF'].some(t => (e.link_type || e.type || '').includes(t)))
             .map(e => {
@@ -3348,56 +3391,76 @@ ipcMain.handle('ads-import-papers', async (event, selectedPapers) => {
               return null;
             })
             .filter(Boolean);
-          if (availableSources.length > 0) {
-            sendConsoleLog(`[${paper.bibcode}] Available sources: ${availableSources.join(', ')}`, 'success');
-          }
         } catch (e) {
           // Esources fetch failed, not critical
         }
       }
 
-      // Get BibTeX for this paper
-      let bibtexStr = null;
-      if (paper.bibcode) {
-        try {
-          bibtexStr = await adsApi.exportBibtex(token, paper.bibcode);
-        } catch (e) {
-          // BibTeX fetch failed, not critical
-        }
-      }
+      // Get BibTeX from batch-fetched map
+      const bibtexStr = bibtexMap.get(processedPaper.bibcode) || null;
 
-      // Add paper to database (metadata only - no PDF)
+      // Add paper to database
       const paperId = database.addPaper({
-        bibcode: paper.bibcode,
-        doi: paper.doi,
-        arxiv_id: paper.arxiv_id,
-        title: paper.title,
-        authors: paper.authors,
-        year: paper.year,
-        journal: paper.journal,
-        abstract: paper.abstract,
-        keywords: paper.keywords,
+        bibcode: processedPaper.bibcode,
+        doi: processedPaper.doi,
+        arxiv_id: processedPaper.arxiv_id,
+        title: processedPaper.title,
+        authors: processedPaper.authors,
+        year: processedPaper.year,
+        journal: processedPaper.journal,
+        abstract: processedPaper.abstract,
+        keywords: processedPaper.keywords,
         pdf_path: null,
         text_path: null,
         bibtex: bibtexStr,
         available_sources: availableSources.length > 0 ? JSON.stringify(availableSources) : null
       });
 
-      sendConsoleLog(`[${paper.bibcode}] ✓ Imported`, 'success');
-      results.imported.push({
-        paper,
+      sendConsoleLog(`[${processedPaper.bibcode}] ✓ Imported`, 'success');
+      return {
+        success: true,
+        paper: processedPaper,
         id: paperId,
         hasPdf: false,
-        availableSources: availableSources
-      });
-
+        availableSources
+      };
     } catch (error) {
       sendConsoleLog(`[${paper.bibcode || 'unknown'}] ✗ Import failed: ${error.message}`, 'error');
-      results.failed.push({ paper, error: error.message });
+      return { success: false, paper, error: error.message };
+    }
+  };
+
+  // Process in batches
+  for (let i = 0; i < papersToImport.length; i += CONCURRENCY) {
+    const batch = papersToImport.slice(i, i + CONCURRENCY);
+    const batchNum = Math.floor(i / CONCURRENCY) + 1;
+    const totalBatches = Math.ceil(papersToImport.length / CONCURRENCY);
+
+    // Send progress update
+    mainWindow.webContents.send('import-progress', {
+      current: i + 1,
+      total: papersToImport.length + results.skipped.length,
+      paper: `Batch ${batchNum}/${totalBatches}`
+    });
+
+    // Process batch in parallel
+    const batchResults = await Promise.all(
+      batch.map((paper, idx) => processPaper(paper, i + idx))
+    );
+
+    // Collect results
+    for (const result of batchResults) {
+      if (result.success) {
+        results.imported.push(result);
+      } else {
+        results.failed.push({ paper: result.paper, error: result.error });
+      }
     }
 
-    // Small delay between imports for rate limiting
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // Small delay between batches to avoid rate limits
+    if (i + CONCURRENCY < papersToImport.length) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
   }
 
   // Update master.bib
