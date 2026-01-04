@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Download Queue
+ * Bibliac - Download Queue
  *
  * A decoupled download queue that handles PDF downloads separately from metadata sync.
  * Features retry logic, progress events, and priority-based ordering.

@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - Platform Adapter Interface
+ * Bibliac Core - Platform Adapter Interface
  *
  * Abstract base class defining the interface that all platform adapters must implement.
  * This allows the core library to work across Electron, Capacitor, and future platforms.

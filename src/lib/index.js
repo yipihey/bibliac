@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core Library
+ * Bibliac Core Library
  *
  * This is the main entry point for the shared core library.
  * It exports all public APIs that can be used by:
@@ -8,9 +8,9 @@
  * - Future apps embedding this as a plugin
  *
  * Usage:
- *   import { ADSApi, BibtexParser, LibraryManager } from '@adsreader/core';
+ *   import { ADSApi, BibtexParser, LibraryManager } from '@bibliac/core';
  *   // or
- *   import * as AdsReaderCore from './src/lib';
+ *   import * as BibliacCore from './src/lib';
  */
 
 // Re-export all modules

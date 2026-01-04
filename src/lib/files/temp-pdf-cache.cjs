@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Temporary PDF Cache
+ * Bibliac - Temporary PDF Cache
  *
  * In-memory LRU cache for temporarily downloaded PDFs.
  * Used for viewing PDFs from ADS search results without saving to disk.

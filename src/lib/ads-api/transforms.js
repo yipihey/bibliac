@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - ADS Data Transforms
+ * Bibliac Core - ADS Data Transforms
  *
  * Functions for transforming ADS API data to our internal format.
  * These are pure functions with no platform dependencies.

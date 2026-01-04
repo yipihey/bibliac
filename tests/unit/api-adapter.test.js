@@ -392,7 +392,7 @@ describe('api-adapter.js', () => {
 
       // Mock local library directory exists with database
       Filesystem.readdir.mockImplementation(async ({ path, directory }) => {
-        if (directory === 'DOCUMENTS' && path === 'ADSReader') {
+        if (directory === 'DOCUMENTS' && path === 'Bibliac') {
           return {
             files: [
               { name: 'library.sqlite', type: 'file' },
@@ -409,7 +409,7 @@ describe('api-adapter.js', () => {
       const result = await capacitorAPI.checkMigrationNeeded();
 
       expect(result.needed).toBe(true);
-      expect(result.existingPath).toBe('ADSReader');
+      expect(result.existingPath).toBe('Bibliac');
       expect(result.iCloudAvailable).toBe(true);
     });
 
@@ -447,9 +447,9 @@ describe('api-adapter.js', () => {
       });
 
       // Mock file content
-      mockFilesystemStorage.set('DOCUMENTS:ADSReader/library.sqlite', 'db-content');
+      mockFilesystemStorage.set('DOCUMENTS:Bibliac/library.sqlite', 'db-content');
 
-      const result = await capacitorAPI.migrateLibraryToICloud({ libraryPath: 'ADSReader' });
+      const result = await capacitorAPI.migrateLibraryToICloud({ libraryPath: 'Bibliac' });
 
       expect(result.success).toBe(true);
       expect(result.path).toBe('ADS Library');
@@ -473,7 +473,7 @@ describe('api-adapter.js', () => {
       const { Filesystem } = await import('@capacitor/filesystem');
       Filesystem.readdir.mockRejectedValue(new Error('iCloud not available'));
 
-      const result = await capacitorAPI.migrateLibraryToICloud({ libraryPath: 'ADSReader' });
+      const result = await capacitorAPI.migrateLibraryToICloud({ libraryPath: 'Bibliac' });
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('iCloud');
@@ -578,7 +578,7 @@ describe('api-adapter.js', () => {
 
       expect(result.success).toBe(true);
       expect(Filesystem.deleteFile).toHaveBeenCalledWith({
-        path: 'ADSReader/papers/test.pdf',
+        path: 'Bibliac/papers/test.pdf',
         directory: 'DOCUMENTS'
       });
       expect(MobileDB.deletePaper).toHaveBeenCalledWith(1);

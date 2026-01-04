@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Database Schema (CommonJS version)
+ * Bibliac - Database Schema (CommonJS version)
  * Shared schema definition for desktop platform
  */
 

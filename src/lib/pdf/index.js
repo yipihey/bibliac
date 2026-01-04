@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - PDF Module
+ * Bibliac Core - PDF Module
  *
  * Platform-agnostic PDF utilities and types.
  */

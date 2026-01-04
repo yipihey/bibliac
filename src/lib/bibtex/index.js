@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - BibTeX Module
+ * Bibliac Core - BibTeX Module
  *
  * Platform-agnostic BibTeX parsing and generation.
  */

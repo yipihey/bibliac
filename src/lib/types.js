@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - Type Definitions (JSDoc)
+ * Bibliac Core - Type Definitions (JSDoc)
  *
  * This file contains JSDoc type definitions that serve as the API contract
  * between the core library and platform adapters.

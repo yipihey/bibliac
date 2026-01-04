@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - Database Schema
+ * Bibliac Core - Database Schema
  *
  * Shared schema definition for both desktop and mobile platforms.
  */

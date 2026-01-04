@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Files Module
+ * Bibliac - Files Module
  *
  * Provides download queue, download strategies, and file management.
  */

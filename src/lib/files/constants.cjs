@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Paper Files Constants
+ * Bibliac - Paper Files Constants
  * Constants for the unified paper_files system and download queue
  */
 

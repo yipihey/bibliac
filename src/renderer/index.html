@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://sql.js.org; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://sql.js.org 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' file: https://sql.js.org https://api.adsabs.harvard.edu https://*.adsabs.harvard.edu https://arxiv.org https://*.arxiv.org; worker-src 'self' blob:">
-  <title>ADS Reader</title>
+  <title>Bibliac</title>
   <link rel="stylesheet" href="styles.css">
   <!-- KaTeX for LaTeX rendering -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -53,7 +53,7 @@
       <button class="search-btn" id="mobile-search-btn" aria-label="Search">🔍</button>
       <button class="mobile-tb-btn" id="mobile-select-btn" title="Select multiple">Select</button>
     </div>
-    <img src="logo.svg" alt="ADS Reader" class="top-bar-logo" id="mobile-title">
+    <img src="logo.svg" alt="Bibliac" class="top-bar-logo" id="mobile-title">
   </div>
 
   <!-- iOS Selection Mode Bar -->
@@ -100,8 +100,8 @@
   <!-- Loading Screen (shown while checking for existing library) -->
   <div id="loading-screen" class="screen">
     <div class="loading-container">
-      <img src="logo.svg" alt="ADS Reader" class="loading-icon">
-      <h1>ADS Reader</h1>
+      <img src="logo.svg" alt="Bibliac" class="loading-icon">
+      <h1>Bibliac</h1>
       <p class="loading-text">Loading library...</p>
       <div class="loading-spinner"></div>
     </div>
@@ -110,9 +110,9 @@
   <!-- Setup Screen -->
   <div id="setup-screen" class="screen hidden">
     <div class="setup-container">
-      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
-      <h1>Welcome to ADS Reader</h1>
-      <p class="setup-subtitle">A scientific publication reader with NASA ADS integration</p>
+      <img src="logo.svg" alt="Bibliac" class="setup-icon">
+      <h1>Welcome to Bibliac</h1>
+      <p class="setup-subtitle">Scientific bibliography manager with multi-source search plugins</p>
 
       <div class="setup-section">
         <h2>Choose Your Library Location</h2>
@@ -153,7 +153,7 @@
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <h1>ADS Reader</h1>
+        <h1>Bibliac</h1>
         <div class="sidebar-header-actions">
           <button id="reload-btn" class="reload-btn" title="Reload App (Cmd+R)">↻</button>
           <button id="sidebar-collapse-btn" class="collapse-btn" title="Hide Sidebar (⌘⌥S)">◀</button>
@@ -1360,7 +1360,7 @@
   <!-- Library Migration Modal -->
   <div class="modal hidden" id="migration-modal">
     <div class="modal-content" style="max-width: 500px;">
-      <h2>Welcome to the New ADS Reader</h2>
+      <h2>Welcome to Bibliac</h2>
       <p id="migration-message">
         We found an existing library with <strong id="migration-paper-count">0</strong> papers.
         Would you like to enable iCloud sync so your library is accessible on all your devices?

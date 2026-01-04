@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Preload Script
+ * Bibliac - Preload Script
  * Exposes IPC methods to the renderer process via window.electronAPI
  *
  * Methods are organized by category:

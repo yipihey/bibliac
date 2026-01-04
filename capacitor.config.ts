@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'io.adsreader.app',
-  appName: 'ADS Reader',
+  appId: 'io.bibliac.app',
+  appName: 'Bibliac',
   webDir: 'dist',
 
   ios: {

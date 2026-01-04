@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - PDF Utilities
+ * Bibliac Core - PDF Utilities
  *
  * Pure functions for PDF file management.
  */

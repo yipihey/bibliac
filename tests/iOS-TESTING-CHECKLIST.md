@@ -100,7 +100,7 @@
 ### Migration to iCloud
 - [ ] "Migrate to iCloud" option works
 - [ ] All papers copied to iCloud location
-- [ ] Old Documents/ADSReader deleted
+- [ ] Old Documents/Bibliac deleted
 - [ ] Database intact after migration
 
 ### Keep Local

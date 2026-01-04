@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// ShareHelper.swift - Native macOS share sheet for ADS Reader
+// ShareHelper.swift - Native macOS share sheet for Bibliac
 // Compile: swiftc -o ShareHelper ShareHelper.swift -framework AppKit
 
 import AppKit

@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Capacitor API Adapter
+ * Bibliac - Capacitor API Adapter
  * Provides the same interface as window.electronAPI but for iOS/Capacitor
  *
  * This module is dynamically imported by src/renderer/api.js when running on iOS.
@@ -42,7 +42,7 @@ let cloudLlmService = null;
 let dbInitialized = false;
 
 // Library folder name in Documents (use constant or fallback)
-const LIBRARY_FOLDER = LIBRARY_FOLDER_NAME || 'ADSReader';
+const LIBRARY_FOLDER = LIBRARY_FOLDER_NAME || 'Bibliac';
 
 // Legacy JSON file for migration
 const LEGACY_PAPERS_FILE = 'papers.json';
@@ -3167,7 +3167,7 @@ const capacitorAPI = {
         version: 1,
         format: 'adslib',
         exportDate: new Date().toISOString(),
-        exportedBy: 'ADS Reader iOS',
+        exportedBy: 'Bibliac iOS',
         platform: 'iOS',
         options: { includePdfs, includeRefs, includeCites, includeAnnotations },
         stats
@@ -3203,7 +3203,7 @@ const capacitorAPI = {
   async shareFileNative(filePath, title) {
     try {
       await Share.share({
-        title: title || 'ADS Reader Library',
+        title: title || 'Bibliac Library',
         url: filePath,
         dialogTitle: 'Share Library'
       });

@@ -1,11 +1,11 @@
 #!/bin/bash
-# ADS Reader - iCloud Structure Verification Script
+# Bibliac - iCloud Structure Verification Script
 # Verifies that the iCloud container and library structure is correct
 
-ICLOUD_PATH="$HOME/Library/Mobile Documents/iCloud~io~adsreader~app/Documents"
+ICLOUD_PATH="$HOME/Library/Mobile Documents/iCloud~io~bibliac~app/Documents"
 
 echo "=========================================="
-echo "ADS Reader - iCloud Structure Verification"
+echo "Bibliac - iCloud Structure Verification"
 echo "=========================================="
 echo ""
 

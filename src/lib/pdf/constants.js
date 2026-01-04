@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - PDF Constants
+ * Bibliac Core - PDF Constants
  */
 
 /**

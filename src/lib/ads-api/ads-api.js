@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - ADS API Client
+ * Bibliac Core - ADS API Client
  *
  * Platform-agnostic NASA ADS API client.
  * Uses an HTTP adapter for making requests.

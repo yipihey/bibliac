@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Paper Utilities
+ * Bibliac - Paper Utilities
  * Shared functions for paper manipulation across desktop and mobile platforms
  *
  * NOTE: This file re-exports from the new core library for backwards compatibility.

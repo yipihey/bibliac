@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - Database Module
+ * Bibliac Core - Database Module
  *
  * Platform-agnostic database operations using sql.js.
  */

@@ -4,9 +4,9 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
   packagerConfig: {
     asar: true,
-    name: 'ADS Reader',
-    executableName: 'ADS Reader',
-    appBundleId: 'io.adsreader.app',
+    name: 'Bibliac',
+    executableName: 'Bibliac',
+    appBundleId: 'io.bibliac.app',
     icon: './assets/icon',  // Electron finds .icns/.ico automatically
     // Exclude unnecessary files from the bundle
     ignore: [
@@ -72,7 +72,7 @@ module.exports = {
     {
       name: '@electron-forge/maker-squirrel',
       config: {
-        name: 'ADS_Reader',
+        name: 'Bibliac',
         setupIcon: './assets/icon.ico'
       }
     },
@@ -84,7 +84,7 @@ module.exports = {
       name: '@electron-forge/maker-dmg',
       platforms: ['darwin'],
       config: {
-        name: 'ADS Reader',
+        name: 'Bibliac',
         icon: './assets/icon.icns',
         format: 'ULFO'
       }
@@ -93,8 +93,8 @@ module.exports = {
       name: '@electron-forge/maker-deb',
       config: {
         options: {
-          name: 'adsreader',
-          productName: 'ADS Reader',
+          name: 'bibliac',
+          productName: 'Bibliac',
           icon: './assets/icon.png'
         }
       }
@@ -103,8 +103,8 @@ module.exports = {
       name: '@electron-forge/maker-rpm',
       config: {
         options: {
-          name: 'adsreader',
-          productName: 'ADS Reader',
+          name: 'bibliac',
+          productName: 'Bibliac',
           icon: './assets/icon.png'
         }
       }
@@ -132,7 +132,7 @@ module.exports = {
       config: {
         repository: {
           owner: 'yipihey',
-          name: 'adsreader'
+          name: 'bibliac'
         },
         prerelease: false,
         draft: true  // Create as draft first, then manually publish

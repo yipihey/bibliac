@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in ADS Reader
+about: Report a bug in Bibliac
 title: '[Bug] '
 labels: bug
 assignees: ''

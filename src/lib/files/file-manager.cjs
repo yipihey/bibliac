@@ -1,5 +1,5 @@
 /**
- * ADS Reader - FileManager
+ * Bibliac - FileManager
  * Unified file management with content-addressed storage
  */
 

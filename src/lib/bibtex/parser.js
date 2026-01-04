@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - BibTeX Parser
+ * Bibliac Core - BibTeX Parser
  *
  * Pure JavaScript BibTeX parser with no dependencies.
  */

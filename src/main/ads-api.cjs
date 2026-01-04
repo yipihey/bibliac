@@ -1,4 +1,4 @@
-// ADS Reader - NASA ADS API Module
+// Bibliac - NASA ADS API Module
 // Integration with NASA ADS (Astrophysics Data System) API
 
 const https = require('https');

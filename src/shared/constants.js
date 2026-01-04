@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Shared Constants
+ * Bibliac - Shared Constants
  * Used by both desktop (Electron) and mobile (Capacitor) platforms
  *
  * NOTE: Some constants are now available from '../lib/index.js'
@@ -47,11 +47,11 @@ export const ADS_METADATA_FIELDS = [
 ].join(',');
 
 // iCloud Configuration
-export const ICLOUD_CONTAINER_ID = 'iCloud.io.adsreader.app';
-export const APP_BUNDLE_ID = 'io.adsreader.app';
+export const ICLOUD_CONTAINER_ID = 'iCloud.io.bibliac.app';
+export const APP_BUNDLE_ID = 'io.bibliac.app';
 
 // Library folder names
-export const LIBRARY_FOLDER_NAME = 'ADSReader';
+export const LIBRARY_FOLDER_NAME = 'Bibliac';
 export const LIBRARIES_JSON = 'libraries.json';
 
 // Database table names

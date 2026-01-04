@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - BibTeX Cleanup Utilities
+ * Bibliac Core - BibTeX Cleanup Utilities
  *
  * Functions for cleaning up BibTeX field values.
  */

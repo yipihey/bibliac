@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Unified Platform API
+ * Bibliac - Unified Platform API
  *
  * This module provides a single API interface that works on both:
  * - Electron (desktop): delegates to window.electronAPI

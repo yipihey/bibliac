@@ -1,4 +1,4 @@
-// ADS Reader - PDF Download Module
+// Bibliac - PDF Download Module
 
 const https = require('https');
 const http = require('http');

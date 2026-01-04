@@ -40,7 +40,7 @@ async function ensureSqlJs() {
 }
 
 // iCloud container identifier (matches iOS entitlements)
-const ICLOUD_CONTAINER_ID = 'iCloud.io.adsreader.app';
+const ICLOUD_CONTAINER_ID = 'iCloud.io.bibliac.app';
 
 /**
  * Get the iCloud container path for this app
@@ -48,7 +48,7 @@ const ICLOUD_CONTAINER_ID = 'iCloud.io.adsreader.app';
  */
 function getICloudContainerPath() {
   // iCloud container format: ~/Library/Mobile Documents/iCloud~{bundleId}/Documents/
-  // Container ID "iCloud.io.adsreader.app" becomes folder "iCloud~io~adsreader~app"
+  // Container ID "iCloud.io.bibliac.app" becomes folder "iCloud~io~bibliac~app"
   const folderName = ICLOUD_CONTAINER_ID.replace(/\./g, '~');
   return path.join(os.homedir(), 'Library', 'Mobile Documents', folderName, 'Documents');
 }
@@ -85,7 +85,7 @@ function ensureICloudContainer() {
  * Used during development when app isn't code-signed
  */
 function getICloudFallbackPath() {
-  return path.join(os.homedir(), 'Documents', 'ADSReader-Cloud');
+  return path.join(os.homedir(), 'Documents', 'Bibliac-Cloud');
 }
 
 /**
@@ -155,7 +155,7 @@ try {
 }
 
 // Keychain service name
-const KEYCHAIN_SERVICE = 'adsreader';
+const KEYCHAIN_SERVICE = 'bibliac';
 
 // Initialize LLM services (will be configured from settings)
 let ollamaService = null;
@@ -706,7 +706,7 @@ async function initializeLibrarySystems(libraryPath) {
 // Update window title with library name (macOS)
 function updateWindowTitle(libraryName) {
   if (mainWindow && process.platform === 'darwin') {
-    const title = libraryName ? `${libraryName} — ADS Reader` : 'ADS Reader';
+    const title = libraryName ? `${libraryName} — Bibliac` : 'Bibliac';
     mainWindow.setTitle(title);
   }
 }
@@ -724,7 +724,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false
     },
-    title: 'ADS Reader',
+    title: 'Bibliac',
     show: false
   });
 
@@ -778,7 +778,7 @@ function createLibraryStructure(libraryPath) {
 
   const bibPath = path.join(libraryPath, 'master.bib');
   if (!fs.existsSync(bibPath)) {
-    fs.writeFileSync(bibPath, '% ADS Reader Master BibTeX File\n% Auto-generated\n\n');
+    fs.writeFileSync(bibPath, '% Bibliac Master BibTeX File\n% Auto-generated\n\n');
   }
 
   return true;
@@ -2489,7 +2489,7 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
 
     // Helper function to download and add via FileManager
     const downloadAndAddFile = async (url, sourceTypeVal, displayName) => {
-      const tempPath = path.join(os.tmpdir(), `adsreader_download_${Date.now()}.pdf`);
+      const tempPath = path.join(os.tmpdir(), `bibliac_download_${Date.now()}.pdf`);
       try {
         await pdfDownload.downloadFile(url, tempPath);
 
@@ -3896,7 +3896,7 @@ ipcMain.handle('import-library', async (event, options) => {
         }
       } else {
         // Fallback to Documents
-        iCloudPath = path.join(app.getPath('documents'), 'ADS Reader Libraries');
+        iCloudPath = path.join(app.getPath('documents'), 'Bibliac Libraries');
         if (!fs.existsSync(iCloudPath)) {
           fs.mkdirSync(iCloudPath, { recursive: true });
         }
@@ -5482,7 +5482,7 @@ function initializePaperFilesSystem(libraryPath) {
         const baseFilename = (paper.bibcode || `paper_${paper.id}`).replace(/[^a-zA-Z0-9._-]/g, '_');
 
         // Use system temp directory for download
-        const tempPath = path.join(os.tmpdir(), `adsreader_queue_${Date.now()}.pdf`);
+        const tempPath = path.join(os.tmpdir(), `bibliac_queue_${Date.now()}.pdf`);
 
         // Use the strategy manager to download - it may fallback to different source
         const result = await strategyManager.downloadForPaper(paper, tempPath, sourceType, onProgress, signal);
@@ -5972,7 +5972,7 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
   const baseFilename = (paper.bibcode || `paper_${paperId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
   const originalName = `${baseFilename}_PUB_PDF.pdf`;
   // Use temp directory for initial download, then move to content-addressed storage
-  const tempDownloadPath = path.join(os.tmpdir(), `adsreader_pub_${Date.now()}.pdf`);
+  const tempDownloadPath = path.join(os.tmpdir(), `bibliac_pub_${Date.now()}.pdf`);
 
   // Check if publisher PDF already exists in paper_files
   const existingFiles = database.getPaperFiles(paperId, { sourceType: 'PUB_PDF' });
@@ -6659,7 +6659,7 @@ ipcMain.handle('reading-list-add', async (event, { paper, downloadPdf = true }) 
           const pdfUrl = `https://arxiv.org/pdf/${paper.arxivId}.pdf`;
           try {
             const response = await fetch(pdfUrl, {
-              headers: { 'User-Agent': 'ADS-Reader/1.0' },
+              headers: { 'User-Agent': 'Bibliac/1.0' },
               redirect: 'follow'
             });
             if (response.ok) {
@@ -7840,9 +7840,9 @@ function createApplicationMenu() {
         },
         { type: 'separator' },
         {
-          label: 'ADS Reader on GitHub',
+          label: 'Bibliac on GitHub',
           click: async () => {
-            await shell.openExternal('https://github.com/yipihey/adsreader');
+            await shell.openExternal('https://github.com/yipihey/bibliac');
           }
         },
         {
@@ -7855,13 +7855,13 @@ function createApplicationMenu() {
         ...(!isMac ? [
           { type: 'separator' },
           {
-            label: 'About ADS Reader',
+            label: 'About Bibliac',
             click: async () => {
               dialog.showMessageBox({
                 type: 'info',
-                title: 'About ADS Reader',
-                message: 'ADS Reader',
-                detail: `Version ${app.getVersion()}\n\n© 2024 ADS Reader\n\nNASA ADS Integration • PDF.js Viewer\n\nBuilt with Electron`,
+                title: 'About Bibliac',
+                message: 'Bibliac',
+                detail: `Version ${app.getVersion()}\n\n© 2024 Bibliac\n\nMulti-source Bibliography Manager • PDF.js Viewer\n\nBuilt with Electron`,
                 buttons: ['OK']
               });
             }
@@ -7879,12 +7879,12 @@ function createApplicationMenu() {
 app.whenReady().then(() => {
   // Configure About panel (macOS native)
   app.setAboutPanelOptions({
-    applicationName: 'ADS Reader',
+    applicationName: 'Bibliac',
     applicationVersion: app.getVersion(),
     version: '', // Build number if available
-    copyright: '© 2024 ADS Reader',
-    credits: 'NASA ADS Integration • PDF.js Viewer\n\nBuilt with Electron',
-    website: 'https://github.com/yipihey/adsreader',
+    copyright: '© 2024 Bibliac',
+    credits: 'Multi-source Bibliography Manager • PDF.js Viewer\n\nBuilt with Electron',
+    website: 'https://github.com/yipihey/bibliac',
     iconPath: path.join(__dirname, 'assets', 'icon.png')
   });
 

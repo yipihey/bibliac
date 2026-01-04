@@ -1,4 +1,4 @@
-// ADS Reader - Export/Import Service
+// Bibliac - Export/Import Service
 // Handles exporting and importing .adslib library archives
 
 const archiver = require('archiver');
@@ -283,7 +283,7 @@ async function exportLibrary(options, database, libraryPath, savePath, progressC
         format: 'adslib',
         libraryName: libraryName || 'Exported Library',
         exportDate: new Date().toISOString(),
-        exportedBy: `ADS Reader ${app.getVersion()}`,
+        exportedBy: `Bibliac ${app.getVersion()}`,
         platform: process.platform === 'darwin' ? 'macOS' : process.platform,
         options: { includePdfs, includeAttachments, includeRefs, includeCites, includeAnnotations },
         stats

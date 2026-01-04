@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Schema V2: Plugin Data Architecture
+ * Bibliac - Schema V2: Plugin Data Architecture
  *
  * Adds support for:
  * - Multiple sources per paper (ADS, arXiv, INSPIRE)

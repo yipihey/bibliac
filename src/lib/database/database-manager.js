@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - Database Manager
+ * Bibliac Core - Database Manager
  *
  * Platform-agnostic database operations using sql.js.
  * Provides the same interface for both Electron and Capacitor.

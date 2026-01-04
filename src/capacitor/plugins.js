@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Capacitor Plugin Wrappers
+ * Bibliac - Capacitor Plugin Wrappers
  * Provides unified interface for native iOS capabilities
  */
 

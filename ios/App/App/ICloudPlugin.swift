@@ -20,7 +20,7 @@ public class ICloudPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "copyFromLocal", returnType: CAPPluginReturnPromise)
     ]
 
-    private let containerIdentifier = "iCloud.io.adsreader.app"
+    private let containerIdentifier = "iCloud.io.bibliac.app"
 
     private func getContainerURL() -> URL? {
         // Try real iCloud first

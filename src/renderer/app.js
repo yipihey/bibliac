@@ -1,10 +1,10 @@
-// ADS Reader - Main Renderer Application
+// Bibliac - Main Renderer Application
 console.log('[app.js] Loading...');
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-class ADSReader {
+class BibliacApp {
   constructor() {
     this.libraryPath = null;
     this.papers = [];
@@ -74,7 +74,7 @@ class ADSReader {
   }
 
   async init() {
-    console.log('[ADSReader] init() starting...');
+    console.log('[Bibliac] init() starting...');
 
     // Wait for platform initialization FIRST (sets up window.electronAPI on iOS)
     // Add timeout to prevent hanging
@@ -84,11 +84,11 @@ class ADSReader {
           setTimeout(() => reject(new Error('Platform init timeout after 15s')), 15000)
         );
         await Promise.race([window._platformReady, timeout]);
-        console.log('[ADSReader] Platform ready');
+        console.log('[Bibliac] Platform ready');
       } catch (error) {
-        console.error('[ADSReader] Platform initialization failed:', error);
+        console.error('[Bibliac] Platform initialization failed:', error);
         // Don't return - try to continue anyway
-        console.warn('[ADSReader] Continuing despite platform init failure...');
+        console.warn('[Bibliac] Continuing despite platform init failure...');
       }
     }
 
@@ -100,7 +100,7 @@ class ADSReader {
 
     if (this.isIOS) {
       document.body.classList.add('ios-platform');
-      console.log('[ADSReader] Running on iOS');
+      console.log('[Bibliac] Running on iOS');
     }
 
     // Listen for mobile view changes
@@ -122,14 +122,14 @@ class ADSReader {
 
     // Ensure electronAPI is available
     if (!window.electronAPI) {
-      console.error('[ADSReader] No electronAPI available');
+      console.error('[Bibliac] No electronAPI available');
       alert('App initialization failed. No API available.');
       return;
     }
 
     // Set up event listeners AFTER platform is ready (so window.electronAPI exists)
     this.setupEventListeners();
-    console.log('[ADSReader] Event listeners set up');
+    console.log('[Bibliac] Event listeners set up');
 
     // Set up the download queue panel
     this.setupDownloadQueue();
@@ -168,17 +168,17 @@ class ADSReader {
       this.updateLoadingText('Checking for libraries...');
       const lastLibraryId = await window.electronAPI.getCurrentLibraryId?.();
       if (lastLibraryId) {
-        console.log('[ADSReader] Found last library ID:', lastLibraryId);
+        console.log('[Bibliac] Found last library ID:', lastLibraryId);
         const libraries = await window.electronAPI.getAllLibraries();
         const lastLib = libraries.find(l => l.id === lastLibraryId);
         if (lastLib) {
-          console.log('[ADSReader] Auto-loading last library:', lastLib.name);
+          console.log('[Bibliac] Auto-loading last library:', lastLib.name);
           this.updateLoadingText(`Loading ${lastLib.name}...`);
           try {
             await this.switchLibrary(lastLibraryId);
             libraryLoaded = true;
           } catch (e) {
-            console.warn('[ADSReader] Failed to auto-load last library:', e);
+            console.warn('[Bibliac] Failed to auto-load last library:', e);
           }
         }
       }
@@ -223,7 +223,7 @@ class ADSReader {
     // setupEventListeners is now called early in init()
     this.setupLibraryPicker();
     this.restoreShortcutsState();
-    document.title = 'ADS Reader';
+    document.title = 'Bibliac';
 
     // Initialize top bar navigation (always - unified layout)
     this.initMobileNavigation();
@@ -943,7 +943,7 @@ class ADSReader {
       window.StatusBar.hide();
     }
 
-    console.log('[ADSReader] Entered PDF fullscreen mode');
+    console.log('[Bibliac] Entered PDF fullscreen mode');
   }
 
   exitPdfFullscreen() {
@@ -970,7 +970,7 @@ class ADSReader {
       window.StatusBar.show();
     }
 
-    console.log('[ADSReader] Exited PDF fullscreen mode');
+    console.log('[Bibliac] Exited PDF fullscreen mode');
   }
 
   showFullscreenCloseButton() {
@@ -4085,13 +4085,13 @@ class ADSReader {
     // Hide splash screen now that UI is ready
     this.hideSplashScreen();
 
-    console.log('[ADSReader] showSetupScreen called, isIOS:', this.isIOS);
+    console.log('[Bibliac] showSetupScreen called, isIOS:', this.isIOS);
 
     // Check for existing libraries and show picker if any exist
     setTimeout(async () => {
       try {
         const libraries = await window.electronAPI.getAllLibraries();
-        console.log('[ADSReader] Found libraries:', libraries.length);
+        console.log('[Bibliac] Found libraries:', libraries.length);
 
         if (libraries.length > 0) {
           // Show library picker with existing libraries
@@ -4106,7 +4106,7 @@ class ADSReader {
         }
         // For desktop with no libraries, the default setup screen buttons are fine
       } catch (e) {
-        console.log('[ADSReader] Error checking libraries:', e);
+        console.log('[Bibliac] Error checking libraries:', e);
         if (this.isIOS) {
           this.selectOrCreateIOSLibrary();
         }
@@ -4119,7 +4119,7 @@ class ADSReader {
     if (!setupContainer) return;
 
     let html = `
-      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
+      <img src="logo.svg" alt="Bibliac" class="setup-icon">
       <h1>Choose Library</h1>
       <p class="setup-subtitle">Select an existing library or create a new one</p>
 
@@ -4213,9 +4213,9 @@ class ADSReader {
     if (window.Capacitor) {
       import('@capacitor/splash-screen').then(({ SplashScreen }) => {
         SplashScreen.hide();
-        console.log('[ADSReader] Splash screen hidden');
+        console.log('[Bibliac] Splash screen hidden');
       }).catch(err => {
-        console.log('[ADSReader] SplashScreen not available:', err.message);
+        console.log('[Bibliac] SplashScreen not available:', err.message);
       });
     }
   }
@@ -4292,8 +4292,8 @@ class ADSReader {
 
     console.log('[iOS] Updating setup container innerHTML');
     setupContainer.innerHTML = `
-      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
-      <h1>Welcome to ADS Reader</h1>
+      <img src="logo.svg" alt="Bibliac" class="setup-icon">
+      <h1>Welcome to Bibliac</h1>
       <p class="setup-subtitle">Create your first library to get started</p>
 
       <div class="ios-library-actions" style="margin-top: 32px;">
@@ -4313,7 +4313,7 @@ class ADSReader {
     if (!setupContainer) return;
 
     setupContainer.innerHTML = `
-      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
+      <img src="logo.svg" alt="Bibliac" class="setup-icon">
       <h1>Name Your Library</h1>
       <p class="setup-subtitle">Choose a name for your paper library</p>
 
@@ -4384,7 +4384,7 @@ class ADSReader {
     }
 
     let html = `
-      <img src="logo.svg" alt="ADS Reader" class="setup-icon">
+      <img src="logo.svg" alt="Bibliac" class="setup-icon">
       <h1>Choose Library</h1>
       <p class="setup-subtitle">Select an existing library or create a new one</p>
 
@@ -5895,7 +5895,7 @@ class ADSReader {
     document.getElementById('viewer-wrapper').classList.add('hidden');
     document.getElementById('detail-placeholder').classList.remove('hidden');
     document.body.classList.remove('has-selected-paper');
-    document.title = 'ADS Reader';
+    document.title = 'Bibliac';
     this.updateBottomBarButtonStates();
   }
 
@@ -6470,7 +6470,7 @@ class ADSReader {
     const authorSuffix = paper.authors?.length > 3 ? ' et al.' : '';
     const windowTitle = paper.title
       ? `${paper.title} — ${firstAuthors}${authorSuffix}${paper.year ? ` (${paper.year})` : ''}`
-      : 'ADS Reader';
+      : 'Bibliac';
     document.title = windowTitle;
 
     // Update bottom bar (simplified - just show journal/bibcode)
@@ -7908,7 +7908,7 @@ class ADSReader {
       document.getElementById('viewer-wrapper').classList.add('hidden');
       document.getElementById('detail-placeholder').classList.remove('hidden');
       document.body.classList.remove('has-selected-paper');
-      document.title = 'ADS Reader';
+      document.title = 'Bibliac';
 
       // Reload papers list
       await this.loadPapers();
@@ -9742,7 +9742,7 @@ class ADSReader {
       }
     }
 
-    console.log('[ADSReader] Entered Focus Notes mode');
+    console.log('[Bibliac] Entered Focus Notes mode');
   }
 
   setFocusSplitPosition(percent) {
@@ -9876,7 +9876,7 @@ class ADSReader {
     // Notes are auto-saved, but show confirmation
     this.showNotification('Notes saved', 'success');
 
-    console.log('[ADSReader] Exited Focus Notes mode');
+    console.log('[Bibliac] Exited Focus Notes mode');
   }
 
   // ADS Token Modal
@@ -11548,7 +11548,7 @@ Time: ${systemInfo.timestamp}`;
     }
 
     // Create mailto URL - using a placeholder email for now
-    const feedbackEmail = 'adsreader@tomabel.org';
+    const feedbackEmail = 'bibliac@tomabel.org';
     const emailSubject = `[${type}] ${subject}`;
     const mailtoUrl = `mailto:${feedbackEmail}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(body)}`;
 
@@ -13587,7 +13587,7 @@ Time: ${systemInfo.timestamp}`;
         progressFill.style.width = '100%';
 
         // Share the file via native share
-        const shareResult = await window.electronAPI.shareFileNative(result.path, 'ADS Reader Library');
+        const shareResult = await window.electronAPI.shareFileNative(result.path, 'Bibliac Library');
 
         if (shareResult.method === 'native-picker') {
           if (shareResult.canceled) {
@@ -13956,5 +13956,5 @@ Time: ${systemInfo.timestamp}`;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-  window.app = new ADSReader();
+  window.app = new BibliacApp();
 });

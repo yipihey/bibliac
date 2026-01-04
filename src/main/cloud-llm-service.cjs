@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Cloud LLM Service
+ * Bibliac - Cloud LLM Service
  * Supports Anthropic (Claude), Google Gemini, and Perplexity
  * Works on both Electron (desktop) and Capacitor (iOS)
  */

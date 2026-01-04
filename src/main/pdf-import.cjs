@@ -1,4 +1,4 @@
-// ADS Reader - PDF Import Module
+// Bibliac - PDF Import Module
 
 const fs = require('fs');
 const path = require('path');

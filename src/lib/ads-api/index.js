@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - ADS API Module
+ * Bibliac Core - ADS API Module
  *
  * Platform-agnostic NASA ADS API integration.
  * Uses a platform adapter for HTTP requests.

@@ -1,10 +1,10 @@
-# ADS Reader Architecture
+# Bibliac Architecture
 
-This document describes the architecture of the ADS Reader codebase, designed for reusability across multiple platforms.
+This document describes the architecture of the Bibliac codebase, designed for reusability across multiple platforms.
 
 ## Overview
 
-ADS Reader is a reference management application for astronomers that integrates with the NASA Astrophysics Data System (ADS). The codebase is structured to support:
+Bibliac is a scientific bibliography manager that supports multiple search source plugins (NASA ADS, arXiv, INSPIRE HEP). The codebase is structured to support:
 
 1. **Desktop (Electron)** - macOS/Windows/Linux application
 2. **iOS (Capacitor)** - Native iOS app
@@ -13,7 +13,7 @@ ADS Reader is a reference management application for astronomers that integrates
 ## Directory Structure
 
 ```
-adsreader/
+bibliac/
 ├── src/
 │   ├── lib/                    # Core library (platform-agnostic)
 │   │   ├── ads-api/            # ADS API integration
@@ -265,11 +265,11 @@ import {
   // Types
   ReadStatus,
   RatingLabels
-} from 'adsreader/lib';
+} from 'bibliac/lib';
 
 // Or import specific modules
-import { ADSApi } from 'adsreader/lib/ads-api';
-import { parseBibtex } from 'adsreader/lib/bibtex';
+import { ADSApi } from 'bibliac/lib/ads-api';
+import { parseBibtex } from 'bibliac/lib/bibtex';
 ```
 
 ### Type Definitions
@@ -338,5 +338,5 @@ const api = createADSApi({ ...mockAdapter, token: 'test' });
 
 1. **Web App**: Add a web platform adapter using localStorage + fetch
 2. **Android**: Add Capacitor Android support
-3. **npm Package**: Publish `src/lib/` as `@adsreader/core`
+3. **npm Package**: Publish `src/lib/` as `@bibliac/core`
 4. **TypeScript**: Optionally add `.d.ts` files for type checking

@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Download Strategies
+ * Bibliac - Download Strategies
  *
  * Modular download strategies for different PDF sources (arXiv, publisher, ADS).
  * Each strategy knows how to download from a specific source.

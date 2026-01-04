@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Reading List PDF Cache
+ * Bibliac - Reading List PDF Cache
  *
  * Disk-based cache for PDFs saved to the reading list.
  * Unlike tempPdfCache (in-memory, ephemeral), this persists PDFs to disk

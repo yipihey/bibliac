@@ -1,4 +1,4 @@
-// ADS Reader - BibTeX Management Module
+// Bibliac - BibTeX Management Module
 
 const fs = require('fs');
 const path = require('path');
@@ -203,7 +203,7 @@ function parseBibtex(content) {
 function updateMasterBib(libraryPath, papers) {
   const bibPath = path.join(libraryPath, 'master.bib');
 
-  const header = `% ADS Reader Master BibTeX File
+  const header = `% Bibliac Master BibTeX File
 % Auto-generated - manual edits may be overwritten
 % Last updated: ${new Date().toISOString()}
 % Total entries: ${papers.length}
@@ -221,7 +221,7 @@ function updateMasterBib(libraryPath, papers) {
 
 // Export selected papers to a separate .bib file
 function exportBibtex(papers, outputPath) {
-  const header = `% BibTeX export from ADS Reader
+  const header = `% BibTeX export from Bibliac
 % Exported: ${new Date().toISOString()}
 % Entries: ${papers.length}
 

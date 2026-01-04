@@ -51,7 +51,7 @@ function httpsGetJson(url) {
       path: urlObj.pathname + urlObj.search,
       method: 'GET',
       headers: {
-        'User-Agent': 'ADSReader/1.0 (academic paper manager)',
+        'User-Agent': 'Bibliac/1.0 (scientific bibliography manager)',
         'Accept': 'application/json'
       }
     };
@@ -109,7 +109,7 @@ function httpsGetText(url) {
       path: urlObj.pathname + urlObj.search,
       method: 'GET',
       headers: {
-        'User-Agent': 'ADSReader/1.0 (academic paper manager)',
+        'User-Agent': 'Bibliac/1.0 (scientific bibliography manager)',
         'Accept': 'application/x-bibtex, text/plain'
       }
     };

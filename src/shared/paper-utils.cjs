@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Paper Utilities (CommonJS version)
+ * Bibliac - Paper Utilities (CommonJS version)
  * Shared functions for paper manipulation across desktop platform
  */
 

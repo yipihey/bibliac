@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Platform Initialization
+ * Bibliac - Platform Initialization
  *
  * This script runs early to set up platform-specific styling and API.
  *

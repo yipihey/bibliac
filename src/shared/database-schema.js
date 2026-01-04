@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Database Schema
+ * Bibliac - Database Schema
  * Shared schema definition for both desktop and mobile platforms
  *
  * NOTE: This file re-exports from the core library for backwards compatibility.

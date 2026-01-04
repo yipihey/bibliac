@@ -190,7 +190,7 @@ function httpGet(url, maxRedirects = 5) {
       path: urlObj.pathname + urlObj.search,
       method: 'GET',
       headers: {
-        'User-Agent': 'ADSReader/1.0 (academic paper manager)'
+        'User-Agent': 'Bibliac/1.0 (scientific bibliography manager)'
       }
     };
 
@@ -677,7 +677,7 @@ Return ONLY the query string, no explanation.`,
         path: urlObj.pathname + urlObj.search,
         method: 'GET',
         headers: {
-          'User-Agent': 'ADSReader/1.0 (academic paper manager)'
+          'User-Agent': 'Bibliac/1.0 (scientific bibliography manager)'
         }
       };
 

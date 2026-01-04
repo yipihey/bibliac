@@ -1,5 +1,5 @@
 /**
- * Platform detection for ADS Reader
+ * Platform detection for Bibliac
  * Detects whether running in Electron (desktop) or Capacitor (iOS)
  */
 
@@ -73,7 +73,7 @@ export function initPlatform() {
     document.body.classList.add('electron');
   }
 
-  console.log(`ADS Reader running on: ${platform}`);
+  console.log(`Bibliac running on: ${platform}`);
 }
 
 /**

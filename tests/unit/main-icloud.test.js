@@ -33,9 +33,9 @@ vi.mock('electron-store', () => ({
 vi.mock('../../src/main/database.cjs', () => mockDatabase);
 
 // iCloud container constants
-const ICLOUD_CONTAINER_ID = 'iCloud.io.adsreader.app';
+const ICLOUD_CONTAINER_ID = 'iCloud.io.bibliac.app';
 const MOBILE_DOCS_PATH = '/Users/testuser/Library/Mobile Documents';
-const ICLOUD_CONTAINER_PATH = `${MOBILE_DOCS_PATH}/iCloud~io~adsreader~app/Documents`;
+const ICLOUD_CONTAINER_PATH = `${MOBILE_DOCS_PATH}/iCloud~io~bibliac~app/Documents`;
 
 // Helper functions (extracted from main.cjs logic)
 function getICloudContainerPath() {
@@ -66,8 +66,8 @@ describe('main.cjs iCloud Handlers', () => {
     it('should replace dots with tildes in container ID', () => {
       const containerPath = getICloudContainerPath();
 
-      // iCloud.io.adsreader.app -> iCloud~io~adsreader~app
-      expect(containerPath).toContain('iCloud~io~adsreader~app');
+      // iCloud.io.bibliac.app -> iCloud~io~bibliac~app
+      expect(containerPath).toContain('iCloud~io~bibliac~app');
       expect(containerPath).not.toContain('iCloud.io');
     });
   });
@@ -310,7 +310,7 @@ describe('main.cjs iCloud Handlers', () => {
     });
 
     it('should return needed: true when library exists but not registered', () => {
-      const libraryPath = '/Users/testuser/Library/ADSReader';
+      const libraryPath = '/Users/testuser/Library/Bibliac';
       mockStore.__set('libraryPath', libraryPath);
       mockFs.__setDir(libraryPath);
       mockFs.__setFile(`${libraryPath}/library.sqlite`, 'db-content');
@@ -345,13 +345,13 @@ describe('main.cjs iCloud Handlers', () => {
     });
 
     it('should copy library to iCloud container', () => {
-      const sourcePath = '/Users/testuser/Documents/ADSReader';
+      const sourcePath = '/Users/testuser/Documents/Bibliac';
       mockFs.__setDir(sourcePath);
       mockFs.__setFile(`${sourcePath}/library.sqlite`, 'db-content');
       mockFs.__setDir(`${sourcePath}/papers`);
       mockFs.__setFile(`${sourcePath}/papers/test.pdf`, 'pdf-content');
 
-      const targetPath = `${ICLOUD_CONTAINER_PATH}/ADSReader`;
+      const targetPath = `${ICLOUD_CONTAINER_PATH}/Bibliac`;
 
       // Simulate copy
       mockFs.mkdirSync(targetPath, { recursive: true });

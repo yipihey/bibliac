@@ -1,5 +1,5 @@
 /**
- * ADS Reader - Mobile Database Module (sql.js + Capacitor Filesystem)
+ * Bibliac - Mobile Database Module (sql.js + Capacitor Filesystem)
  * SQLite database using sql.js with Capacitor Filesystem for persistence
  *
  * This module provides the same interface as the desktop database.cjs

@@ -1,7 +1,7 @@
-# ADS Reader - Claude Code Context
+# Bibliac - Claude Code Context
 
 ## Project Overview
-ADS Reader is an Electron desktop app for managing academic papers. It integrates with NASA ADS (Astrophysics Data System) for metadata, references, citations, and PDF downloads.
+Bibliac is an Electron desktop app for managing scientific papers. It supports multiple search source plugins (NASA ADS, arXiv, INSPIRE HEP) for metadata, references, citations, and PDF downloads.
 
 ## Architecture
 
@@ -148,9 +148,9 @@ Files stored as: `papers/BIBCODE_SOURCETYPE.pdf`
 
 ### iCloud Libraries
 - Multiple libraries support (iCloud or local)
-- iCloud container: `iCloud.io.adsreader.app`
-- Path: `~/Library/Mobile Documents/iCloud~io~adsreader~app/Documents/`
-- Fallback for unsigned builds: `~/Documents/ADSReader-Cloud/`
+- iCloud container: `iCloud.io.bibliac.app`
+- Path: `~/Library/Mobile Documents/iCloud~io~bibliac~app/Documents/`
+- Fallback for unsigned builds: `~/Documents/Bibliac-Cloud/`
 - Libraries registry: `libraries.json` in container root
 - Create, switch, and delete libraries
 - Sync conflict detection for iCloud

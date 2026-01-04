@@ -1,8 +1,8 @@
-# ADS Reader Beta Testing Guide
+# Bibliac Beta Testing Guide
 
 ## Overview
 
-Thank you for participating in the ADS Reader beta! Your feedback is invaluable in helping us build a better app for managing astronomy papers.
+Thank you for participating in the Bibliac beta! Your feedback is invaluable in helping us build a better app for managing scientific papers.
 
 ## Getting Started
 
@@ -10,14 +10,14 @@ Thank you for participating in the ADS Reader beta! Your feedback is invaluable 
 
 1. **Install TestFlight** from the App Store (if not already installed)
 2. **Open the invitation link** you received on your iPhone or iPad
-3. **Accept the invitation** and install ADS Reader
+3. **Accept the invitation** and install Bibliac
 4. **Launch the app** and create your first library
 
 ### macOS
 
 1. **Download the DMG** from the provided link
-2. **Open the DMG** and drag ADS Reader to your Applications folder
-3. **Open ADS Reader** from Applications
+2. **Open the DMG** and drag Bibliac to your Applications folder
+3. **Open Bibliac** from Applications
 4. If you see a security warning:
    - Right-click the app and select "Open"
    - Click "Open" in the dialog that appears
@@ -71,7 +71,7 @@ Thank you for participating in the ADS Reader beta! Your feedback is invaluable 
 6. Click "Send Feedback" to open your email client
 
 ### Email Directly
-Send feedback to: **adsreader@tomabel.org**
+Send feedback to: **bibliac@tomabel.org**
 
 Please include:
 - What you were trying to do
@@ -117,9 +117,9 @@ Please include:
 
 ## Contact
 
-- **Email**: adsreader@tomabel.org
+- **Email**: bibliac@tomabel.org
 - **GitHub**: Issues for technical bug reports
 
 ---
 
-Thank you for testing ADS Reader!
+Thank you for testing Bibliac!

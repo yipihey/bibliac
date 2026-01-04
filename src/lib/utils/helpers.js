@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - Helper Utilities
+ * Bibliac Core - Helper Utilities
  *
  * Common utility functions used across the library.
  */

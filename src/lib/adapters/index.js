@@ -1,5 +1,5 @@
 /**
- * ADS Reader Core - Platform Adapters
+ * Bibliac Core - Platform Adapters
  *
  * This module exports the platform adapter interface and factory functions.
  * Platform adapters abstract platform-specific operations like:

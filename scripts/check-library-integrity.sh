@@ -1,20 +1,20 @@
 #!/bin/bash
-# ADS Reader - Library Integrity Check
+# Bibliac - Library Integrity Check
 # Verifies a specific library folder has all required files and no corruption
 
 if [ -z "$1" ]; then
   echo "Usage: $0 <library-path>"
   echo ""
   echo "Example:"
-  echo "  $0 ~/Library/Mobile\\ Documents/iCloud~io~adsreader~app/Documents/My\\ Library"
-  echo "  $0 ~/Documents/ADSReader"
+  echo "  $0 ~/Library/Mobile\\ Documents/iCloud~io~bibliac~app/Documents/My\\ Library"
+  echo "  $0 ~/Documents/Bibliac"
   exit 1
 fi
 
 LIBRARY_PATH="$1"
 
 echo "=========================================="
-echo "ADS Reader - Library Integrity Check"
+echo "Bibliac - Library Integrity Check"
 echo "=========================================="
 echo ""
 echo "Checking: $LIBRARY_PATH"

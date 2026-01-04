@@ -1,6 +1,6 @@
-# ADS Reader - Code Signing and Notarization Guide
+# Bibliac - Code Signing and Notarization Guide
 
-This document explains how to set up code signing and notarization for distributing ADS Reader outside the Mac App Store.
+This document explains how to set up code signing and notarization for distributing Bibliac outside the Mac App Store.
 
 ## Overview
 
@@ -58,7 +58,7 @@ Notarization requires an app-specific password (not your Apple ID password):
 2. Sign in with your Apple ID
 3. Under "Security", click "App-Specific Passwords"
 4. Click "Generate an App-Specific Password"
-5. Name it "ADS Reader Notarization"
+5. Name it "Bibliac Notarization"
 6. Save the generated password securely
 
 ## Step 3: Environment Variables
@@ -80,7 +80,7 @@ export APPLE_TEAM_ID="QG3MEYVHMS"
 Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
 
 ```bash
-# ADS Reader Code Signing
+# Bibliac Code Signing
 export APPLE_IDENTITY="Developer ID Application: Your Name (QG3MEYVHMS)"
 export APPLE_ID="your-apple-id@example.com"
 export APPLE_TEAM_ID="QG3MEYVHMS"
@@ -121,13 +121,13 @@ The build process will:
 
 ```bash
 # Check code signature
-codesign -dv --verbose=4 "out/ADS Reader-darwin-arm64/ADS Reader.app"
+codesign -dv --verbose=4 "out/Bibliac-darwin-arm64/Bibliac.app"
 
 # Verify against Gatekeeper
-spctl -a -vv "out/ADS Reader-darwin-arm64/ADS Reader.app"
+spctl -a -vv "out/Bibliac-darwin-arm64/Bibliac.app"
 
 # Check notarization stapling
-stapler validate "out/ADS Reader-darwin-arm64/ADS Reader.app"
+stapler validate "out/Bibliac-darwin-arm64/Bibliac.app"
 ```
 
 ## Entitlements
@@ -152,13 +152,13 @@ The app uses `entitlements.mac.plist` which includes:
 ## iCloud Configuration
 
 ### Bundle ID and Container
-- **Bundle ID**: `io.adsreader.app`
+- **Bundle ID**: `io.bibliac.app`
 - **Team ID**: `QG3MEYVHMS`
-- **iCloud Container**: `iCloud.io.adsreader.app`
+- **iCloud Container**: `iCloud.io.bibliac.app`
 
 ### iCloud Folder Structure
 ```
-~/Library/Mobile Documents/iCloud~io~adsreader~app/
+~/Library/Mobile Documents/iCloud~io~bibliac~app/
   Documents/
     libraries.json              # Registry of all libraries
     My Library/                 # A library folder
@@ -174,7 +174,7 @@ The app uses `entitlements.mac.plist` which includes:
 When the app is not code-signed, it cannot write to the actual iCloud container.
 The app automatically falls back to:
 ```
-~/Documents/ADSReader-Cloud/
+~/Documents/Bibliac-Cloud/
 ```
 
 This allows testing iCloud-like functionality during development.
@@ -207,14 +207,14 @@ This usually means:
 Try:
 ```bash
 # Remove quarantine attribute
-xattr -d com.apple.quarantine "ADS Reader.app"
+xattr -d com.apple.quarantine "Bibliac.app"
 
 # Or right-click > Open in Finder (bypasses Gatekeeper first time)
 ```
 
 ### iCloud Container Not Accessible
 1. Ensure the app is code-signed with proper entitlements
-2. The bundle ID must match: `io.adsreader.app`
+2. The bundle ID must match: `io.bibliac.app`
 3. The container ID must be registered in Apple Developer portal
 4. The iCloud capability must be enabled in the provisioning profile
 
