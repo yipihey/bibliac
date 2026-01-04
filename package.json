@@ -1,17 +1,17 @@
 {
-  "name": "adsreader",
-  "productName": "ADS Reader",
-  "version": "1.0.0-beta.7",
-  "description": "Scientific publication reader with NASA ADS integration",
+  "name": "bibliac",
+  "productName": "Bibliac",
+  "version": "1.0.0-beta.8",
+  "description": "Scientific bibliography manager with multi-source search plugins (ADS, arXiv, INSPIRE)",
   "main": "main.cjs",
   "type": "module",
-  "author": "ADS Reader Team",
+  "author": "Bibliac Team",
   "license": "MIT",
   "config": {
     "forge": "./forge.config.cjs"
   },
   "build": {
-    "appId": "io.adsreader.app",
+    "appId": "io.bibliac.app",
     "mac": {
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
