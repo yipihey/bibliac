@@ -1,7 +1,7 @@
-// ADS Reader Beta Website - GitHub API Integration
+// Bibliac Website - GitHub API Integration
 
 const REPO_OWNER = 'yipihey';
-const REPO_NAME = 'adsreader';
+const REPO_NAME = 'bibliac';
 const GITHUB_API = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
 
 // DOM Elements
