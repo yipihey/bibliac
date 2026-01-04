@@ -70,6 +70,30 @@ class BibliacApp {
     this.currentSmartSearch = null;    // ID of currently selected search (null = local library)
     this.editingSearchId = null;       // ID of search being edited (null = creating new)
 
+    // PDF Link Service for handling internal/external links
+    this.pdfLinkService = {
+      goToDestination: async (dest) => {
+        if (!this.pdfDoc) return;
+        try {
+          let pageIndex;
+          if (typeof dest === 'string') {
+            const destArray = await this.pdfDoc.getDestination(dest);
+            if (destArray) pageIndex = await this.pdfDoc.getPageIndex(destArray[0]);
+          } else if (Array.isArray(dest)) {
+            pageIndex = await this.pdfDoc.getPageIndex(dest[0]);
+          }
+          if (pageIndex !== undefined) this.scrollToPdfPage(pageIndex + 1);
+        } catch (e) { console.warn('[PDF] Navigation error:', e); }
+      },
+      getDestinationHash: () => '#',
+      getAnchorUrl: (hash) => hash,
+      setHash: () => {},
+      executeNamedAction: (action) => console.log('[PDF] Named action:', action),
+      cachePageRef: () => {},
+      isPageVisible: () => true,
+      isPageCached: () => true,
+    };
+
     this.init();
   }
 
@@ -7185,6 +7209,50 @@ class BibliacApp {
 
       wrapper.appendChild(textLayerDiv);
 
+      // Render annotation layer for clickable links
+      try {
+        const annotations = await page.getAnnotations();
+        if (annotations.length > 0) {
+          const annotationLayerDiv = document.createElement('div');
+          annotationLayerDiv.className = 'pdf-annotation-layer';
+          annotationLayerDiv.style.width = `${viewport.width}px`;
+          annotationLayerDiv.style.height = `${viewport.height}px`;
+
+          // Use PDF.js AnnotationLayer
+          if (pdfjsLib.AnnotationLayer) {
+            const annotationLayer = new pdfjsLib.AnnotationLayer({
+              div: annotationLayerDiv,
+              accessibilityManager: null,
+              annotationCanvasMap: null,
+              page: page,
+              viewport: viewport.clone({ dontFlip: true }),
+            });
+
+            await annotationLayer.render({
+              annotations: annotations,
+              div: annotationLayerDiv,
+              viewport: viewport.clone({ dontFlip: true }),
+              linkService: this.pdfLinkService,
+              renderForms: false,
+            });
+          }
+
+          // Handle external links - open in system browser
+          annotationLayerDiv.addEventListener('click', (e) => {
+            const link = e.target.closest('a');
+            if (link?.href?.match(/^https?:\/\//)) {
+              e.preventDefault();
+              e.stopPropagation();
+              window.electronAPI.openExternal(link.href);
+            }
+          });
+
+          wrapper.appendChild(annotationLayerDiv);
+        }
+      } catch (e) {
+        console.warn('[PDF] Annotation layer error:', e);
+      }
+
       // Check again - a new render may have started during async operations
       if (this.currentRenderId !== renderId) {
         return false; // Cancelled
@@ -7319,6 +7387,13 @@ class BibliacApp {
 
     // Fallback: last page
     return wrappers.length;
+  }
+
+  scrollToPdfPage(pageNum) {
+    const wrapper = document.querySelector(`.pdf-page-wrapper[data-page="${pageNum}"]`);
+    if (wrapper) {
+      wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   updateCurrentPage() {
