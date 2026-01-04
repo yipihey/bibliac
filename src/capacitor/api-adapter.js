@@ -1997,12 +1997,28 @@ const capacitorAPI = {
       });
 
       if (downloadResult.path) {
-        // Register in paper_files table (new unified approach)
+        // Register in paper_files table with hash for unified storage approach
         try {
           const stat = await Filesystem.stat({ path: filePath, directory: Directory.Documents });
+
+          // Read file to compute hash (for content-addressed storage compatibility)
+          let fileHash = null;
+          try {
+            const fileContent = await Filesystem.readFile({
+              path: filePath,
+              directory: Directory.Documents
+            });
+            if (fileContent.data) {
+              fileHash = await capacitorAPI._computeFileHash(fileContent.data);
+            }
+          } catch (hashError) {
+            console.warn('[downloadPdfFromSource] Could not compute hash:', hashError);
+          }
+
           MobileDB.addPaperFile(paperId, {
             filename: filename,
             original_name: filename,
+            file_hash: fileHash,
             mime_type: 'application/pdf',
             file_size: stat.size || 0,
             file_role: 'pdf',

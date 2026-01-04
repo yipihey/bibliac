@@ -2242,21 +2242,16 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
       return { success: false, error: `${sourceType} PDF not available` };
     }
 
-    // Generate source-specific filename
+    // Generate source-specific filename for display/symlink
     const baseFilename = paper.bibcode.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const filename = `${baseFilename}_${targetType}.pdf`;
-    const destPath = path.join(libraryPath, 'papers', filename);
-    const papersDir = path.join(libraryPath, 'papers');
+    const originalName = `${baseFilename}_${targetType}.pdf`;
 
-    // Ensure papers directory exists
-    if (!fs.existsSync(papersDir)) {
-      fs.mkdirSync(papersDir, { recursive: true });
-    }
-
-    // Check if this source's PDF already exists
-    if (fs.existsSync(destPath)) {
+    // Check if this source's PDF already exists in paper_files
+    const existingFiles = database.getPaperFiles(paperId, { sourceType: targetType });
+    if (existingFiles.length > 0) {
+      const existingPath = fileManager ? fileManager.getFile(existingFiles[0].id)?.path : null;
       sendConsoleLog(`${sourceType} PDF already downloaded`, 'success');
-      return { success: true, path: destPath, source: sourceType, alreadyExists: true };
+      return { success: true, path: existingPath, source: sourceType, alreadyExists: true };
     }
 
     // Download the PDF
@@ -2277,23 +2272,34 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
 
     sendConsoleLog(`Downloading from: ${downloadUrl}`, 'info');
 
+    // Helper function to download and add via FileManager
+    const downloadAndAddFile = async (url, sourceTypeVal, displayName) => {
+      const tempPath = path.join(os.tmpdir(), `adsreader_download_${Date.now()}.pdf`);
+      try {
+        await pdfDownload.downloadFile(url, tempPath);
+
+        // Add via FileManager (computes hash, stores in content-addressed location, creates symlink)
+        const result = await fileManager.addFile(paperId, tempPath, {
+          role: 'pdf',
+          sourceType: sourceTypeVal,
+          originalName: displayName,
+          sourceUrl: url,
+          bibcode: paper.bibcode
+        });
+
+        return { success: true, fileId: result.id, path: result.path };
+      } finally {
+        // Clean up temp file
+        if (fs.existsSync(tempPath)) {
+          fs.unlinkSync(tempPath);
+        }
+      }
+    };
+
     try {
-      await pdfDownload.downloadFile(downloadUrl, destPath);
-
-      // Register in paper_files table (new unified approach)
-      const relativePath = `papers/${filename}`;
-      database.addPaperFile(paperId, {
-        filename: filename,
-        original_name: filename,
-        mime_type: 'application/pdf',
-        file_size: fs.statSync(destPath).size,
-        file_role: 'pdf',
-        source_type: targetType,
-        status: 'ready'
-      });
-
+      const result = await downloadAndAddFile(downloadUrl, targetType, originalName);
       sendConsoleLog(`Downloaded ${sourceType} PDF successfully`, 'success');
-      return { success: true, path: destPath, source: sourceType };
+      return { success: true, path: result.path, source: sourceType, fileId: result.fileId };
     } catch (downloadError) {
       // If publisher download failed (auth required), try fallback sources
       if (sourceType === 'publisher' && downloadError.message.includes('authentication')) {
@@ -2303,9 +2309,6 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
         const arxivSource = esources.find(s => (s.link_type || s.type || '').includes('EPRINT_PDF'));
         if (arxivSource && arxivSource.url) {
           sendConsoleLog(`Trying arXiv fallback...`, 'info');
-          const arxivFilename = `${baseFilename}_EPRINT_PDF.pdf`;
-          const arxivPath = path.join(libraryPath, 'papers', arxivFilename);
-
           try {
             // arXiv URLs need .pdf extension
             let arxivUrl = arxivSource.url;
@@ -2313,19 +2316,10 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
               arxivUrl = arxivUrl.replace('/abs/', '/pdf/');
               if (!arxivUrl.endsWith('.pdf')) arxivUrl += '.pdf';
             }
-            await pdfDownload.downloadFile(arxivUrl, arxivPath);
-            const relativePath = `papers/${arxivFilename}`;
-            database.addPaperFile(paperId, {
-              filename: arxivFilename,
-              original_name: arxivFilename,
-              mime_type: 'application/pdf',
-              file_size: fs.statSync(arxivPath).size,
-              file_role: 'pdf',
-              source_type: 'EPRINT_PDF',
-              status: 'ready'
-            });
+            const arxivName = `${baseFilename}_EPRINT_PDF.pdf`;
+            const result = await downloadAndAddFile(arxivUrl, 'EPRINT_PDF', arxivName);
             sendConsoleLog(`Downloaded from arXiv (fallback)`, 'success');
-            return { success: true, path: arxivPath, source: 'arxiv', fallback: true };
+            return { success: true, path: result.path, source: 'arxiv', fallback: true, fileId: result.fileId };
           } catch (arxivError) {
             sendConsoleLog(`arXiv fallback failed: ${arxivError.message}`, 'warn');
           }
@@ -2335,23 +2329,11 @@ ipcMain.handle('download-pdf-from-source', async (event, paperId, sourceType) =>
         const adsSource = esources.find(s => (s.link_type || s.type || '').includes('ADS_PDF'));
         if (adsSource && adsSource.url) {
           sendConsoleLog(`Trying ADS fallback...`, 'info');
-          const adsFilename = `${baseFilename}_ADS_PDF.pdf`;
-          const adsPath = path.join(libraryPath, 'papers', adsFilename);
-
           try {
-            await pdfDownload.downloadFile(adsSource.url, adsPath);
-            const relativePath = `papers/${adsFilename}`;
-            database.addPaperFile(paperId, {
-              filename: adsFilename,
-              original_name: adsFilename,
-              mime_type: 'application/pdf',
-              file_size: fs.statSync(adsPath).size,
-              file_role: 'pdf',
-              source_type: 'ADS_PDF',
-              status: 'ready'
-            });
+            const adsName = `${baseFilename}_ADS_PDF.pdf`;
+            const result = await downloadAndAddFile(adsSource.url, 'ADS_PDF', adsName);
             sendConsoleLog(`Downloaded from ADS (fallback)`, 'success');
-            return { success: true, path: adsPath, source: 'ads', fallback: true };
+            return { success: true, path: result.path, source: 'ads', fallback: true, fileId: result.fileId };
           } catch (adsError) {
             sendConsoleLog(`ADS fallback failed: ${adsError.message}`, 'warn');
           }
@@ -5107,59 +5089,56 @@ function initializePaperFilesSystem(libraryPath) {
         }
 
         const baseFilename = (paper.bibcode || `paper_${paper.id}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-        const papersDir = path.join(libraryPath, 'papers');
 
-        // Ensure papers directory exists
-        if (!fs.existsSync(papersDir)) {
-          fs.mkdirSync(papersDir, { recursive: true });
-        }
-
-        // Use temporary path for download (will rename after knowing actual source)
-        const tempPath = path.join(papersDir, `${baseFilename}_downloading.pdf`);
+        // Use system temp directory for download
+        const tempPath = path.join(os.tmpdir(), `adsreader_queue_${Date.now()}.pdf`);
 
         // Use the strategy manager to download - it may fallback to different source
         const result = await strategyManager.downloadForPaper(paper, tempPath, sourceType, onProgress, signal);
 
-        if (result.success) {
+        if (result.success && fs.existsSync(tempPath)) {
           // Use ACTUAL source from result, not the originally requested sourceType
           const actualSource = result.source || sourceType;
           const sourceMap = { 'arxiv': 'EPRINT_PDF', 'publisher': 'PUB_PDF', 'ads_scan': 'ADS_PDF' };
           const normalizedSource = sourceMap[actualSource] || actualSource.toUpperCase().replace(/-/g, '_');
 
-          const filename = `${baseFilename}_${normalizedSource}.pdf`;
-          const destPath = path.join(papersDir, filename);
+          const originalName = `${baseFilename}_${normalizedSource}.pdf`;
 
-          // Rename temp file to final name with correct source suffix
-          if (fs.existsSync(tempPath)) {
-            if (fs.existsSync(destPath)) {
-              fs.unlinkSync(destPath); // Remove existing if present
-            }
-            fs.renameSync(tempPath, destPath);
-          }
-
-          result.path = `papers/${filename}`;
-
-          // Register in paper_files table with normalized source type
-          const fileSize = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0;
+          // Check if already exists in paper_files
           const existingFiles = database.getPaperFiles(paper.id);
           const alreadyExists = existingFiles.some(f => f.source_type === normalizedSource);
 
           if (!alreadyExists) {
-            database.addPaperFile(paper.id, {
-              filename: filename,
-              original_name: filename,
-              mime_type: 'application/pdf',
-              file_size: fileSize,
-              file_role: 'pdf',
-              source_type: normalizedSource,
-              status: 'ready'
-            });
+            try {
+              // Add via FileManager (computes hash, stores in content-addressed location, creates symlink)
+              const fileResult = await fileManager.addFile(paper.id, tempPath, {
+                role: 'pdf',
+                sourceType: normalizedSource,
+                originalName: originalName,
+                sourceUrl: result.url || null,
+                bibcode: paper.bibcode
+              });
+              result.path = fileResult.path;
+              result.fileId = fileResult.id;
+            } catch (addError) {
+              console.error('Failed to add file via FileManager:', addError);
+              result.success = false;
+              result.error = addError.message;
+            }
+          } else {
+            // Already exists - get existing path
+            const existing = existingFiles.find(f => f.source_type === normalizedSource);
+            if (existing && fileManager) {
+              const existingFile = fileManager.getFile(existing.id);
+              result.path = existingFile?.path || null;
+            }
           }
-        } else {
+
+          // Clean up temp file
+          try { fs.unlinkSync(tempPath); } catch (e) { /* ignore */ }
+        } else if (fs.existsSync(tempPath)) {
           // Clean up temp file on failure
-          if (fs.existsSync(tempPath)) {
-            try { fs.unlinkSync(tempPath); } catch (e) { /* ignore */ }
-          }
+          try { fs.unlinkSync(tempPath); } catch (e) { /* ignore */ }
         }
 
         return result;
@@ -5596,19 +5575,16 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
 
   // Generate source-specific filename for publisher PDF
   const baseFilename = (paper.bibcode || `paper_${paperId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-  const filename = `${baseFilename}_PUB_PDF.pdf`;
-  const destPath = path.join(libraryPath, 'papers', filename);
-  const papersDir = path.join(libraryPath, 'papers');
+  const originalName = `${baseFilename}_PUB_PDF.pdf`;
+  // Use temp directory for initial download, then move to content-addressed storage
+  const tempDownloadPath = path.join(os.tmpdir(), `adsreader_pub_${Date.now()}.pdf`);
 
-  // Ensure papers directory exists
-  if (!fs.existsSync(papersDir)) {
-    fs.mkdirSync(papersDir, { recursive: true });
-  }
-
-  // Check if publisher PDF already exists
-  if (fs.existsSync(destPath)) {
+  // Check if publisher PDF already exists in paper_files
+  const existingFiles = database.getPaperFiles(paperId, { sourceType: 'PUB_PDF' });
+  if (existingFiles.length > 0) {
+    const existingPath = fileManager ? fileManager.getFile(existingFiles[0].id)?.path : null;
     sendConsoleLog(`Publisher PDF already downloaded`, 'success');
-    return { success: true, path: destPath, source: 'publisher', alreadyExists: true };
+    return { success: true, path: existingPath, source: 'publisher', alreadyExists: true };
   }
 
   return new Promise((resolve) => {
@@ -5751,29 +5727,42 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
       }
     });
 
-    function finishWithSuccess(relativePath) {
+    async function finishWithSuccess() {
       if (resolved) return;
       resolved = true;
       downloadCompleted = true;
-      // Register in paper_files table (new unified approach)
+
       try {
-        database.addPaperFile(paperId, {
-          filename: filename,
-          original_name: filename,
-          mime_type: 'application/pdf',
-          file_size: fs.statSync(destPath).size,
-          file_role: 'pdf',
-          source_type: 'PUB_PDF',
-          status: 'ready'
+        // Add via FileManager (computes hash, stores in content-addressed location, creates symlink)
+        const result = await fileManager.addFile(paperId, tempDownloadPath, {
+          role: 'pdf',
+          sourceType: 'PUB_PDF',
+          originalName: originalName,
+          sourceUrl: publisherUrl,
+          bibcode: paper.bibcode
         });
+        console.log('PDF saved successfully via FileManager:', result.path);
+
+        // Clean up temp file
+        if (fs.existsSync(tempDownloadPath)) {
+          fs.unlinkSync(tempDownloadPath);
+        }
+
+        if (!authWindow.isDestroyed()) {
+          authWindow.close();
+        }
+        resolve({ success: true, path: result.path, fileId: result.id });
       } catch (e) {
-        console.error('Failed to register paper file:', e);
+        console.error('Failed to add file via FileManager:', e);
+        // Clean up temp file on error
+        if (fs.existsSync(tempDownloadPath)) {
+          try { fs.unlinkSync(tempDownloadPath); } catch (err) { /* ignore */ }
+        }
+        if (!authWindow.isDestroyed()) {
+          authWindow.close();
+        }
+        resolve({ success: false, error: e.message });
       }
-      console.log('PDF saved successfully:', destPath);
-      if (!authWindow.isDestroyed()) {
-        authWindow.close();
-      }
-      resolve({ success: true, path: destPath });
     }
 
     function finishWithError(error) {
@@ -5788,13 +5777,13 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
 
     function verifyPdf() {
       try {
-        const stats = fs.statSync(destPath);
+        const stats = fs.statSync(tempDownloadPath);
         if (stats.size < 1000) {
-          fs.unlinkSync(destPath);
+          fs.unlinkSync(tempDownloadPath);
           return 'Downloaded file too small';
         }
 
-        const fd = fs.openSync(destPath, 'r');
+        const fd = fs.openSync(tempDownloadPath, 'r');
         const buffer = Buffer.alloc(8);
         fs.readSync(fd, buffer, 0, 8, 0);
         fs.closeSync(fd);
@@ -5803,7 +5792,7 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
         if (header === '%PDF-') {
           return null; // Valid PDF
         } else {
-          fs.unlinkSync(destPath);
+          fs.unlinkSync(tempDownloadPath);
           return 'Downloaded file is not a valid PDF';
         }
       } catch (e) {
@@ -5814,7 +5803,7 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
     // Handle triggered downloads (when browser triggers a download)
     session.on('will-download', (event, item, webContents) => {
       console.log('Download triggered:', item.getFilename(), item.getMimeType());
-      item.setSavePath(destPath);
+      item.setSavePath(tempDownloadPath);
 
       // Update window title to show download is happening
       if (!authWindow.isDestroyed()) {
@@ -5835,12 +5824,12 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
 
       item.on('done', (event, state) => {
         if (state === 'completed') {
-          console.log('Download completed:', destPath);
+          console.log('Download completed:', tempDownloadPath);
           const error = verifyPdf();
           if (error) {
             finishWithError(error);
           } else {
-            finishWithSuccess(`papers/${filename}`);
+            finishWithSuccess();
           }
         } else {
           finishWithError(`Download failed: ${state}`);
@@ -5863,7 +5852,7 @@ ipcMain.handle('download-publisher-pdf', async (event, paperId, publisherUrl, pr
 
           // Force download by changing content-disposition
           const newHeaders = { ...details.responseHeaders };
-          newHeaders['content-disposition'] = [`attachment; filename="${filename}"`];
+          newHeaders['content-disposition'] = [`attachment; filename="${originalName}"`];
 
           // Also trigger downloadURL as a backup (some sites ignore content-disposition)
           // Use setTimeout to avoid blocking the callback
