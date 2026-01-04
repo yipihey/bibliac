@@ -401,9 +401,18 @@ class FileManager {
     if (!fileRecord) return null;
 
     // Add the computed path for convenience
-    // Handle legacy files without file_hash
+    // Try content-addressed storage first (files with file_hash)
     if (fileRecord.file_hash && fileRecord.filename) {
       fileRecord.path = this.getStoragePath(fileRecord);
+    } else if (fileRecord.filename) {
+      // Fallback: files stored directly in papers/ directory (download pattern)
+      // Files are stored as: papers/BIBCODE_SOURCETYPE.pdf
+      const papersPath = path.join(this.papersDir, fileRecord.filename);
+      if (fs.existsSync(papersPath)) {
+        fileRecord.path = papersPath;
+      } else {
+        fileRecord.path = null;
+      }
     } else {
       fileRecord.path = null;
     }
@@ -421,12 +430,23 @@ class FileManager {
       return null;
     }
 
-    const storagePath = this.getStoragePath(fileRecord);
-    if (!fs.existsSync(storagePath)) {
-      return null;
+    // Try content-addressed storage first
+    if (fileRecord.file_hash && fileRecord.filename) {
+      const storagePath = this.getStoragePath(fileRecord);
+      if (fs.existsSync(storagePath)) {
+        return storagePath;
+      }
     }
 
-    return storagePath;
+    // Fallback: papers/ directory pattern
+    if (fileRecord.filename) {
+      const papersPath = path.join(this.papersDir, fileRecord.filename);
+      if (fs.existsSync(papersPath)) {
+        return papersPath;
+      }
+    }
+
+    return null;
   }
 
   /**
