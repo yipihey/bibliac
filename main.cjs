@@ -354,6 +354,154 @@ function extractArxivId(identifiers) {
   return null;
 }
 
+/**
+ * Fetch ADS metadata BEFORE adding paper to database.
+ * This ensures all metadata including BibTeX is available at add time.
+ *
+ * @param {Object} hints - Identifiers and metadata hints
+ * @param {string} hints.bibcode - ADS bibcode if known
+ * @param {string} hints.doi - DOI if known
+ * @param {string} hints.arxiv_id - arXiv ID if known
+ * @param {string} hints.textContent - Extracted text from PDF for fallback extraction
+ * @param {Object} hints.extractedMetadata - Already extracted metadata (title, author, year)
+ * @returns {Object|null} - Complete metadata including bibtex, or null if not found
+ */
+async function fetchAdsMetadataBeforeAdd(hints = {}) {
+  const token = store.get('adsToken');
+  if (!token) {
+    console.log('[fetchAdsMetadataBeforeAdd] No ADS token available');
+    return null;
+  }
+
+  try {
+    let adsData = null;
+    const { bibcode, doi, arxiv_id, textContent, extractedMetadata } = hints;
+
+    // Try direct identifiers first: bibcode → DOI → arXiv
+    if (bibcode) {
+      console.log(`[fetchAdsMetadataBeforeAdd] Trying bibcode lookup: ${bibcode}`);
+      adsData = await adsApi.getByBibcode(token, bibcode);
+    }
+
+    if (!adsData && doi) {
+      const cleanedDoi = cleanDOI(doi);
+      console.log(`[fetchAdsMetadataBeforeAdd] Trying DOI lookup: ${cleanedDoi}`);
+      adsData = await adsApi.getByDOI(token, cleanedDoi);
+    }
+
+    if (!adsData && arxiv_id) {
+      console.log(`[fetchAdsMetadataBeforeAdd] Trying arXiv lookup: ${arxiv_id}`);
+      adsData = await adsApi.getByArxiv(token, arxiv_id);
+    }
+
+    // If no direct identifier worked but we have text content, try extraction
+    if (!adsData && textContent) {
+      console.log('[fetchAdsMetadataBeforeAdd] Trying to extract identifiers from content...');
+      const contentIds = pdfImport.extractIdentifiersFromContent(textContent);
+      console.log('[fetchAdsMetadataBeforeAdd] Extracted identifiers:', contentIds);
+
+      if (contentIds.doi && !adsData) {
+        const cleanedDoi = cleanDOI(contentIds.doi);
+        console.log(`[fetchAdsMetadataBeforeAdd] Trying extracted DOI: ${cleanedDoi}`);
+        adsData = await adsApi.getByDOI(token, cleanedDoi);
+      }
+      if (!adsData && contentIds.arxiv_id) {
+        console.log(`[fetchAdsMetadataBeforeAdd] Trying extracted arXiv: ${contentIds.arxiv_id}`);
+        adsData = await adsApi.getByArxiv(token, contentIds.arxiv_id);
+      }
+      if (!adsData && contentIds.bibcode) {
+        console.log(`[fetchAdsMetadataBeforeAdd] Trying extracted bibcode: ${contentIds.bibcode}`);
+        adsData = await adsApi.getByBibcode(token, contentIds.bibcode);
+      }
+
+      // If still no match, try LLM extraction and smart search
+      if (!adsData) {
+        let pdfMeta = extractedMetadata || {};
+
+        // Try LLM extraction if service available
+        const service = getLlmService();
+        const connectionCheck = await service.checkConnection().catch(() => ({ connected: false }));
+        if (connectionCheck.connected && textContent) {
+          try {
+            console.log('[fetchAdsMetadataBeforeAdd] Using LLM to extract metadata...');
+            const llmResponse = await withTimeout(
+              service.generate(
+                PROMPTS.extractMetadata.user(textContent),
+                {
+                  systemPrompt: PROMPTS.extractMetadata.system,
+                  temperature: 0.1,
+                  maxTokens: 500,
+                  noThink: true
+                }
+              ),
+              30000,
+              'LLM metadata extraction'
+            );
+            const llmMeta = parseMetadataResponse(llmResponse);
+            console.log('[fetchAdsMetadataBeforeAdd] LLM-extracted metadata:', llmMeta);
+
+            // Merge LLM results
+            if (llmMeta.title) pdfMeta.title = llmMeta.title;
+            if (llmMeta.firstAuthor) pdfMeta.firstAuthor = llmMeta.firstAuthor;
+            if (llmMeta.year) pdfMeta.year = llmMeta.year;
+            if (llmMeta.journal) pdfMeta.journal = llmMeta.journal;
+
+            // Try LLM-extracted identifiers
+            if (llmMeta.doi && !adsData) {
+              console.log(`[fetchAdsMetadataBeforeAdd] Trying LLM-extracted DOI: ${llmMeta.doi}`);
+              adsData = await adsApi.getByDOI(token, llmMeta.doi);
+            }
+            if (llmMeta.arxiv_id && !adsData) {
+              console.log(`[fetchAdsMetadataBeforeAdd] Trying LLM-extracted arXiv: ${llmMeta.arxiv_id}`);
+              adsData = await adsApi.getByArxiv(token, llmMeta.arxiv_id);
+            }
+          } catch (llmError) {
+            console.error('[fetchAdsMetadataBeforeAdd] LLM extraction failed:', llmError.message);
+          }
+        }
+
+        // Use smart multi-strategy search as last resort
+        if (!adsData && (pdfMeta.title || pdfMeta.firstAuthor)) {
+          console.log('[fetchAdsMetadataBeforeAdd] Using smart search with metadata...');
+          try {
+            adsData = await adsApi.smartSearch(token, {
+              title: pdfMeta.title,
+              firstAuthor: pdfMeta.firstAuthor,
+              year: pdfMeta.year,
+              journal: pdfMeta.journal
+            });
+          } catch (searchError) {
+            console.error('[fetchAdsMetadataBeforeAdd] Smart search failed:', searchError.message);
+          }
+        }
+      }
+    }
+
+    if (!adsData) {
+      console.log('[fetchAdsMetadataBeforeAdd] Paper not found in ADS');
+      return null;
+    }
+
+    // Convert ADS data to paper format and fetch BibTeX
+    const metadata = adsApi.adsToPaper(adsData);
+    let bibtexStr = null;
+    try {
+      bibtexStr = await adsApi.exportBibtex(token, adsData.bibcode);
+    } catch (e) {
+      console.error('[fetchAdsMetadataBeforeAdd] Failed to get BibTeX:', e.message);
+    }
+
+    console.log(`[fetchAdsMetadataBeforeAdd] Found paper: ${metadata.title}`);
+    return {
+      ...metadata,
+      bibtex: bibtexStr
+    };
+  } catch (error) {
+    console.error('[fetchAdsMetadataBeforeAdd] Error:', error.message);
+    return null;
+  }
+}
+
 // Helper to fetch and apply ADS metadata to a paper
 async function fetchAndApplyAdsMetadata(paperId, extractedMetadata = null) {
   const token = store.get('adsToken');
@@ -1634,13 +1782,48 @@ ipcMain.handle('import-pdfs', async () => {
     try {
       const importResult = await pdfImport.importPDF(filePath, libraryPath);
 
-      // Add to database (no pdf_path - use paper_files instead)
-      const paperId = database.addPaper({
-        title: importResult.title,
-        text_path: importResult.text_path,
+      // Fetch ADS metadata BEFORE adding paper to database
+      // This ensures BibTeX and all metadata is available immediately
+      let adsMetadata = null;
+
+      // Read text content for fallback extraction if no direct identifiers
+      let textContent = null;
+      if (importResult.text_path) {
+        const textFile = path.join(libraryPath, importResult.text_path);
+        if (fs.existsSync(textFile)) {
+          textContent = fs.readFileSync(textFile, 'utf-8');
+        }
+      }
+
+      console.log(`[import-pdfs] Fetching ADS metadata before adding paper...`);
+      adsMetadata = await fetchAdsMetadataBeforeAdd({
         bibcode: importResult.bibcode,
+        doi: importResult.doi,
         arxiv_id: importResult.arxiv_id,
-        doi: importResult.doi
+        textContent: textContent,
+        extractedMetadata: importResult.extractedMetadata
+      });
+
+      if (adsMetadata) {
+        console.log(`[import-pdfs] Found ADS metadata: ${adsMetadata.title}`);
+      } else {
+        console.log(`[import-pdfs] No ADS match found, using PDF metadata only`);
+      }
+
+      // Add to database with ALL metadata (ADS data merged with PDF extraction)
+      const paperId = database.addPaper({
+        title: adsMetadata?.title || importResult.title,
+        authors: adsMetadata?.authors,
+        year: adsMetadata?.year,
+        journal: adsMetadata?.journal,
+        abstract: adsMetadata?.abstract,
+        bibtex: adsMetadata?.bibtex,
+        bibcode: adsMetadata?.bibcode || importResult.bibcode,
+        doi: adsMetadata?.doi || importResult.doi,
+        arxiv_id: adsMetadata?.arxiv_id || importResult.arxiv_id,
+        citation_count: adsMetadata?.citation_count,
+        available_sources: adsMetadata?.available_sources,
+        text_path: importResult.text_path
       });
 
       // Register PDF in paper_files table
@@ -1656,15 +1839,6 @@ ipcMain.handle('import-pdfs', async () => {
           source_type: 'IMPORTED',
           status: 'ready'
         });
-      }
-
-      // Auto-fetch ADS metadata - try even without identifiers using title/author search
-      console.log(`Auto-fetching ADS metadata for paper ${paperId}...`);
-      const adsResult = await fetchAndApplyAdsMetadata(paperId, importResult.extractedMetadata);
-      if (adsResult.success) {
-        console.log(`Successfully fetched ADS metadata for paper ${paperId}`);
-      } else {
-        console.log(`Could not fetch ADS metadata: ${adsResult.reason}`);
       }
 
       importResults.push({ success: true, id: paperId, ...importResult });
@@ -1708,12 +1882,49 @@ ipcMain.handle('import-files', async () => {
   for (const filePath of pdfFiles) {
     try {
       const importResult = await pdfImport.importPDF(filePath, libraryPath);
-      const paperId = database.addPaper({
-        title: importResult.title,
-        text_path: importResult.text_path,
+
+      // Fetch ADS metadata BEFORE adding paper to database
+      // This ensures BibTeX and all metadata is available immediately
+      let adsMetadata = null;
+
+      // Read text content for fallback extraction if no direct identifiers
+      let textContent = null;
+      if (importResult.text_path) {
+        const textFile = path.join(libraryPath, importResult.text_path);
+        if (fs.existsSync(textFile)) {
+          textContent = fs.readFileSync(textFile, 'utf-8');
+        }
+      }
+
+      console.log(`[import-files] Fetching ADS metadata before adding paper...`);
+      adsMetadata = await fetchAdsMetadataBeforeAdd({
         bibcode: importResult.bibcode,
+        doi: importResult.doi,
         arxiv_id: importResult.arxiv_id,
-        doi: importResult.doi
+        textContent: textContent,
+        extractedMetadata: importResult.extractedMetadata
+      });
+
+      if (adsMetadata) {
+        console.log(`[import-files] Found ADS metadata: ${adsMetadata.title}`);
+      } else {
+        console.log(`[import-files] No ADS match found, using PDF metadata only`);
+      }
+
+      // Add to database with ALL metadata (ADS data merged with PDF extraction)
+      const paperId = database.addPaper({
+        title: adsMetadata?.title || importResult.title,
+        authors: adsMetadata?.authors,
+        year: adsMetadata?.year,
+        journal: adsMetadata?.journal,
+        abstract: adsMetadata?.abstract,
+        bibtex: adsMetadata?.bibtex,
+        bibcode: adsMetadata?.bibcode || importResult.bibcode,
+        doi: adsMetadata?.doi || importResult.doi,
+        arxiv_id: adsMetadata?.arxiv_id || importResult.arxiv_id,
+        citation_count: adsMetadata?.citation_count,
+        available_sources: adsMetadata?.available_sources,
+        text_path: importResult.text_path
       });
 
       // Register PDF in paper_files table
@@ -1731,8 +1942,6 @@ ipcMain.handle('import-files', async () => {
         });
       }
 
-      // Auto-fetch ADS metadata
-      const adsResult = await fetchAndApplyAdsMetadata(paperId, importResult.extractedMetadata);
       results.pdfs.push({ success: true, id: paperId, ...importResult });
     } catch (error) {
       results.pdfs.push({ success: false, path: filePath, error: error.message });
@@ -6077,7 +6286,15 @@ ipcMain.handle('smart-search-add-to-library', async (event, { bibcode, searchRes
       // eSources fetch failed, continue without it
     }
 
-    // Create paper with metadata only - NO PDF download per user requirement
+    // Fetch BibTeX BEFORE adding paper (ensures it's available immediately)
+    let bibtexStr = null;
+    try {
+      bibtexStr = await adsApi.exportBibtex(token, bibcode);
+    } catch (e) {
+      sendConsoleLog(`BibTeX fetch failed: ${e.message}`, 'warn');
+    }
+
+    // Create paper with ALL metadata including BibTeX - NO PDF download per user requirement
     const paperId = database.addPaper({
       bibcode: adsDoc.bibcode,
       doi: adsDoc.doi?.[0] || null,
@@ -6089,20 +6306,11 @@ ipcMain.handle('smart-search-add-to-library', async (event, { bibcode, searchRes
       abstract: adsDoc.abstract || null,
       keywords: adsDoc.keyword || [],
       citation_count: adsDoc.citation_count || 0,
+      bibtex: bibtexStr,
       import_source: 'ads_smart_search',
       import_source_key: bibcode,
       available_sources: availableSources.length > 0 ? JSON.stringify(availableSources) : null
     });
-
-    // Fetch and store BibTeX
-    try {
-      const bibtexResult = await adsApi.exportBibtex(token, bibcode);
-      if (bibtexResult) {
-        database.updatePaper(paperId, { bibtex: bibtexResult });
-      }
-    } catch (e) {
-      sendConsoleLog(`BibTeX fetch failed: ${e.message}`, 'warn');
-    }
 
     sendConsoleLog(`Added ${bibcode} to library`, 'success');
     return { success: true, paperId };
