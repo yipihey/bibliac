@@ -2187,6 +2187,8 @@ body.mobile-search-active .search-section {
   flex: 1;
   overflow-y: auto;
   background: var(--bg-primary);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Virtual scrolling container */
@@ -2254,6 +2256,8 @@ body.mobile-search-active .search-section {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   transition: background 0.1s;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .paper-item:hover {
@@ -3926,6 +3930,8 @@ body.ios-platform .pdf-container {
   padding: 12px 16px;
   min-height: 100px;
   background: var(--bg-primary);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .ads-lookup-info {
@@ -3970,6 +3976,8 @@ body.ios-platform .pdf-container {
   transition: background 0.1s;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .ads-result-info {
