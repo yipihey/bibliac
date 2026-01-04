@@ -8764,7 +8764,13 @@ class ADSReader {
     if (!this.selectedPaper) return;
 
     // Check source or identifiers to determine correct URL
-    if (this.selectedPaper.source === 'arxiv' ||
+    if (this.selectedPaper.source === 'inspire') {
+      // INSPIRE paper - open INSPIRE abstract page
+      const recid = this.selectedPaper._inspire?.recid || this.selectedPaper.sourceId;
+      if (recid) {
+        window.electronAPI.openExternal(`https://inspirehep.net/literature/${recid}`);
+      }
+    } else if (this.selectedPaper.source === 'arxiv' ||
         (this.selectedPaper.arxivId && !this.selectedPaper.bibcode)) {
       // arXiv paper - open arXiv abstract page
       const arxivId = this.selectedPaper.arxivId || this.selectedPaper.id;
@@ -8818,7 +8824,12 @@ class ADSReader {
     if (!paper) return;
 
     // Check source or identifiers to determine correct URL
-    if (paper.source === 'arxiv' || (paper.arxivId && !paper.bibcode)) {
+    if (paper.source === 'inspire') {
+      const recid = paper._inspire?.recid || paper.sourceId;
+      if (recid) {
+        window.electronAPI.openExternal(`https://inspirehep.net/literature/${recid}`);
+      }
+    } else if (paper.source === 'arxiv' || (paper.arxivId && !paper.bibcode)) {
       const arxivId = paper.arxivId || paper.id;
       window.electronAPI.openExternal(`https://arxiv.org/abs/${arxivId}`);
     } else if (paper.bibcode) {
@@ -10334,6 +10345,12 @@ class ADSReader {
         placeholder: 'e.g., ti:machine learning AND au:hinton',
         nlPlaceholder: 'e.g., recent papers on transformers in computer vision',
         showShortcuts: true
+      },
+      'inspire': {
+        title: 'Search INSPIRE HEP',
+        placeholder: 'e.g., a witten and t "string theory"',
+        nlPlaceholder: 'e.g., highly cited papers on supersymmetry from 2023',
+        showShortcuts: true
       }
     };
 
@@ -10344,7 +10361,7 @@ class ADSReader {
     if (nlInputEl) nlInputEl.placeholder = config.nlPlaceholder;
 
     if (shortcutsEl) {
-      // Update shortcuts for arXiv (different syntax)
+      // Update shortcuts for different sources
       if (sourceId === 'arxiv') {
         shortcutsEl.innerHTML = `
           <button class="ads-shortcut-btn" data-insert="au:" data-target="ads-pane-query-input">au:</button>
@@ -10353,7 +10370,18 @@ class ADSReader {
           <button class="ads-shortcut-btn" data-insert="cat:" data-target="ads-pane-query-input">cat:</button>
           <button class="ads-shortcut-btn" data-insert="all:" data-target="ads-pane-query-input">all:</button>
         `;
+      } else if (sourceId === 'inspire') {
+        shortcutsEl.innerHTML = `
+          <button class="ads-shortcut-btn" data-insert="a " data-target="ads-pane-query-input">a</button>
+          <button class="ads-shortcut-btn" data-insert="t " data-target="ads-pane-query-input">t</button>
+          <button class="ads-shortcut-btn" data-insert="ab " data-target="ads-pane-query-input">ab</button>
+          <button class="ads-shortcut-btn" data-insert="date " data-target="ads-pane-query-input">date</button>
+          <button class="ads-shortcut-btn" data-insert="eprint " data-target="ads-pane-query-input">eprint</button>
+          <button class="ads-shortcut-btn" data-insert="topcite " data-target="ads-pane-query-input">topcite</button>
+          <button class="ads-shortcut-btn" data-insert="j " data-target="ads-pane-query-input">j</button>
+        `;
       } else {
+        // ADS shortcuts (default)
         shortcutsEl.innerHTML = `
           <button class="ads-shortcut-btn" data-insert="author:" data-target="ads-pane-query-input">author:</button>
           <button class="ads-shortcut-btn" data-insert="year:" data-target="ads-pane-query-input">year:</button>
@@ -10415,6 +10443,55 @@ class ADSReader {
           <div class="ads-example-item" data-query='all:"large language model"'>
             <span class="ads-example-label">All fields</span>
             <code class="ads-example-query">all:"large language model"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+        `;
+      } else if (sourceId === 'inspire') {
+        // INSPIRE HEP examples
+        examplesEl.innerHTML = `
+          <div class="ads-example-item" data-query='a witten'>
+            <span class="ads-example-label">Author search</span>
+            <code class="ads-example-query">a witten</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='t "string theory"'>
+            <span class="ads-example-label">Title phrase</span>
+            <code class="ads-example-query">t "string theory"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='a witten and t "string theory"'>
+            <span class="ads-example-label">Author + Title</span>
+            <code class="ads-example-query">a witten and t "string theory"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='ab supersymmetry and date 2023'>
+            <span class="ads-example-label">Abstract + Year</span>
+            <code class="ads-example-query">ab supersymmetry and date 2023</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='topcite 1000+'>
+            <span class="ads-example-label">Highly cited (1000+)</span>
+            <code class="ads-example-query">topcite 1000+</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='t higgs and j "JHEP"'>
+            <span class="ads-example-label">Title + Journal</span>
+            <code class="ads-example-query">t higgs and j "JHEP"</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='date 2020->2024 and a ATLAS'>
+            <span class="ads-example-label">Date range + Collab</span>
+            <code class="ads-example-query">date 2020->2024 and a ATLAS</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='eprint 2301.00001'>
+            <span class="ads-example-label">arXiv ID lookup</span>
+            <code class="ads-example-query">eprint 2301.00001</code>
+            <button class="ads-example-use-btn">Use</button>
+          </div>
+          <div class="ads-example-item" data-query='ab "dark matter" and topcite 100+'>
+            <span class="ads-example-label">Abstract + Citations</span>
+            <code class="ads-example-query">ab "dark matter" and topcite 100+</code>
             <button class="ads-example-use-btn">Use</button>
           </div>
         `;
@@ -10596,9 +10673,20 @@ class ADSReader {
   async executeRefsQuery(bibcode, sourcePaper) {
     if (!bibcode) return;
 
+    // Determine the source plugin
+    const source = sourcePaper?.source || 'ads';
+    const sourceId = source === 'inspire' ? (sourcePaper?._inspire?.recid || sourcePaper?.sourceId) : bibcode;
+    const cacheKey = `${source}:${sourceId}`;
+
+    // Check if source supports references
+    if (source === 'arxiv') {
+      this.showNotification('References not available for arXiv papers', 'warn');
+      return;
+    }
+
     // Check cache first
-    if (this.refsCache.has(bibcode)) {
-      const cached = this.refsCache.get(bibcode);
+    if (this.refsCache.has(cacheKey)) {
+      const cached = this.refsCache.get(cacheKey);
       if (cached.papers.length === 0) {
         this.showNotification('No references found for this paper', 'info');
         return;
@@ -10614,9 +10702,9 @@ class ADSReader {
         });
       }
       this.refsQuerySourcePaper = sourcePaper;
-      this.refsQueryBibcode = bibcode;
+      this.refsQueryBibcode = cacheKey;
       this.citesQueryBibcode = null;
-      this.currentAdsQuery = `references(bibcode:"${bibcode}")`;
+      this.currentAdsQuery = source === 'inspire' ? `refersto:recid:${sourceId}` : `references(bibcode:"${bibcode}")`;
       this.currentAdsNLQuery = `References of ${sourcePaper?.title || bibcode}`;
       this.showRefsCitesResults(cached.papers, cached.count, 'refs', sourcePaper);
       return;
@@ -10626,53 +10714,74 @@ class ADSReader {
     this.showNotification('Loading references...', 'info');
 
     try {
-      // Execute ADS query for references
-      const query = `references(bibcode:"${bibcode}")`;
-      const result = await window.electronAPI.adsImportSearch(query, { rows: 500 });
+      let papers = [];
+      let numFound = 0;
 
-      if (result.success) {
-        const papers = result.data.papers.map(p => ({
-          ...p,
-          id: p.bibcode,
-          isAdsSearch: true
-        }));
-
-        // Cache results (even empty ones to avoid re-querying)
-        this.refsCache.set(bibcode, {
-          papers,
-          count: result.data.numFound
-        });
-
-        // Check for empty results - stay on current view
-        if (papers.length === 0) {
-          this.showNotification('No references found for this paper', 'info');
-          return;
+      if (source === 'inspire') {
+        // Use plugin system for INSPIRE
+        console.log('[INSPIRE] Getting references for recid:', sourceId);
+        const result = await window.electronAPI.plugins.getReferences('inspire', sourceId);
+        if (result.success) {
+          papers = result.data.map(p => ({
+            ...p,
+            id: p.sourceId || p._inspire?.recid,
+            isAdsSearch: true,
+            source: 'inspire'
+          }));
+          numFound = papers.length;
+        } else {
+          throw new Error(result.error);
         }
-
-        // Push current state to navigation stack if already in refs/cites mode
-        if (this.isRefsCitesMode()) {
-          this.refsCitesNavStack.push({
-            type: this.refsQueryBibcode ? 'refs' : 'cites',
-            bibcode: this.refsQueryBibcode || this.citesQueryBibcode,
-            sourcePaper: this.refsQuerySourcePaper,
-            papers: [...this.papers],
-            selectedPaperId: this.selectedPaper?.id || this.selectedPaper?.bibcode
-          });
-        }
-
-        // Store source paper for back navigation
-        this.refsQuerySourcePaper = sourcePaper;
-        this.refsQueryBibcode = bibcode;
-        this.citesQueryBibcode = null;
-
-        // Store query for "Save as Smart Search"
-        this.currentAdsQuery = `references(bibcode:"${bibcode}")`;
-        this.currentAdsNLQuery = `References of ${sourcePaper?.title || bibcode}`;
-
-        this.showRefsCitesResults(papers, result.data.numFound, 'refs', sourcePaper);
       } else {
-        this.showNotification(`Failed to load references: ${result.error}`, 'error');
+        // Use ADS query for references (default)
+        const query = `references(bibcode:"${bibcode}")`;
+        const result = await window.electronAPI.adsImportSearch(query, { rows: 500 });
+        if (result.success) {
+          papers = result.data.papers.map(p => ({
+            ...p,
+            id: p.bibcode,
+            isAdsSearch: true,
+            source: 'ads'
+          }));
+          numFound = result.data.numFound;
+        } else {
+          throw new Error(result.error);
+        }
       }
+
+      // Cache results (even empty ones to avoid re-querying)
+      this.refsCache.set(cacheKey, {
+        papers,
+        count: numFound
+      });
+
+      // Check for empty results - stay on current view
+      if (papers.length === 0) {
+        this.showNotification('No references found for this paper', 'info');
+        return;
+      }
+
+      // Push current state to navigation stack if already in refs/cites mode
+      if (this.isRefsCitesMode()) {
+        this.refsCitesNavStack.push({
+          type: this.refsQueryBibcode ? 'refs' : 'cites',
+          bibcode: this.refsQueryBibcode || this.citesQueryBibcode,
+          sourcePaper: this.refsQuerySourcePaper,
+          papers: [...this.papers],
+          selectedPaperId: this.selectedPaper?.id || this.selectedPaper?.bibcode
+        });
+      }
+
+      // Store source paper for back navigation
+      this.refsQuerySourcePaper = sourcePaper;
+      this.refsQueryBibcode = cacheKey;
+      this.citesQueryBibcode = null;
+
+      // Store query for "Save as Smart Search"
+      this.currentAdsQuery = source === 'inspire' ? `refersto:recid:${sourceId}` : `references(bibcode:"${bibcode}")`;
+      this.currentAdsNLQuery = `References of ${sourcePaper?.title || bibcode}`;
+
+      this.showRefsCitesResults(papers, numFound, 'refs', sourcePaper);
     } catch (error) {
       this.showNotification(`Error loading references: ${error.message}`, 'error');
     }
@@ -10681,9 +10790,20 @@ class ADSReader {
   async executeCitesQuery(bibcode, sourcePaper) {
     if (!bibcode) return;
 
+    // Determine the source plugin
+    const source = sourcePaper?.source || 'ads';
+    const sourceId = source === 'inspire' ? (sourcePaper?._inspire?.recid || sourcePaper?.sourceId) : bibcode;
+    const cacheKey = `${source}:${sourceId}`;
+
+    // Check if source supports citations
+    if (source === 'arxiv') {
+      this.showNotification('Citations not available for arXiv papers', 'warn');
+      return;
+    }
+
     // Check cache first
-    if (this.citesCache.has(bibcode)) {
-      const cached = this.citesCache.get(bibcode);
+    if (this.citesCache.has(cacheKey)) {
+      const cached = this.citesCache.get(cacheKey);
       if (cached.papers.length === 0) {
         this.showNotification('No citations found for this paper', 'info');
         return;
@@ -10699,9 +10819,9 @@ class ADSReader {
         });
       }
       this.refsQuerySourcePaper = sourcePaper;
-      this.citesQueryBibcode = bibcode;
+      this.citesQueryBibcode = cacheKey;
       this.refsQueryBibcode = null;
-      this.currentAdsQuery = `citations(bibcode:"${bibcode}")`;
+      this.currentAdsQuery = source === 'inspire' ? `refersto:recid:${sourceId}` : `citations(bibcode:"${bibcode}")`;
       this.currentAdsNLQuery = `Citations of ${sourcePaper?.title || bibcode}`;
       this.showRefsCitesResults(cached.papers, cached.count, 'cites', sourcePaper);
       return;
@@ -10711,53 +10831,74 @@ class ADSReader {
     this.showNotification('Loading citations...', 'info');
 
     try {
-      // Execute ADS query for citations
-      const query = `citations(bibcode:"${bibcode}")`;
-      const result = await window.electronAPI.adsImportSearch(query, { rows: 500 });
+      let papers = [];
+      let numFound = 0;
 
-      if (result.success) {
-        const papers = result.data.papers.map(p => ({
-          ...p,
-          id: p.bibcode,
-          isAdsSearch: true
-        }));
-
-        // Cache results (even empty ones to avoid re-querying)
-        this.citesCache.set(bibcode, {
-          papers,
-          count: result.data.numFound
-        });
-
-        // Check for empty results - stay on current view
-        if (papers.length === 0) {
-          this.showNotification('No citations found for this paper', 'info');
-          return;
+      if (source === 'inspire') {
+        // Use plugin system for INSPIRE
+        console.log('[INSPIRE] Getting citations for recid:', sourceId);
+        const result = await window.electronAPI.plugins.getCitations('inspire', sourceId);
+        if (result.success) {
+          papers = result.data.map(p => ({
+            ...p,
+            id: p.sourceId || p._inspire?.recid,
+            isAdsSearch: true,
+            source: 'inspire'
+          }));
+          numFound = papers.length;
+        } else {
+          throw new Error(result.error);
         }
-
-        // Push current state to navigation stack if already in refs/cites mode
-        if (this.isRefsCitesMode()) {
-          this.refsCitesNavStack.push({
-            type: this.refsQueryBibcode ? 'refs' : 'cites',
-            bibcode: this.refsQueryBibcode || this.citesQueryBibcode,
-            sourcePaper: this.refsQuerySourcePaper,
-            papers: [...this.papers],
-            selectedPaperId: this.selectedPaper?.id || this.selectedPaper?.bibcode
-          });
-        }
-
-        // Store source paper for back navigation
-        this.refsQuerySourcePaper = sourcePaper;
-        this.citesQueryBibcode = bibcode;
-        this.refsQueryBibcode = null;
-
-        // Store query for "Save as Smart Search"
-        this.currentAdsQuery = `citations(bibcode:"${bibcode}")`;
-        this.currentAdsNLQuery = `Citations of ${sourcePaper?.title || bibcode}`;
-
-        this.showRefsCitesResults(papers, result.data.numFound, 'cites', sourcePaper);
       } else {
-        this.showNotification(`Failed to load citations: ${result.error}`, 'error');
+        // Use ADS query for citations (default)
+        const query = `citations(bibcode:"${bibcode}")`;
+        const result = await window.electronAPI.adsImportSearch(query, { rows: 500 });
+        if (result.success) {
+          papers = result.data.papers.map(p => ({
+            ...p,
+            id: p.bibcode,
+            isAdsSearch: true,
+            source: 'ads'
+          }));
+          numFound = result.data.numFound;
+        } else {
+          throw new Error(result.error);
+        }
       }
+
+      // Cache results (even empty ones to avoid re-querying)
+      this.citesCache.set(cacheKey, {
+        papers,
+        count: numFound
+      });
+
+      // Check for empty results - stay on current view
+      if (papers.length === 0) {
+        this.showNotification('No citations found for this paper', 'info');
+        return;
+      }
+
+      // Push current state to navigation stack if already in refs/cites mode
+      if (this.isRefsCitesMode()) {
+        this.refsCitesNavStack.push({
+          type: this.refsQueryBibcode ? 'refs' : 'cites',
+          bibcode: this.refsQueryBibcode || this.citesQueryBibcode,
+          sourcePaper: this.refsQuerySourcePaper,
+          papers: [...this.papers],
+          selectedPaperId: this.selectedPaper?.id || this.selectedPaper?.bibcode
+        });
+      }
+
+      // Store source paper for back navigation
+      this.refsQuerySourcePaper = sourcePaper;
+      this.citesQueryBibcode = cacheKey;
+      this.refsQueryBibcode = null;
+
+      // Store query for "Save as Smart Search"
+      this.currentAdsQuery = source === 'inspire' ? `refersto:recid:${sourceId}` : `citations(bibcode:"${bibcode}")`;
+      this.currentAdsNLQuery = `Citations of ${sourcePaper?.title || bibcode}`;
+
+      this.showRefsCitesResults(papers, numFound, 'cites', sourcePaper);
     } catch (error) {
       this.showNotification(`Error loading citations: ${error.message}`, 'error');
     }

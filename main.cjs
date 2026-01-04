@@ -121,6 +121,7 @@ const { CloudLLMService, PROVIDERS: CLOUD_PROVIDERS } = require('./src/main/clou
 const { pluginManager } = require('./src/lib/plugins/manager.cjs');
 const { adsPlugin } = require('./src/plugins/ads/index.cjs');
 const arxivPlugin = require('./src/plugins/arxiv/index.cjs');
+const inspirePlugin = require('./src/plugins/inspire/index.cjs');
 
 /**
  * Clean a DOI by removing common garbage suffixes and malformed paths
@@ -4457,7 +4458,41 @@ Examples:
 - "machine learning for astronomy" → (ti:"machine learning" OR abs:"machine learning") AND cat:astro-ph
 
 Keep the query concise. Use quotes for multi-word phrases.
-Output only the final arXiv query string, no explanation.`
+Output only the final arXiv query string, no explanation.`,
+
+  inspire: `You translate a user's natural-language request about scholarly literature into one INSPIRE HEP search query string. Use INSPIRE (SPIRES-style) syntax.
+
+INSPIRE Query Syntax:
+- Author: a <surname> or au <surname>
+  Examples: a witten, a Maldacena
+- Title words: t "<phrase>" or ti "<phrase>"
+  Examples: t "string theory", t higgs
+- Abstract: ab <terms>
+  Examples: ab supersymmetry, ab "dark matter"
+- arXiv ID: eprint <id>
+  Examples: eprint 2301.00001
+- DOI: doi <value>
+- Journal: j "<abbreviated name>"
+  Examples: j "Phys.Rev.D", j "JHEP"
+- Year: date <year> or date <start>-><end>
+  Examples: date 2023, date 2020->2024
+- Citations: topcite <N>+ (at least N citations)
+  Examples: topcite 100+, topcite 1000+
+
+Boolean operators (lowercase):
+- and (both terms required)
+- or (either term)
+- not (exclude term)
+
+Examples:
+- "papers by Witten on string theory" → a witten and t "string theory"
+- "supersymmetry papers from 2023 with 100+ citations" → ab supersymmetry and date 2023 and topcite 100+
+- "ATLAS collaboration Higgs papers" → a ATLAS and t higgs
+- "highly cited papers on dark matter" → ab "dark matter" and topcite 500+
+- "recent QCD papers in Physical Review" → ab qcd and date 2024-> and j "Phys.Rev."
+
+Keep the query concise. Use quotes for multi-word phrases.
+Output only the final INSPIRE query string, no explanation.`
 };
 
 // Backwards compatibility alias
@@ -7443,6 +7478,7 @@ app.whenReady().then(() => {
   try {
     pluginManager.register(adsPlugin);
     pluginManager.register(arxivPlugin);
+    pluginManager.register(inspirePlugin);
   } catch (err) {
     console.error('[PluginManager] Failed to register plugins:', err);
   }
