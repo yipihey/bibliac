@@ -756,7 +756,7 @@ html, body {
 #main-screen {
   display: flex;
   height: 100%;
-  padding-top: calc(36px + env(safe-area-inset-top, 0)); /* Account for top bar */
+  padding-top: calc(28px + env(safe-area-inset-top, 0)); /* Account for top bar */
 }
 
 .titlebar-drag-region {
@@ -1955,7 +1955,6 @@ body.ios .desktop-only {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding-top: 36px; /* Height of top bar */
   min-width: 0;
 }
 
@@ -6307,7 +6306,7 @@ body.ios-platform #main-screen {
   flex: 1;
   height: auto;
   max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-  padding-top: calc(36px + env(safe-area-inset-top));
+  padding-top: calc(28px + env(safe-area-inset-top));
   padding-bottom: 0;
   overflow: hidden;
 }
@@ -7062,13 +7061,13 @@ body.ios-platform .sidebar {
   top: 0;
   left: 0;
   right: 0;
-  height: 36px;
+  height: 28px;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border-color);
   z-index: 200;
-  padding: env(safe-area-inset-top, 0) 8px 0 8px;
+  padding: env(safe-area-inset-top, 0) 6px 0 6px;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 /* Back button in top bar - hidden, we use floating version */
@@ -7122,12 +7121,12 @@ body.viewing-pdf .mobile-top-bar {
 }
 
 .mobile-top-bar .top-bar-logo {
-  height: 24px;
+  height: 18px;
   width: auto;
   margin-left: auto;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  padding: 4px;
+  padding: 2px;
   border-radius: 4px;
 }
 
@@ -7138,8 +7137,8 @@ body.viewing-pdf .mobile-top-bar {
 .mobile-top-bar .search-btn {
   background: none;
   border: none;
-  font-size: 16px;
-  padding: 2px 4px;
+  font-size: 13px;
+  padding: 1px 3px;
   cursor: pointer;
   color: var(--text-primary);
   min-width: auto;
@@ -7158,10 +7157,10 @@ body.viewing-pdf .mobile-top-bar {
 .mobile-tb-btn {
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 3px;
   color: var(--text-primary);
-  font-size: 11px;
-  padding: 3px 6px;
+  font-size: 10px;
+  padding: 2px 5px;
   min-width: auto;
   min-height: auto;
   cursor: pointer;
